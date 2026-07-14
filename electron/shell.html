@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ritim</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #0a0b0c; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090a0b; }
+      .appbar { height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 16px; border-bottom: 1px solid #292b2d; background: linear-gradient(90deg, #111214, #0b0c0d); }
+      .brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 800; letter-spacing: -.25px; }
+      .mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: white; background: linear-gradient(145deg, #ff3651, #d9002f); box-shadow: 0 5px 18px rgba(255, 40, 72, .22); }
+      .mark svg { width: 15px; }
+      .caption { color: #74777a; font-size: 11px; }
+      .spacer { flex: 1; }
+      .status { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid #292b2d; border-radius: 999px; color: #b7b9bb; background: #151617; font-size: 10px; }
+      .status i { width: 7px; height: 7px; border-radius: 50%; background: #45d274; box-shadow: 0 0 9px rgba(69, 210, 116, .5); }
+      button { display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid #333638; border-radius: 8px; color: #f4f4f4; background: #1b1d1f; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+      button:hover { border-color: #565a5d; background: #252729; }
+      button:focus-visible { outline: 2px solid #ff4058; outline-offset: 2px; }
+      button svg { width: 16px; }
+    </style>
+  </head>
+  <body>
+    <header class="appbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></span>
+        <span>Ritim</span>
+      </div>
+      <span class="caption">YouTube Music masaüstü</span>
+      <span class="spacer"></span>
+      <span class="status"><i></i> Telefon bağlantısı hazır</span>
+      <button id="settings-button" type="button" aria-label="Ritim ayarlarını aç">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3V9.6h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66.99.3.27.69.42 1.09.42H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+        Ayarlar
+      </button>
+    </header>
+    <script>
+      document.getElementById('settings-button').addEventListener('click', () => window.ritimShell?.openSettings())
+    </script>
+  </body>
+</html>

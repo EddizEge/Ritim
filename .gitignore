@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release*/
+.env
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/
+
+# Android/Gradle build outputs and local machine settings
+android/.gradle/
+android/.idea/
+android/local.properties
+android/**/build/
+*.jks
+*.keystore

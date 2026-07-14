@@ -1,0 +1,13 @@
+{
+  "appId": "app.ritim.mobile",
+  "appName": "Ritim",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#090909"
+  }
+}
