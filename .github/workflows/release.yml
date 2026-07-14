@@ -18,11 +18,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Publish Windows installer and updater metadata
-        run: npx electron-builder --config electron-builder.config.cjs --win nsis --publish always
+      - name: Build Windows installer and updater metadata
+        run: npx electron-builder --config electron-builder.config.cjs --win nsis --publish never
+        env:
+          RITIM_GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Create GitHub release
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $assets = @(
+            "release/Ritim-Setup-$version.exe"
+            "release/Ritim-Setup-$version.exe.blockmap"
+            "release/latest.yml"
+          )
+          gh release create "$env:GITHUB_REF_NAME" $assets --repo "$env:GITHUB_REPOSITORY" --verify-tag --title "Ritim $version" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RITIM_GITHUB_REPOSITORY: ${{ github.repository }}
 
   android:
     needs: windows

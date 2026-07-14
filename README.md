@@ -14,7 +14,7 @@
 
 <p align="center">
   <img alt="Version" src="https://img.shields.io/github/v/release/EddizEge/Ritim?display_name=tag&style=flat-square&color=ff174f" />
-  <img alt="Release" src="https://img.shields.io/github/actions/workflow/status/EddizEge/Ritim/release.yml?style=flat-square&label=release" />
+  <img alt="Build" src="https://img.shields.io/github/actions/workflow/status/EddizEge/Ritim/ci.yml?branch=main&style=flat-square&label=build" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-1674ea?style=flat-square" />
   <img alt="Android" src="https://img.shields.io/badge/Android-APK-3ddc84?style=flat-square" />
 </p>
