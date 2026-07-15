@@ -1,5 +1,6 @@
 const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, shell } = require('electron')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const QRCode = require('qrcode')
@@ -10,7 +11,7 @@ const { createUpdateController } = require('./updater.cjs')
 const isDev = !app.isPackaged
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
-const PAIRING_TOKEN = crypto.randomBytes(24).toString('base64url')
+let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
 let mainWindow
 let musicView
 let settingsWindow
@@ -54,8 +55,32 @@ function findLanAddress() {
   return preferred?.address || candidates[0]?.address || '127.0.0.1'
 }
 
+function getPairingToken() {
+  if (pairingToken) return pairingToken
+
+  const tokenPath = path.join(app.getPath('userData'), 'pairing-token')
+  try {
+    const savedToken = fs.readFileSync(tokenPath, 'utf8').trim()
+    if (/^[A-Za-z0-9_-]{32,128}$/.test(savedToken)) pairingToken = savedToken
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('[Ritim] Kayitli telefon anahtari okunamadi:', error)
+  }
+
+  if (!pairingToken) {
+    pairingToken = crypto.randomBytes(24).toString('base64url')
+    try {
+      fs.mkdirSync(path.dirname(tokenPath), { recursive: true })
+      fs.writeFileSync(tokenPath, `${pairingToken}\n`, { encoding: 'utf8', mode: 0o600 })
+    } catch (error) {
+      console.warn('[Ritim] Telefon anahtari kalici olarak kaydedilemedi:', error)
+    }
+  }
+
+  return pairingToken
+}
+
 function phoneUrl() {
-  return `http://${findLanAddress()}:8787/?companion=1&room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(PAIRING_TOKEN)}`
+  return `http://${findLanAddress()}:8787/?companion=1&room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(getPairingToken())}`
 }
 
 function resizeMusicView() {
@@ -158,9 +183,10 @@ function createWindow() {
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  const activePairingToken = getPairingToken()
   if (!isDev) {
     const { startSyncServer } = require('./sync-server.cjs')
-    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, { pairingToken: PAIRING_TOKEN })
+    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, { pairingToken: activePairingToken })
     if (!syncServer.listening) {
       try {
         await new Promise((resolve, reject) => {
