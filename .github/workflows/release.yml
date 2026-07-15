@@ -54,8 +54,32 @@ jobs:
         run: npm run android:sync
         env:
           VITE_GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Configure persistent Android signing
+        shell: bash
+        run: |
+          test -n '${{ secrets.RITIM_ANDROID_KEYSTORE_BASE64 }}'
+          echo '${{ secrets.RITIM_ANDROID_KEYSTORE_BASE64 }}' | base64 --decode > "$RUNNER_TEMP/ritim-release.jks"
+          echo "RITIM_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/ritim-release.jks" >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEYSTORE_PASSWORD=${{ secrets.RITIM_ANDROID_KEYSTORE_PASSWORD }}' >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEY_ALIAS=${{ secrets.RITIM_ANDROID_KEY_ALIAS }}' >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEY_PASSWORD=${{ secrets.RITIM_ANDROID_KEY_PASSWORD }}' >> "$GITHUB_ENV"
       - run: ./gradlew assembleDebug
         working-directory: android
+      - name: Verify Android package version
+        shell: bash
+        run: |
+          expected_version="$(node -p "require('./package.json').version")"
+          actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          test "$actual_version" = "$expected_version" || {
+            echo "APK version mismatch: expected $expected_version, got $actual_version"
+            exit 1
+          }
+          expected_certificate="6a5b01605a4a767da6d21e199d805d8ea230c4da01dcc4335bd18891f36c4458"
+          actual_certificate="$(apksigner verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }')"
+          test "$actual_certificate" = "$expected_certificate" || {
+            echo "APK signing certificate mismatch"
+            exit 1
+          }
       - name: Attach Android test APK
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk "Ritim-Android-${GITHUB_REF_NAME}.apk"

@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+def packageMetadata = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def appVersionName = packageMetadata.version as String
+def semanticVersion = appVersionName =~ /^(\d+)\.(\d+)\.(\d+)$/
+if (!semanticVersion.matches()) {
+    throw new GradleException("package.json version must use major.minor.patch format: ${appVersionName}")
+}
+def appVersionCode = semanticVersion[0][1].toInteger() * 10000 +
+        semanticVersion[0][2].toInteger() * 100 +
+        semanticVersion[0][3].toInteger()
+def signingStorePath = System.getenv('RITIM_ANDROID_KEYSTORE_PATH')
+def signingStorePassword = System.getenv('RITIM_ANDROID_KEYSTORE_PASSWORD')
+def signingKeyAlias = System.getenv('RITIM_ANDROID_KEY_ALIAS')
+def signingKeyPassword = System.getenv('RITIM_ANDROID_KEY_PASSWORD')
+
 android {
     namespace = "app.ritim.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +21,8 @@ android {
         applicationId "app.ritim.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 70
-        versionName "0.7.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +30,24 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (signingStorePath) {
+            ritimRelease {
+                storeFile file(signingStorePath)
+                storePassword signingStorePassword
+                keyAlias signingKeyAlias
+                keyPassword signingKeyPassword
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (signingStorePath) signingConfig signingConfigs.ritimRelease
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (signingStorePath) signingConfig signingConfigs.ritimRelease
         }
     }
 }
