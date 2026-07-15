@@ -49,21 +49,30 @@ jobs:
         run: |
           expected_version="$(node -p "require('./package.json').version")"
           actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          echo "Expected Android package version: $expected_version"
+          echo "Actual Android package version: $actual_version"
           test "$actual_version" = "$expected_version"
 
           apksigner_path="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$apksigner_path"
-          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }' | tr -d '\r')"
-          test -n "$actual_certificate"
+          set +e
+          certificate_output="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk 2>&1)"
+          signer_status=$?
+          set -e
+          echo "apksigner exit code: $signer_status"
+          echo "$certificate_output"
+          actual_certificate="$(printf '%s\n' "$certificate_output" | awk -F': ' 'tolower($0) ~ /certificate sha-256 digest/ { print $2; exit }' | tr -d '\r')"
 
           echo "version=$actual_version" >> "$GITHUB_OUTPUT"
           echo "certificate=$actual_certificate" >> "$GITHUB_OUTPUT"
           echo "Android package version: $actual_version"
-          echo "Android signing certificate: $actual_certificate"
+          echo "Android signing certificate: ${actual_certificate:-not-found}"
       - name: Stage Android package
+        if: always()
         shell: bash
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "Ritim-Android-${{ inputs.tag }}.apk"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Ritim-Android-${{ inputs.tag }}
           path: Ritim-Android-${{ inputs.tag }}.apk
