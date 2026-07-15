@@ -8,7 +8,7 @@ import type { MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowse
 import { Cover } from './Cover'
 import { PlayerControls } from './PlayerControls'
 import { Progress } from './Progress'
-import { isNativeMobile } from '../mobileConfig'
+import { clearMobilePairing, isNativeMobile, readMobilePairing } from '../mobileConfig'
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
 
 type Props = {
@@ -125,6 +125,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [searchQuery, setSearchQuery] = useState('')
   const [notice, setNotice] = useState('')
   const mobileUpdate = useMobileUpdate()
+  const [pairedComputer] = useState(readMobilePairing)
   const queue = useMemo(() => {
     const result: Track[] = []
     const seenIds = new Set<string>()
@@ -274,7 +275,13 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       </nav>
 
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}
-      {!connected || pairingError ? <div className="ytm-offline-banner"><i />{pairingError || 'PC bağlantısı bekleniyor • Aynı Wi‑Fi ağında olduğundan emin ol'}</div> : null}
+      {!connected || pairingError ? (
+        <div className="ytm-offline-banner">
+          <i />
+          <span>{pairingError || 'PC bağlantısı bekleniyor'}{pairedComputer ? <small>{pairedComputer.syncUrl.replace(/^https?:\/\//, '')}</small> : null}</span>
+          {isNativeMobile ? <button onClick={() => { clearMobilePairing(); window.location.reload() }}>QR’ı yenile</button> : null}
+        </div>
+      ) : null}
       {notice ? <div className="ytm-toast" role="status">{notice}</div> : null}
     </div>
   )

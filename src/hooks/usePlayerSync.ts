@@ -30,6 +30,7 @@ export function usePlayerSync(isCompanion: boolean) {
   useEffect(() => {
     const onConnect = () => {
       setConnected(true)
+      setPairingError('')
       ritimSocket.emit('room:join', {
         room: ROOM,
         role: isCompanion ? 'companion' : 'desktop',
@@ -38,22 +39,29 @@ export function usePlayerSync(isCompanion: boolean) {
       })
     }
     const onDisconnect = () => setConnected(false)
+    const onConnectError = (error: Error) => {
+      setConnected(false)
+      const detail = error.message === 'timeout' ? 'PC yanıt vermedi' : error.message
+      setPairingError(`PC bağlantısı kurulamadı • ${detail}`)
+    }
     const onState = (incoming: PlayerState) => setState(incoming)
     const onPeers = (count: number) => setPeerCount(count)
     const onPairingError = (message: string) => {
       setPairingError(message)
       setConnected(false)
     }
-    ritimSocket.connect()
     ritimSocket.on('connect', onConnect)
+    ritimSocket.on('connect_error', onConnectError)
     ritimSocket.on('disconnect', onDisconnect)
     ritimSocket.on('player:state', onState)
     ritimSocket.on('room:peers', onPeers)
     ritimSocket.on('pairing:error', onPairingError)
+    ritimSocket.connect()
     if (ritimSocket.connected) onConnect()
 
     return () => {
       ritimSocket.off('connect', onConnect)
+      ritimSocket.off('connect_error', onConnectError)
       ritimSocket.off('disconnect', onDisconnect)
       ritimSocket.off('player:state', onState)
       ritimSocket.off('room:peers', onPeers)
