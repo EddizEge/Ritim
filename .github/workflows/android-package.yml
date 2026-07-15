@@ -61,7 +61,7 @@ jobs:
           set -e
           echo "apksigner exit code: $signer_status"
           echo "$certificate_output"
-          actual_certificate="$(printf '%s\n' "$certificate_output" | awk -F': ' 'tolower($0) ~ /certificate sha-256 digest/ { print $2; exit }' | tr -d '\r')"
+          actual_certificate="$(printf '%s\n' "$certificate_output" | awk 'tolower($0) ~ /signer: certificate sha-256 digest/ { print $NF; exit }' | tr -d '\r')"
 
           echo "version=$actual_version" >> "$GITHUB_OUTPUT"
           echo "certificate=$actual_certificate" >> "$GITHUB_OUTPUT"
