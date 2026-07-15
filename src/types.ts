@@ -70,6 +70,12 @@ export type MusicBrowseState = {
   updatedAt: number
 }
 
+export type LyricsState = {
+  trackId: string
+  status: 'idle' | 'loading' | 'ready' | 'unavailable'
+  lines: string[]
+}
+
 export type PlayerState = {
   trackId: string
   isPlaying: boolean
@@ -81,6 +87,7 @@ export type PlayerState = {
   queue: string[]
   catalog: Record<string, Track>
   browse?: MusicBrowseState
+  lyrics?: LyricsState
   updatedAt: number
 }
 
@@ -91,6 +98,7 @@ export type PlayerActions = {
   selectTrack: (trackId: string) => void
   seek: (position: number) => void
   setVolume: (volume: number) => void
+  requestLyrics: () => void
   navigateMusic: (destination: 'home' | 'explore' | 'library' | 'search', query?: string) => void
   openMusicItem: (item: MusicBrowseItem) => void
   openMusicFilter: (filter: MusicBrowseFilter) => void

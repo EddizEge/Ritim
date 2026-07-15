@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { getTrack, initialPlayerState } from '../data'
 import type { PlayerActions, PlayerState, RepeatMode, Track } from '../types'
@@ -26,6 +26,7 @@ export function usePlayerSync(isCompanion: boolean) {
   const [connected, setConnected] = useState(false)
   const [peerCount, setPeerCount] = useState(1)
   const [pairingError, setPairingError] = useState('')
+  const pendingVolumeRef = useRef<{ value: number; changedAt: number } | null>(null)
 
   useEffect(() => {
     const onConnect = () => {
@@ -44,7 +45,19 @@ export function usePlayerSync(isCompanion: boolean) {
       const detail = error.message === 'timeout' ? 'PC yanıt vermedi' : error.message
       setPairingError(`PC bağlantısı kurulamadı • ${detail}`)
     }
-    const onState = (incoming: PlayerState) => setState(incoming)
+    const onState = (incoming: PlayerState) => {
+      const pending = pendingVolumeRef.current
+      if (isCompanion && pending && Date.now() - pending.changedAt < 1800) {
+        if (Math.abs(incoming.volume - pending.value) <= 1) pendingVolumeRef.current = null
+        else {
+          setState({ ...incoming, volume: pending.value })
+          return
+        }
+      } else if (pending) {
+        pendingVolumeRef.current = null
+      }
+      setState(incoming)
+    }
     const onPeers = (count: number) => setPeerCount(count)
     const onPairingError = (message: string) => {
       setPairingError(message)
@@ -153,12 +166,22 @@ export function usePlayerSync(isCompanion: boolean) {
       commit((previous) => ({ ...previous, position }))
     },
     setVolume: (volume) => {
+      const safeVolume = Math.max(0, Math.min(100, Math.round(volume)))
       if (isYouTubeMusic) {
-        sendMusicCommand('setVolume', volume)
-        setState((previous) => ({ ...previous, volume }))
+        pendingVolumeRef.current = { value: safeVolume, changedAt: Date.now() }
+        sendMusicCommand('setVolume', safeVolume)
+        setState((previous) => ({ ...previous, volume: safeVolume }))
         return
       }
-      commit((previous) => ({ ...previous, volume }))
+      commit((previous) => ({ ...previous, volume: safeVolume }))
+    },
+    requestLyrics: () => {
+      if (!isYouTubeMusic) return
+      setState((previous) => ({
+        ...previous,
+        lyrics: { trackId: previous.trackId, status: 'loading', lines: [] },
+      }))
+      sendMusicCommand('requestLyrics')
     },
     navigateMusic: (destination, query) => sendMusicCommand(`navigate:${destination}`, query),
     openMusicItem: (item) => {

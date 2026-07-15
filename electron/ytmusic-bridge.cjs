@@ -20,6 +20,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     trackId: idleTrack.id, isPlaying: false, position: 0, volume: 68, shuffle: false, repeat: 'off',
     liked: [], queue: [idleTrack.id], catalog: { [idleTrack.id]: idleTrack },
     browse: { route: 'home', title: 'Ana Sayfa', url: 'https://music.youtube.com/', filters: [], sections: [], updatedAt: 0 },
+    lyrics: { trackId: idleTrack.id, status: 'idle', lines: [] },
     updatedAt: Date.now(),
   }
   let lastSignature = ''
@@ -41,6 +42,31 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     webContents.sendInputEvent({ type: 'keyUp', keyCode })
   }
 
+  async function clickPlayerButton(kind) {
+    const clicked = await webContents.executeJavaScript(`(() => {
+      const kind = ${JSON.stringify(kind)};
+      const selectors = kind === 'next'
+        ? ['ytmusic-player-bar #next-button', 'ytmusic-player-bar .next-button', 'ytmusic-player-bar [aria-label*="Next" i]', 'ytmusic-player-bar [aria-label*="Sonraki" i]']
+        : ['ytmusic-player-bar #previous-button', 'ytmusic-player-bar .previous-button', 'ytmusic-player-bar [aria-label*="Previous" i]', 'ytmusic-player-bar [aria-label*="Önceki" i]'];
+      const labels = kind === 'next' ? /next|sonraki/i : /previous|önceki/i;
+      const candidates = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
+      const fallback = [...document.querySelectorAll('ytmusic-player-bar button, ytmusic-player-bar tp-yt-paper-icon-button')]
+        .find((item) => labels.test(item.getAttribute('aria-label') || item.getAttribute('title') || ''));
+      const button = candidates.find((item) => !item.disabled && item.getAttribute('aria-disabled') !== 'true') || fallback;
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`, true)
+    if (!clicked) sendKey(kind === 'next' ? 'MediaNextTrack' : 'MediaPreviousTrack')
+    setTimeout(() => void capture(), 180)
+    return clicked
+  }
+
+  function publishState() {
+    state = { ...state, updatedAt: Date.now() }
+    socket.emit('player:update', { room, state })
+  }
+
   async function command(command) {
     if (!command || typeof command.type !== 'string') return
     if (command.type === 'togglePlay') {
@@ -59,8 +85,8 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       if (result === 'missing' || result === 'blocked') sendKey('MediaPlayPause')
       setTimeout(() => void capture(), 120)
     }
-    if (command.type === 'next') sendKey('MediaNextTrack')
-    if (command.type === 'previous') sendKey('MediaPreviousTrack')
+    if (command.type === 'next') await clickPlayerButton('next')
+    if (command.type === 'previous') await clickPlayerButton('previous')
     if (command.type === 'toggleShuffle') sendKey('S')
     if (command.type === 'cycleRepeat') sendKey('R')
     if (command.type === 'seek' && Number.isFinite(Number(command.value))) {
@@ -72,6 +98,31 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         media.currentTime = Math.min(${JSON.stringify(seconds)}, media.duration || ${JSON.stringify(seconds)});
         return true;
       })()`, true)
+      setTimeout(() => void capture(), 80)
+    }
+    if (command.type === 'requestLyrics') {
+      state = { ...state, lyrics: { trackId: state.trackId, status: 'loading', lines: [] } }
+      publishState()
+      const clicked = await webContents.executeJavaScript(`(() => {
+        const tabs = [...document.querySelectorAll('ytmusic-player-page tp-yt-paper-tab, ytmusic-player-page yt-tab-shape, #tabs tp-yt-paper-tab, #tabs yt-tab-shape')];
+        const lyricsTab = tabs.find((tab) => /lyrics|şarkı sözleri|sözler/i.test((tab.textContent || '').trim()));
+        if (!lyricsTab || lyricsTab.getAttribute('aria-disabled') === 'true') return false;
+        lyricsTab.click();
+        return true;
+      })()`, true)
+      if (!clicked) {
+        state = { ...state, lyrics: { trackId: state.trackId, status: 'unavailable', lines: [] } }
+        publishState()
+      } else {
+        const requestedTrackId = state.trackId
+        setTimeout(() => void capture(), 450)
+        setTimeout(() => void capture(), 1200)
+        setTimeout(() => {
+          if (destroyed || state.trackId !== requestedTrackId || state.lyrics?.status !== 'loading') return
+          state = { ...state, lyrics: { trackId: requestedTrackId, status: 'unavailable', lines: [] } }
+          publishState()
+        }, 3600)
+      }
     }
     if (command.type === 'setVolume' && Number.isFinite(Number(command.value))) {
       const volume = Math.max(0, Math.min(100, Number(command.value))) / 100
@@ -83,6 +134,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         media.volume = ${JSON.stringify(volume)};
         return true;
       })()`, true)
+      setTimeout(() => void capture(), 80)
     }
     if (command.type === 'playTrack') {
       const videoId = String(command.value || '').trim()
@@ -93,7 +145,10 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     if (command.type === 'navigateUrl') {
       try {
         const target = new URL(String(command.value || ''), 'https://music.youtube.com/')
-        if (target.origin === 'https://music.youtube.com') await webContents.loadURL(target.toString())
+        if (target.origin === 'https://music.youtube.com') {
+          await webContents.loadURL(target.toString())
+          await capture()
+        }
       } catch {}
     }
     if (command.type === 'goBack') {
@@ -111,7 +166,11 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       const target = destination === 'search'
         ? `https://music.youtube.com/search?q=${encodeURIComponent(String(command.value || '').trim())}`
         : routes[destination]
-      if (target) await webContents.loadURL(target)
+      if (target) {
+        await webContents.loadURL(target)
+        await capture()
+        setTimeout(() => void capture(), 650)
+      }
     }
   }
 
@@ -191,9 +250,10 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           || data.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails
           || [];
         const pageTypeOf = (endpoint) => findEndpoint(endpoint)?.browseEndpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType || '';
-        const route = location.pathname === '/' ? 'home'
-          : location.pathname.startsWith('/explore') ? 'explore'
-          : location.pathname.startsWith('/library') || location.pathname.startsWith('/browse/FEmusic_') ? 'library'
+        const musicBrowseId = location.pathname.startsWith('/browse/') ? location.pathname.slice('/browse/'.length) : '';
+        const route = location.pathname === '/' || musicBrowseId === 'FEmusic_home' ? 'home'
+          : location.pathname.startsWith('/explore') || /^FEmusic_(explore|moods_and_genres)/.test(musicBrowseId) ? 'explore'
+          : location.pathname.startsWith('/library') || /^FEmusic_(library|liked)/.test(musicBrowseId) ? 'library'
           : location.pathname.startsWith('/search') ? 'search'
           : 'detail';
         const searchQuery = new URL(location.href).searchParams.get('q') || '';
@@ -330,6 +390,18 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           });
           if (queue.length >= 20) break;
         }
+        const lyricsShelves = [...document.querySelectorAll('ytmusic-description-shelf-renderer')];
+        const lyricsShelf = lyricsShelves.find((root) => root.offsetParent !== null || root.getClientRects().length > 0) || null;
+        const lyricsDescription = lyricsShelf && (lyricsShelf.querySelector('#description, .description, yt-formatted-string.description') || lyricsShelf);
+        const lyricsText = lyricsDescription?.textContent?.trim() || '';
+        const lyricsLines = lyricsText.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+        const selectedLyricsTab = [...document.querySelectorAll('ytmusic-player-page tp-yt-paper-tab, ytmusic-player-page yt-tab-shape, #tabs tp-yt-paper-tab, #tabs yt-tab-shape')]
+          .find((tab) => (tab.selected || tab.getAttribute('aria-selected') === 'true') && /lyrics|şarkı sözleri|sözler/i.test((tab.textContent || '').trim()));
+        const selectedLyricsText = selectedLyricsTab?.parentElement?.parentElement?.textContent || '';
+        const lyricsMessageText = [...document.querySelectorAll('ytmusic-message-renderer, ytmusic-player-page .message')]
+          .filter((root) => root.offsetParent !== null || root.getClientRects().length > 0)
+          .map((root) => root.textContent || '').join(' ');
+        const lyricsUnavailable = Boolean(selectedLyricsTab && !lyricsLines.length && /not available|kullanılamıyor|mevcut değil|bulunamadı/i.test(selectedLyricsText + ' ' + lyricsMessageText));
         return {
           title: metadata && metadata.title || '',
           artist: metadata && metadata.artist || '',
@@ -343,6 +415,8 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           paused: player ? player.paused : null,
           currentVideoId,
           queue,
+          lyricsLines,
+          lyricsUnavailable,
           browse: {
             route,
             title: route === 'home' ? 'Ana Sayfa' : route === 'explore' ? 'Keşfet' : route === 'library' ? 'Kitaplık' : route === 'search' ? (searchQuery || 'Arama') : (browseHeader?.title || document.querySelector('h1')?.textContent?.trim() || document.title.replace(' - YouTube Music', '')),
@@ -396,12 +470,19 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         ? { ...media.browse, updatedAt: Date.now() }
         : state.browse
       const browseSignature = JSON.stringify([browse?.route, browse?.url, browse?.filters, browse?.header, browse?.sections])
-      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature])
+      const previousLyrics = state.lyrics?.trackId === id ? state.lyrics : { trackId: id, status: 'idle', lines: [] }
+      const lyrics = Array.isArray(media.lyricsLines) && media.lyricsLines.length
+        ? { trackId: id, status: 'ready', lines: media.lyricsLines.map((line) => String(line)) }
+        : media.lyricsUnavailable
+          ? { trackId: id, status: 'unavailable', lines: [] }
+          : previousLyrics
+      const lyricsSignature = JSON.stringify([lyrics.status, lyrics.lines])
+      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature])
       if (signature === lastSignature) return
       lastSignature = signature
       state = {
         ...state, trackId: id, isPlaying, position, volume, queue: queueIds,
-        catalog, browse, updatedAt: Date.now(),
+        catalog, browse, lyrics, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
       presence?.update({ title: track.title, artist: track.artist, isPlaying })
