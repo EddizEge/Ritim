@@ -18,16 +18,21 @@
     ${EndIf}
   ${EndIf}
 
-  # 0.7.0-0.7.2 uninstallers contain the same broad process check and mistake
-  # their own temporary uninstaller for Ritim. Move that closed installation
-  # into NSIS' temporary directory and let this installer replace it directly.
+  # Older uninstallers can mistake their own temporary process for Ritim and
+  # show "app cannot be closed" even after every Ritim.exe process has exited.
+  # Once the real app is closed, move any previous installation into this
+  # installer's temporary directory and replace it directly. User data lives
+  # outside $INSTDIR, so pairing, login and settings remain intact.
   ReadRegStr $R8 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
-  ${If} $R8 == "0.7.0"
-  ${OrIf} $R8 == "0.7.1"
-  ${OrIf} $R8 == "0.7.2"
+  ${If} $R8 != ""
     SetOutPath "$TEMP"
     ClearErrors
-    Rename "$INSTDIR" "$PLUGINSDIR\ritim-legacy-install"
+    Rename "$INSTDIR" "$PLUGINSDIR\ritim-previous-install"
+    ${If} ${Errors}
+      Sleep 1000
+      ClearErrors
+      Rename "$INSTDIR" "$PLUGINSDIR\ritim-previous-install"
+    ${EndIf}
     ${IfNot} ${Errors}
       DeleteRegKey SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}"
     ${EndIf}
