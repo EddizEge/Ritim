@@ -1,0 +1,71 @@
+name: Android Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Ritim release tag to build
+        required: true
+        default: v0.7.3
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - name: Sync Android project
+        run: npm run android:sync
+        env:
+          VITE_GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Configure persistent Android signing
+        shell: bash
+        run: |
+          test -n '${{ secrets.RITIM_ANDROID_KEYSTORE_BASE64 }}'
+          echo '${{ secrets.RITIM_ANDROID_KEYSTORE_BASE64 }}' | base64 --decode > "$RUNNER_TEMP/ritim-release.jks"
+          echo "RITIM_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/ritim-release.jks" >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEYSTORE_PASSWORD=${{ secrets.RITIM_ANDROID_KEYSTORE_PASSWORD }}' >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEY_ALIAS=${{ secrets.RITIM_ANDROID_KEY_ALIAS }}' >> "$GITHUB_ENV"
+          echo 'RITIM_ANDROID_KEY_PASSWORD=${{ secrets.RITIM_ANDROID_KEY_PASSWORD }}' >> "$GITHUB_ENV"
+      - run: ./gradlew assembleDebug
+        working-directory: android
+      - name: Inspect Android package
+        id: package
+        shell: bash
+        run: |
+          expected_version="$(node -p "require('./package.json').version")"
+          actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          test "$actual_version" = "$expected_version"
+
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner_path"
+          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }' | tr -d '\r')"
+          test -n "$actual_certificate"
+
+          echo "version=$actual_version" >> "$GITHUB_OUTPUT"
+          echo "certificate=$actual_certificate" >> "$GITHUB_OUTPUT"
+          echo "Android package version: $actual_version"
+          echo "Android signing certificate: $actual_certificate"
+      - name: Stage Android package
+        shell: bash
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "Ritim-Android-${{ inputs.tag }}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ritim-Android-${{ inputs.tag }}
+          path: Ritim-Android-${{ inputs.tag }}.apk
+          if-no-files-found: error
+          retention-days: 7
