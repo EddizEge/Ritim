@@ -19,6 +19,7 @@ let syncServer
 let presence
 let musicBridge
 let updateController
+let isShuttingDown = false
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -26,11 +27,36 @@ if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
+    if (isShuttingDown) return
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
   })
+}
+
+function stopRuntime() {
+  musicBridge?.destroy()
+  musicBridge = null
+  presence?.destroy()
+  presence = null
+  if (syncServer) {
+    syncServer.close()
+    syncServer = null
+  }
+}
+
+async function prepareForUpdate() {
+  isShuttingDown = true
+  stopRuntime()
+
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.destroy()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy()
+
+  app.releaseSingleInstanceLock()
+  // Let Chromium child processes and the local phone server finish exiting before
+  // electron-updater starts NSIS and asks the Electron main process to quit.
+  await new Promise((resolve) => setTimeout(resolve, 250))
 }
 
 function isMusicAuthUrl(value) {
@@ -202,6 +228,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   presence = createDiscordPresence(process.env.RITIM_DISCORD_CLIENT_ID)
   updateController = createUpdateController({
     app,
+    beforeInstall: prepareForUpdate,
     broadcast: (status) => {
       if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:update-status', status)
     },
@@ -232,8 +259,9 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     return true
   })
   ipcMain.on('settings:restart', () => {
+    isShuttingDown = true
     app.relaunch()
-    app.exit(0)
+    app.quit()
   })
   ipcMain.handle('settings:check-updates', () => updateController?.check())
   ipcMain.handle('settings:install-update', () => updateController?.install() || false)
@@ -241,16 +269,15 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   createWindow()
   setTimeout(() => void updateController?.check(), 3500)
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!isShuttingDown && BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (!isShuttingDown && process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
-  musicBridge?.destroy()
-  presence?.destroy()
-  syncServer?.close()
+  isShuttingDown = true
+  stopRuntime()
 })

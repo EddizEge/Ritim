@@ -54,7 +54,8 @@ async function loadSettings() {
 function renderUpdateStatus(status) {
   if (!status) return
   elements.updateStatus.textContent = status.message
-  elements.checkUpdateButton.disabled = status.state === 'checking' || status.state === 'downloading'
+  elements.checkUpdateButton.disabled = status.state === 'checking' || status.state === 'downloading' || status.state === 'installing'
+  elements.installUpdateButton.disabled = status.state === 'installing'
   elements.installUpdateButton.hidden = !status.canInstall
   elements.updateProgress.hidden = status.state !== 'downloading'
   elements.updateProgress.style.setProperty('--update-progress', `${status.percent || 0}%`)
