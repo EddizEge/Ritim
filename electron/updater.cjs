@@ -2,7 +2,8 @@ const { Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
 
-function createUpdateController({ app, broadcast }) {
+function createUpdateController({ app, broadcast, beforeInstall }) {
+  let installStarted = false
   let status = {
     state: app.isPackaged ? 'idle' : 'development',
     message: app.isPackaged ? 'Güncellemeler GitHub Releases üzerinden denetlenir.' : 'Güncelleme denetimi paketlenmiş uygulamada çalışır.',
@@ -15,8 +16,11 @@ function createUpdateController({ app, broadcast }) {
   }
   autoUpdater.logger = log
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // A normal app close must not race an already-started NSIS installer.
+  // Updates are installed only through the explicit "restart and install" action.
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.autoRunAppAfterInstall = true
+  autoUpdater.disableWebInstaller = true
   autoUpdater.on('checking-for-update', () => publish({ state: 'checking', message: 'Güncellemeler kontrol ediliyor…', percent: 0, canInstall: false }))
   autoUpdater.on('update-available', (info) => publish({ state: 'downloading', message: `Ritim ${info.version} indiriliyor…`, availableVersion: info.version, percent: 0 }))
   autoUpdater.on('download-progress', (progress) => publish({ state: 'downloading', message: `Ritim ${status.availableVersion || 'güncellemesi'} indiriliyor… %${Math.round(progress.percent)}`, percent: Math.round(progress.percent) }))
@@ -41,10 +45,20 @@ function createUpdateController({ app, broadcast }) {
       }
       return status
     },
-    install: () => {
-      if (!status.canInstall) return false
-      autoUpdater.quitAndInstall(false, true)
-      return true
+    install: async () => {
+      if (!status.canInstall || installStarted) return false
+      installStarted = true
+      publish({ state: 'installing', message: 'Ritim kapatılıyor ve güncelleme hazırlanıyor…', canInstall: false })
+      try {
+        await beforeInstall?.()
+        autoUpdater.quitAndInstall(false, true)
+        return true
+      } catch (error) {
+        installStarted = false
+        log.error('[Ritim Updater] install preparation failed', error)
+        publish({ state: 'error', message: 'Güncelleme kuruluma hazırlanamadı. Ritim’i yeniden başlatıp tekrar dene.', canInstall: true })
+        return false
+      }
     },
   }
 }
