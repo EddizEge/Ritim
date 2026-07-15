@@ -37,3 +37,12 @@ jobs:
       - run: npm run android:sync
       - run: ./gradlew assembleDebug
         working-directory: android
+      - name: Verify Android package version
+        shell: bash
+        run: |
+          expected_version="$(node -p "require('./package.json').version")"
+          actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          test "$actual_version" = "$expected_version" || {
+            echo "APK version mismatch: expected $expected_version, got $actual_version"
+            exit 1
+          }
