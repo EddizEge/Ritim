@@ -80,7 +80,7 @@ jobs:
             echo "apksigner was not found under $ANDROID_HOME/build-tools"
             exit 1
           }
-          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }')"
+          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk 'tolower($0) ~ /signer: certificate sha-256 digest/ { print $NF; exit }' | tr -d '\r')"
           test "$actual_certificate" = "$expected_certificate" || {
             echo "APK signing certificate mismatch"
             exit 1
