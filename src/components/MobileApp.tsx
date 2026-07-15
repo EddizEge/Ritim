@@ -1,11 +1,12 @@
 import { FormEvent, memo, useEffect, useMemo, useState } from 'react'
 import {
-  ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic,
-  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Search, Volume1, Volume2, X,
+  Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic,
+  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Search, SkipForward, Volume1, Volume2, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
-import type { MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, PlayerActions, PlayerState, Track } from '../types'
+import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, PlayerActions, PlayerState, Track } from '../types'
 import { Cover } from './Cover'
+import { FeedbackSheet } from './FeedbackSheet'
 import { PlayerControls } from './PlayerControls'
 import { Progress } from './Progress'
 import { clearMobilePairing, isNativeMobile, readMobilePairing } from '../mobileConfig'
@@ -40,6 +41,18 @@ const routeLabels: Record<BrowseRoute, string> = {
   search: 'Ara',
   detail: 'Detay',
 }
+
+function queryFromBrowseUrl(url = '') {
+  try { return new URL(url).searchParams.get('q')?.trim() || '' } catch { return '' }
+}
+
+const LyricsPanel = memo(function LyricsPanel({ lyrics }: { lyrics?: LyricsState }) {
+  if (lyrics?.status === 'ready' && lyrics.lines.length) {
+    return <div className="ytm-lyrics" aria-live="polite">{lyrics.lines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div>
+  }
+  const unavailable = lyrics?.status === 'unavailable'
+  return <div className="ytm-info-body"><ListMusic /><div><b>{unavailable ? 'Bu parçada şarkı sözü bulunamadı' : 'Şarkı sözleri PC’den alınıyor'}</b><p>{unavailable ? 'YouTube Music bazı parçalar için söz sağlamıyor.' : 'YouTube Music’in şarkı sözleri sekmesi açılıyor…'}</p></div></div>
+})
 
 const QueueRow = memo(function QueueRow({ track, current, onSelect }: { track: Track; current: boolean; onSelect: () => void }) {
   return (
@@ -123,6 +136,10 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [activeTab, setActiveTab] = useState<InfoTab>('queue')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [requestedSearchQuery, setRequestedSearchQuery] = useState('')
+  const [navigationRetries, setNavigationRetries] = useState(0)
+  const [navigationError, setNavigationError] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const mobileUpdate = useMobileUpdate()
   const [pairedComputer] = useState(readMobilePairing)
@@ -159,8 +176,33 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     }
   }, [browse?.route, browse?.url])
 
+  const currentSearchQuery = currentRoute === 'search' ? queryFromBrowseUrl(browse?.url) : ''
+  const showingRequestedPage = requestedRoute === currentRoute
+    && (requestedRoute !== 'search' || !requestedSearchQuery || currentSearchQuery.toLocaleLowerCase('tr') === requestedSearchQuery.toLocaleLowerCase('tr'))
+
+  useEffect(() => {
+    if (showingRequestedPage) {
+      setNavigationError(false)
+      setNavigationRetries(0)
+      return
+    }
+    if (!connected) return
+    const timer = window.setTimeout(() => {
+      if (navigationRetries < 2) {
+        actions.navigateMusic(requestedRoute === 'detail' ? 'home' : requestedRoute, requestedRoute === 'search' ? requestedSearchQuery : undefined)
+        setNavigationRetries((current) => current + 1)
+      } else {
+        setNavigationError(true)
+      }
+    }, 3200)
+    return () => window.clearTimeout(timer)
+  }, [actions, connected, navigationRetries, requestedRoute, requestedSearchQuery, showingRequestedPage])
+
   const navigate = (destination: 'home' | 'explore' | 'library') => {
     setRequestedRoute(destination)
+    setRequestedSearchQuery('')
+    setNavigationRetries(0)
+    setNavigationError(false)
     setPlayerOpen(false)
     actions.navigateMusic(destination)
   }
@@ -170,8 +212,22 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     const query = searchQuery.trim()
     if (!query) return
     setRequestedRoute('search')
+    setRequestedSearchQuery(query)
+    setNavigationRetries(0)
+    setNavigationError(false)
     setSearchOpen(false)
     actions.navigateMusic('search', query)
+  }
+
+  const retryNavigation = () => {
+    setNavigationRetries(0)
+    setNavigationError(false)
+    actions.navigateMusic(requestedRoute === 'detail' ? 'home' : requestedRoute, requestedRoute === 'search' ? requestedSearchQuery : undefined)
+  }
+
+  const selectInfoTab = (tab: InfoTab) => {
+    setActiveTab(tab)
+    if (tab === 'lyrics' && (state.lyrics?.trackId !== track.id || state.lyrics?.status !== 'ready')) actions.requestLyrics()
   }
 
   const openItem = (item: MusicBrowseItem) => {
@@ -200,7 +256,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         <header className="ytm-mobile-header player-header">
           <button className="ytm-icon-button" onClick={() => setPlayerOpen(false)} aria-label="Geri"><ChevronLeft /></button>
           <div className="ytm-playing-from"><span>PC’DE ÇALIYOR</span><b>Ritim • {connected ? 'Bağlı' : 'Bağlanıyor'}</b></div>
-          <button className="ytm-icon-button" onClick={() => setNotice(`${peerCount} cihaz • ${room}`)} aria-label="Bağlantı bilgisi"><ChevronDown /></button>
+          <button className="ytm-icon-button" onClick={() => setFeedbackOpen(true)} aria-label="Hata bildir"><Bug /></button>
         </header>
         <main className="ytm-player-screen">
           <div className="ytm-art-frame">
@@ -218,22 +274,23 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           <PlayerControls state={state} actions={actions} large />
           <div className="ytm-volume-control"><Volume1 /><input className="range range--volume" type="range" min="0" max="100" value={state.volume} style={{ '--range-value': `${state.volume}%` } as React.CSSProperties} onChange={(event) => actions.setVolume(Number(event.target.value))} aria-label="PC sesi" /><Volume2 /></div>
           <section className="ytm-info-sheet">
-            <div className="ytm-info-tabs" role="tablist"><button className={activeTab === 'queue' ? 'is-active' : ''} onClick={() => setActiveTab('queue')}>SIRADAKİ</button><button className={activeTab === 'lyrics' ? 'is-active' : ''} onClick={() => setActiveTab('lyrics')}>ŞARKI SÖZLERİ</button><button className={activeTab === 'related' ? 'is-active' : ''} onClick={() => setActiveTab('related')}>BENZER</button></div>
-            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : <div className="ytm-info-body"><ListMusic /><div><b>{activeTab === 'lyrics' ? 'Şarkı sözleri hazırlanıyor' : 'Benzer parçalar hazırlanıyor'}</b><p>Bu bölüm PC’deki YouTube Music verisiyle güncellenecek.</p></div></div>}
+            <div className="ytm-info-tabs" role="tablist"><button className={activeTab === 'queue' ? 'is-active' : ''} onClick={() => selectInfoTab('queue')}>SIRADAKİ</button><button className={activeTab === 'lyrics' ? 'is-active' : ''} onClick={() => selectInfoTab('lyrics')}>ŞARKI SÖZLERİ</button><button className={activeTab === 'related' ? 'is-active' : ''} onClick={() => selectInfoTab('related')}>BENZER</button></div>
+            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <div className="ytm-info-body"><ListMusic /><div><b>Benzer parçalar hazırlanıyor</b><p>Bu bölüm PC’deki YouTube Music verisiyle güncellenecek.</p></div></div>}
           </section>
         </main>
+        <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
         {notice ? <div className="ytm-toast" role="status">{notice}</div> : null}
       </div>
     )
   }
 
-  const showingRequestedPage = requestedRoute === currentRoute
   return (
     <div className="ytm-mobile-shell is-browser-open">
       <header className="mobile-browse-header">
         <div className="mobile-brand"><i><Play fill="currentColor" /></i><span>Ritim</span></div>
         <div className="mobile-header-actions">
           <button onClick={() => setSearchOpen(true)} aria-label="Ara"><Search /></button>
+          <button onClick={() => setFeedbackOpen(true)} aria-label="Hata bildir"><Bug /></button>
           {isNativeMobile ? <button className={mobileUpdate.updateAvailable ? 'has-update' : ''} onClick={() => void handleMobileUpdate()} aria-label="Güncellemeleri kontrol et">{mobileUpdate.updateAvailable ? <Download /> : <RefreshCw />}</button> : null}
           <button className="mobile-device-button" onClick={() => setNotice(connected ? `Ritim PC bağlı • ${peerCount} cihaz` : 'PC bağlantısı bekleniyor')} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected ? 'is-online' : ''} /></button>
         </div>
@@ -248,7 +305,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         {showingRequestedPage && requestedRoute === 'detail' && browse?.header ? <DetailHeader header={browse.header} onOpen={openDetailAction} /> : null}
         {showingRequestedPage && (requestedRoute === 'search' || requestedRoute === 'library') ? <BrowseFilters filters={browse?.filters || []} onOpen={actions.openMusicFilter} /> : null}
         {!showingRequestedPage ? (
-          <div className="mobile-loading"><i /><i /><i /><p>{routeLabels[requestedRoute]} PC’den yükleniyor…</p></div>
+          <div className={`mobile-loading ${navigationError ? 'has-error' : ''}`}><i /><i /><i /><p>{navigationError ? `${routeLabels[requestedRoute]} yüklenemedi.` : `${routeLabels[requestedRoute]} PC’den yükleniyor…`}</p>{navigationError ? <button onClick={retryNavigation}>Tekrar dene</button> : null}</div>
         ) : browse?.sections.length ? (
           browse.sections.map((section) => <BrowseSectionView key={section.id} section={section} onOpen={openItem} />)
         ) : requestedRoute === 'detail' && browse?.header ? null : (
@@ -263,7 +320,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
             <span><b>{track.title}</b><small>{track.artist} • Ritim PC</small></span>
           </button>
           <button onClick={actions.togglePlay} aria-label={state.isPlaying ? 'Duraklat' : 'Oynat'}>{state.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
-          <button onClick={actions.next} aria-label="Sıradaki"><ListMusic /></button>
+          <button onClick={actions.next} aria-label="Sıradaki"><SkipForward fill="currentColor" /></button>
         </div>
       ) : null}
 
@@ -275,6 +332,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       </nav>
 
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}
+      <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
       {!connected || pairingError ? (
         <div className="ytm-offline-banner">
           <i />

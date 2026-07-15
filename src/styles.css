@@ -278,6 +278,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .ytm-info-body b { font-size: 12px; }
 .ytm-info-body p { margin: 5px 0 0; color: rgba(255, 255, 255, .5); font-size: 10px; line-height: 1.45; }
 .ytm-info-body button { padding: 9px 10px; border: 1px solid rgba(255, 255, 255, .22); border-radius: 18px; color: #fff; background: transparent; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.ytm-lyrics { max-height: 48dvh; overflow-y: auto; padding: 22px 10px 40px; scrollbar-width: thin; }
+.ytm-lyrics p { margin: 0 0 18px; color: rgba(255, 255, 255, .76); font-size: 18px; font-weight: 650; line-height: 1.48; letter-spacing: -.2px; }
 .ytm-bottom-nav { position: fixed; z-index: 8; inset: auto 0 0; display: grid; grid-template-columns: repeat(4, 1fr); width: min(100%, 460px); min-height: 78px; margin: 0 auto; padding-bottom: max(7px, env(safe-area-inset-bottom)); border-top: 1px solid rgba(255, 255, 255, .11); background: rgba(3, 3, 3, .94); backdrop-filter: blur(24px); }
 .ytm-bottom-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: rgba(255, 255, 255, .72); background: transparent; font-size: 10px; }
 .ytm-bottom-nav button.is-active { color: #ff3155; }
@@ -372,6 +374,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-loading { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 10px 18px; }
 .mobile-loading i { display: block; aspect-ratio: 1; border-radius: 4px; background: linear-gradient(100deg, #181818 20%, #262626 45%, #181818 70%); background-size: 240% 100%; animation: mobile-shimmer 1.25s linear infinite; }
 .mobile-loading p { grid-column: 1 / -1; margin: 8px 0; color: #929292; font-size: 12px; }
+.mobile-loading.has-error i { animation: none; background: #181818; }
+.mobile-loading > button { grid-column: 1 / -1; justify-self: start; min-height: 38px; padding: 0 16px; border-radius: 20px; color: #090909; background: #fff; font-size: 12px; font-weight: 800; }
 .mobile-empty-state { display: grid; place-items: center; padding: 66px 34px; color: #aaa; text-align: center; }
 .mobile-empty-state svg { width: 34px; height: 34px; color: #ff3155; }
 .mobile-empty-state h2 { margin: 18px 0 7px; color: #fff; font-size: 18px; }
@@ -402,6 +406,29 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .native-pairing-message { margin-top: 14px; padding: 11px 12px; border-radius: 10px; color: #ddd; background: #282828; font-size: 11px; line-height: 1.45; }
 .native-update-button { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; margin-top: 18px; padding: 10px; color: #a9a9a9; background: transparent; font-size: 11px; }
 .native-update-button svg { width: 16px; }
+
+.feedback-overlay { position: fixed; z-index: 50; inset: 0; width: min(100%, 460px); margin: auto; overflow-y: auto; color: #fff; background: #090909; overscroll-behavior: contain; }
+.feedback-overlay > header { position: sticky; z-index: 1; top: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 76px; padding: max(10px, env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid #242424; background: rgba(9, 9, 9, .94); backdrop-filter: blur(18px); }
+.feedback-overlay > header button { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: transparent; }
+.feedback-overlay > header svg { width: 23px; }
+.feedback-overlay > header small { color: #ff536a; font-size: 8px; font-weight: 850; letter-spacing: .13em; }
+.feedback-overlay > header h1 { margin: 2px 0 0; font-size: 22px; letter-spacing: -.45px; }
+.feedback-overlay form { display: grid; gap: 17px; padding: 20px 18px calc(30px + env(safe-area-inset-bottom)); }
+.feedback-overlay form > p { margin: 0 0 3px; color: #aaa; font-size: 12px; line-height: 1.55; }
+.feedback-overlay label { display: grid; gap: 8px; color: #d7d7d7; font-size: 11px; font-weight: 750; }
+.feedback-overlay input, .feedback-overlay select, .feedback-overlay textarea { width: 100%; border: 1px solid #343434; border-radius: 11px; outline: none; color: #f4f4f4; background: #151515; font: 13px/1.45 inherit; }
+.feedback-overlay input, .feedback-overlay select { min-height: 48px; padding: 0 13px; }
+.feedback-overlay textarea { min-height: 112px; resize: vertical; padding: 12px 13px; }
+.feedback-overlay input:focus, .feedback-overlay select:focus, .feedback-overlay textarea:focus { border-color: #ff4058; box-shadow: 0 0 0 2px rgba(255, 64, 88, .14); }
+.feedback-diagnostics { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; padding: 13px; border: 1px solid #2e2e2e; border-radius: 11px; background: #121212; }
+.feedback-diagnostics svg { width: 21px; color: #ff4058; }
+.feedback-diagnostics b, .feedback-diagnostics small { display: block; }
+.feedback-diagnostics b { font-size: 11px; }
+.feedback-diagnostics small { margin-top: 4px; color: #8d8d8d; font-size: 9px; line-height: 1.45; }
+.feedback-submit { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 50px; border-radius: 25px; color: #080808; background: #fff; font-size: 13px; font-weight: 850; }
+.feedback-submit:disabled { opacity: .35; cursor: default; }
+.feedback-submit svg { width: 17px; }
+.feedback-history { min-height: 42px; color: #bbb; background: transparent; font-size: 11px; font-weight: 750; }
 
 @keyframes mobile-shimmer { to { background-position: -140% 0; } }
 
