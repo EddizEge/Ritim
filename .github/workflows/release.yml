@@ -75,7 +75,12 @@ jobs:
             exit 1
           }
           expected_certificate="6a5b01605a4a767da6d21e199d805d8ea230c4da01dcc4335bd18891f36c4458"
-          actual_certificate="$(apksigner verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }')"
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner_path" || {
+            echo "apksigner was not found under $ANDROID_HOME/build-tools"
+            exit 1
+          }
+          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest/ { print $2; exit }')"
           test "$actual_certificate" = "$expected_certificate" || {
             echo "APK signing certificate mismatch"
             exit 1
