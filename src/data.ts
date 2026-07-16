@@ -34,6 +34,7 @@ export const initialPlayerState: PlayerState = {
     updatedAt: 0,
   },
   lyrics: { trackId: tracks[0].id, status: 'idle', lines: [] },
+  related: { trackId: tracks[0].id, status: 'idle', items: [] },
   updatedAt: Date.now(),
 }
 

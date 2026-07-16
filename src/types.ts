@@ -76,6 +76,12 @@ export type LyricsState = {
   lines: string[]
 }
 
+export type RelatedState = {
+  trackId: string
+  status: 'idle' | 'loading' | 'ready' | 'unavailable'
+  items: MusicBrowseItem[]
+}
+
 export type PlayerState = {
   trackId: string
   isPlaying: boolean
@@ -88,6 +94,7 @@ export type PlayerState = {
   catalog: Record<string, Track>
   browse?: MusicBrowseState
   lyrics?: LyricsState
+  related?: RelatedState
   updatedAt: number
 }
 
@@ -99,6 +106,7 @@ export type PlayerActions = {
   seek: (position: number) => void
   setVolume: (volume: number) => void
   requestLyrics: () => void
+  requestRelated: () => void
   navigateMusic: (destination: 'home' | 'explore' | 'library' | 'search', query?: string) => void
   openMusicItem: (item: MusicBrowseItem) => void
   openMusicFilter: (filter: MusicBrowseFilter) => void

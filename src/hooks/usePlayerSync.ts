@@ -183,6 +183,14 @@ export function usePlayerSync(isCompanion: boolean) {
       }))
       sendMusicCommand('requestLyrics')
     },
+    requestRelated: () => {
+      if (!isYouTubeMusic) return
+      setState((previous) => ({
+        ...previous,
+        related: { trackId: previous.trackId, status: 'loading', items: [] },
+      }))
+      sendMusicCommand('requestRelated')
+    },
     navigateMusic: (destination, query) => sendMusicCommand(`navigate:${destination}`, query),
     openMusicItem: (item) => {
       if (item.videoId) sendMusicCommand('playTrack', item.videoId)
