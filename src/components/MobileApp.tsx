@@ -1,10 +1,10 @@
-import { FormEvent, memo, useEffect, useMemo, useState } from 'react'
+import { FormEvent, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic,
   MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Search, SkipForward, Volume1, Volume2, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
-import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, PlayerActions, PlayerState, Track } from '../types'
+import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, PlayerActions, PlayerState, RelatedState, Track } from '../types'
 import { Cover } from './Cover'
 import { FeedbackSheet } from './FeedbackSheet'
 import { PlayerControls } from './PlayerControls'
@@ -101,6 +101,14 @@ function BrowseSectionView({ section, onOpen }: { section: MusicBrowseSection; o
   )
 }
 
+const RelatedPanel = memo(function RelatedPanel({ related, onOpen }: { related?: RelatedState; onOpen: (item: MusicBrowseItem) => void }) {
+  if (related?.status === 'ready' && related.items.length) {
+    return <div className="mobile-music-list ytm-related-list">{related.items.map((item) => <BrowseItem key={item.id} item={item} layout="list" onOpen={() => onOpen(item)} />)}</div>
+  }
+  const unavailable = related?.status === 'unavailable'
+  return <div className="ytm-info-body"><ListMusic /><div><b>{unavailable ? 'Benzer içerik bulunamadı' : 'Benzer parçalar PC’den alınıyor'}</b><p>{unavailable ? 'YouTube Music bu parça için öneri sağlamadı.' : 'YouTube Music’in Benzer sekmesi açılıyor…'}</p></div></div>
+})
+
 const BrowseFilters = memo(function BrowseFilters({ filters, onOpen }: { filters: MusicBrowseFilter[]; onOpen: (filter: MusicBrowseFilter) => void }) {
   if (!filters.length) return null
   return <div className="mobile-filter-rail">{filters.map((filter) => <button key={filter.id} className={filter.selected ? 'is-selected' : ''} onClick={() => onOpen(filter)}>{filter.label}</button>)}</div>
@@ -143,6 +151,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [notice, setNotice] = useState('')
   const mobileUpdate = useMobileUpdate()
   const [pairedComputer] = useState(readMobilePairing)
+  const homeBootstrapRef = useRef(false)
   const queue = useMemo(() => {
     const result: Track[] = []
     const seenIds = new Set<string>()
@@ -166,6 +175,25 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     const timer = window.setTimeout(() => setNotice(''), 2200)
     return () => window.clearTimeout(timer)
   }, [notice])
+
+  useEffect(() => {
+    if (!connected) {
+      homeBootstrapRef.current = false
+      return
+    }
+    if (homeBootstrapRef.current) return
+    if ((browse?.sections.length || 0) > 0 || browse?.header) {
+      homeBootstrapRef.current = true
+      return
+    }
+    homeBootstrapRef.current = true
+    setRequestedRoute('home')
+    setRequestedSearchQuery('')
+    setNavigationRetries(0)
+    setNavigationError(false)
+    const timer = window.setTimeout(() => actions.navigateMusic('home'), 450)
+    return () => window.clearTimeout(timer)
+  }, [actions, browse?.header, browse?.sections.length, connected])
 
   useEffect(() => {
     if (browse?.route === 'home' || browse?.route === 'explore' || browse?.route === 'library' || browse?.route === 'search' || browse?.route === 'detail') {
@@ -228,6 +256,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const selectInfoTab = (tab: InfoTab) => {
     setActiveTab(tab)
     if (tab === 'lyrics' && (state.lyrics?.trackId !== track.id || state.lyrics?.status !== 'ready')) actions.requestLyrics()
+    if (tab === 'related' && (state.related?.trackId !== track.id || state.related?.status !== 'ready')) actions.requestRelated()
   }
 
   const openItem = (item: MusicBrowseItem) => {
@@ -275,7 +304,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           <div className="ytm-volume-control"><Volume1 /><input className="range range--volume" type="range" min="0" max="100" value={state.volume} style={{ '--range-value': `${state.volume}%` } as React.CSSProperties} onChange={(event) => actions.setVolume(Number(event.target.value))} aria-label="PC sesi" /><Volume2 /></div>
           <section className="ytm-info-sheet">
             <div className="ytm-info-tabs" role="tablist"><button className={activeTab === 'queue' ? 'is-active' : ''} onClick={() => selectInfoTab('queue')}>SIRADAKİ</button><button className={activeTab === 'lyrics' ? 'is-active' : ''} onClick={() => selectInfoTab('lyrics')}>ŞARKI SÖZLERİ</button><button className={activeTab === 'related' ? 'is-active' : ''} onClick={() => selectInfoTab('related')}>BENZER</button></div>
-            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <div className="ytm-info-body"><ListMusic /><div><b>Benzer parçalar hazırlanıyor</b><p>Bu bölüm PC’deki YouTube Music verisiyle güncellenecek.</p></div></div>}
+            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <RelatedPanel related={state.related?.trackId === track.id ? state.related : undefined} onOpen={openItem} />}
           </section>
         </main>
         <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
