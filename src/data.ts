@@ -35,6 +35,7 @@ export const initialPlayerState: PlayerState = {
   },
   lyrics: { trackId: tracks[0].id, status: 'idle', lines: [] },
   related: { trackId: tracks[0].id, status: 'idle', items: [] },
+  playlistPicker: { status: 'idle', itemTitle: '', playlists: [] },
   updatedAt: Date.now(),
 }
 

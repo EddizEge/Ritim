@@ -22,6 +22,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     browse: { route: 'home', title: 'Ana Sayfa', url: 'https://music.youtube.com/', filters: [], sections: [], updatedAt: 0 },
     lyrics: { trackId: idleTrack.id, status: 'idle', lines: [] },
     related: { trackId: idleTrack.id, status: 'idle', items: [] },
+    playlistPicker: { status: 'idle', itemTitle: '', playlists: [] },
     updatedAt: Date.now(),
   }
   let lastSignature = ''
@@ -29,6 +30,10 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   let timer
   let pendingNavigation = null
   let navigationTask = null
+  let expectedVideoId = ''
+  let expectedVideoDeadline = 0
+  let actionSequence = 0
+  let loadMoreTask = null
   const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
@@ -68,6 +73,51 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   function publishState() {
     state = { ...state, updatedAt: Date.now() }
     socket.emit('player:update', { room, state })
+  }
+
+  function publishAction(status, message) {
+    state = {
+      ...state,
+      actionFeedback: { id: `${Date.now()}-${++actionSequence}`, status, message },
+    }
+    publishState()
+  }
+
+  function mergeBrowseState(previous, incoming) {
+    if (!incoming || typeof incoming !== 'object') return previous
+    if (!previous || previous.url !== incoming.url) {
+      return { ...incoming, loadingMore: false, hasMore: true, updatedAt: Date.now() }
+    }
+    const sections = []
+    const sectionIndex = new Map()
+    for (const section of [...(previous.sections || []), ...(incoming.sections || [])]) {
+      const key = `${section.id || ''}|${section.title || ''}|${section.layout || ''}`
+      const existingIndex = sectionIndex.get(key)
+      if (existingIndex === undefined) {
+        sectionIndex.set(key, sections.length)
+        sections.push({ ...section, items: [...(section.items || [])] })
+        continue
+      }
+      const existing = sections[existingIndex]
+      const seen = new Set(existing.items.map((item) => item.id || item.videoId || item.href))
+      const items = [...existing.items]
+      for (const item of section.items || []) {
+        const itemKey = item.id || item.videoId || item.href
+        if (!seen.has(itemKey)) {
+          seen.add(itemKey)
+          items.push(item)
+        }
+      }
+      sections[existingIndex] = { ...existing, ...section, items }
+    }
+    return {
+      ...previous,
+      ...incoming,
+      sections,
+      loadingMore: Boolean(previous.loadingMore),
+      hasMore: previous.hasMore !== false,
+      updatedAt: Date.now(),
+    }
   }
 
   async function collapsePlayerPage() {
@@ -227,6 +277,205 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     }, 3800)
   }
 
+  async function openItemMenu(item) {
+    const target = {
+      videoId: String(item?.videoId || ''),
+      href: String(item?.href || ''),
+      title: String(item?.title || ''),
+    }
+    const location = await webContents.executeJavaScript(`(() => {
+      const target = ${JSON.stringify(target)};
+      const roots = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer, ytmusic-two-row-item-renderer')]
+        .filter((root) => !root.closest('ytmusic-player-page'));
+      const text = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+      const endpointVideoId = (value, depth = 0) => {
+        if (!value || typeof value !== 'object' || depth > 8) return '';
+        if (value.watchEndpoint?.videoId) return value.watchEndpoint.videoId;
+        for (const nested of Object.values(value)) {
+          const videoId = endpointVideoId(nested, depth + 1);
+          if (videoId) return videoId;
+        }
+        return '';
+      };
+      const normalizedHref = (value) => {
+        try { const url = new URL(value || '', location.origin); return url.pathname + url.search; } catch { return ''; }
+      };
+      const root = roots.find((candidate) => {
+        const data = candidate.data || candidate.__data?.data || {};
+        const videoId = data.videoId || data.playlistItemData?.videoId || endpointVideoId(data);
+        if (target.videoId && videoId === target.videoId) return true;
+        const anchorHref = candidate.querySelector('a[href]')?.getAttribute('href') || '';
+        if (target.href && normalizedHref(anchorHref) === normalizedHref(target.href)) return true;
+        const title = text(data.title) || text(data.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text)
+          || candidate.querySelector('#video-title, .title, ytmusic-formatted-string.title')?.textContent?.trim() || '';
+        return Boolean(target.title && title === target.title);
+      });
+      if (!root) return null;
+      const previousTop = document.scrollingElement?.scrollTop || 0;
+      root.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = root.getBoundingClientRect();
+      return { previousTop, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`, true)
+    if (!location) return null
+    webContents.focus()
+    webContents.sendInputEvent({ type: 'mouseMove', x: location.x, y: location.y })
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    const button = await webContents.executeJavaScript(`(() => {
+      const target = ${JSON.stringify(target)};
+      const roots = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer, ytmusic-two-row-item-renderer')]
+        .filter((root) => !root.closest('ytmusic-player-page'));
+      const text = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+      const endpointVideoId = (value, depth = 0) => {
+        if (!value || typeof value !== 'object' || depth > 8) return '';
+        if (value.watchEndpoint?.videoId) return value.watchEndpoint.videoId;
+        for (const nested of Object.values(value)) {
+          const videoId = endpointVideoId(nested, depth + 1);
+          if (videoId) return videoId;
+        }
+        return '';
+      };
+      const normalizedHref = (value) => {
+        try { const url = new URL(value || '', location.origin); return url.pathname + url.search; } catch { return ''; }
+      };
+      const root = roots.find((candidate) => {
+        const data = candidate.data || candidate.__data?.data || {};
+        const videoId = data.videoId || data.playlistItemData?.videoId || endpointVideoId(data);
+        if (target.videoId && videoId === target.videoId) return true;
+        const anchorHref = candidate.querySelector('a[href]')?.getAttribute('href') || '';
+        if (target.href && normalizedHref(anchorHref) === normalizedHref(target.href)) return true;
+        const title = text(data.title) || text(data.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text)
+          || candidate.querySelector('#video-title, .title, ytmusic-formatted-string.title')?.textContent?.trim() || '';
+        return Boolean(target.title && title === target.title);
+      });
+      const menu = root?.querySelector('button[aria-label*="İşlem menüsü" i], button[aria-label*="action menu" i], button[aria-label*="more" i], button[aria-label*="menu" i], [aria-label*="İşlem menüsü" i], [aria-label*="menu" i]');
+      if (!menu) return null;
+      const rect = menu.getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`, true)
+    if (!button) return null
+    webContents.sendInputEvent({ type: 'mouseMove', x: button.x, y: button.y })
+    webContents.sendInputEvent({ type: 'mouseDown', x: button.x, y: button.y, button: 'left', clickCount: 1 })
+    webContents.sendInputEvent({ type: 'mouseUp', x: button.x, y: button.y, button: 'left', clickCount: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    return location.previousTop
+  }
+
+  async function clickVisibleMenuAction(action) {
+    return webContents.executeJavaScript(`(() => {
+      const action = ${JSON.stringify(action)};
+      const patterns = {
+        playNext: /^(Bundan sonra oynat|Play next)$/i,
+        addQueue: /^(Sıraya ekle|Add to queue)$/i,
+        savePlaylist: /^(Oynatma listesine (kaydet|ekle)|Save to playlist|Add to playlist)$/i,
+        saveLibrary: /^(Kitaplığa kaydet|Save to library)$/i,
+      };
+      const item = [...document.querySelectorAll('[role="menuitem"], ytmusic-menu-navigation-item-renderer, ytmusic-menu-service-item-renderer')]
+        .find((candidate) => (candidate.offsetParent !== null || candidate.getClientRects().length > 0)
+          && patterns[action]?.test((candidate.textContent || '').replace(/\\s+/g, ' ').trim()));
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`, true)
+  }
+
+  async function restoreBrowseScroll(scrollTop) {
+    await webContents.executeJavaScript(`(() => {
+      if (document.scrollingElement) document.scrollingElement.scrollTop = ${JSON.stringify(Number(scrollTop) || 0)};
+    })()`, true).catch(() => {})
+  }
+
+  async function performItemAction(item, action) {
+    const previousTop = await openItemMenu(item)
+    if (previousTop === null) {
+      publishAction('error', `${item.title || 'İçerik'} için işlem menüsü bulunamadı`)
+      return
+    }
+    const clicked = await clickVisibleMenuAction(action)
+    if (!clicked) {
+      sendKey('Escape')
+      await restoreBrowseScroll(previousTop)
+      publishAction('error', 'Bu işlem YouTube Music menüsünde bulunamadı')
+      return
+    }
+    if (action === 'savePlaylist') {
+      state = { ...state, playlistPicker: { status: 'loading', itemTitle: String(item.title || ''), playlists: [] } }
+      publishState()
+      await new Promise((resolve) => setTimeout(resolve, 650))
+      const playlists = await webContents.executeJavaScript(`(() => {
+        const text = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+        return [...document.querySelectorAll('ytmusic-playlist-add-to-option-renderer')]
+          .filter((root) => root.offsetParent !== null || root.getClientRects().length > 0)
+          .map((root, index) => {
+            const data = root.data || root.__data?.data || {};
+            const thumbnails = data.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+            return {
+              id: String(data.playlistId || index),
+              title: text(data.title) || root.querySelector('#title, .title')?.textContent?.trim() || '',
+              subtitle: text(data.shortBylineText) || root.querySelector('#subtitle, .subtitle')?.textContent?.trim() || '',
+              thumbnailUrl: thumbnails.length ? thumbnails[thumbnails.length - 1].url : root.querySelector('img')?.src || '',
+            };
+          }).filter((playlist) => playlist.id && playlist.title);
+      })()`, true)
+      if (!Array.isArray(playlists) || playlists.length === 0) {
+        sendKey('Escape')
+        state = { ...state, playlistPicker: { status: 'idle', itemTitle: '', playlists: [] } }
+        publishAction('error', 'Oynatma listeleri YouTube Music’ten alınamadı')
+      } else {
+        state = { ...state, playlistPicker: { status: 'ready', itemTitle: String(item.title || ''), playlists } }
+        publishState()
+      }
+      await restoreBrowseScroll(previousTop)
+      return
+    }
+    await restoreBrowseScroll(previousTop)
+    const messages = {
+      playNext: `${item.title || 'İçerik'} bundan sonra oynatılacak`,
+      addQueue: `${item.title || 'İçerik'} sıraya eklendi`,
+      saveLibrary: `${item.title || 'İçerik'} kitaplığa kaydedildi`,
+    }
+    publishAction('success', messages[action] || 'İşlem tamamlandı')
+    for (const delay of [250, 850]) setTimeout(() => void capture(), delay)
+  }
+
+  async function loadMoreBrowse() {
+    if (loadMoreTask || destroyed || webContents.isDestroyed()) return
+    loadMoreTask = (async () => {
+      const currentBrowse = state.browse || {}
+      state = { ...state, browse: { ...currentBrowse, loadingMore: true } }
+      publishState()
+      const scrollResult = await webContents.executeJavaScript(`(() => new Promise((resolve) => {
+        const scroll = document.scrollingElement;
+        if (!scroll) { resolve(null); return; }
+        const previousTop = scroll.scrollTop;
+        const beforeHeight = scroll.scrollHeight;
+        const clientHeight = scroll.clientHeight;
+        const targetTop = Math.max(0, beforeHeight - clientHeight);
+        scroll.scrollTo({ top: targetTop, behavior: 'instant' });
+        setTimeout(() => resolve({ previousTop, beforeHeight, clientHeight, afterTop: scroll.scrollTop, afterHeight: scroll.scrollHeight }), 1950);
+      }))()`, true)
+      if (!scrollResult) {
+        state = { ...state, browse: { ...(state.browse || {}), loadingMore: false, hasMore: false } }
+        publishState()
+        return
+      }
+      await capture()
+      await restoreBrowseScroll(scrollResult.previousTop)
+      const afterBottom = Number(scrollResult.afterHeight) - Number(scrollResult.clientHeight)
+      const grew = Number(scrollResult.afterHeight) > Number(scrollResult.beforeHeight) + 4
+      const canMoveFurther = Number(scrollResult.afterTop) < afterBottom - 4
+      const didMove = Number(scrollResult.afterTop) > Number(scrollResult.previousTop) + 2
+      state = {
+        ...state,
+        browse: { ...(state.browse || {}), loadingMore: false, hasMore: didMove && (grew || canMoveFurther), updatedAt: Date.now() },
+      }
+      publishState()
+    })().catch((error) => {
+      state = { ...state, browse: { ...(state.browse || {}), loadingMore: false } }
+      publishAction('error', `Daha fazla içerik yüklenemedi: ${error.message}`)
+    }).finally(() => { loadMoreTask = null })
+    await loadMoreTask
+  }
+
   async function command(command) {
     if (!command || typeof command.type !== 'string') return
     if (command.type === 'togglePlay') {
@@ -297,6 +546,8 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     if (command.type === 'playTrack') {
       const videoId = String(command.value || '').trim()
       if (/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) {
+        expectedVideoId = videoId
+        expectedVideoDeadline = Date.now() + 5000
         const loaded = await webContents.executeJavaScript(`(() => {
           const playerApi = document.querySelector('ytmusic-player')?.playerApi;
           if (typeof playerApi?.loadVideoById !== 'function') return false;
@@ -307,6 +558,37 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         setTimeout(() => void capture(), 150)
         setTimeout(() => void capture(), 700)
       }
+    }
+    if (command.type === 'loadMoreBrowse') await loadMoreBrowse()
+    if (command.type === 'itemAction') {
+      try {
+        const payload = JSON.parse(String(command.value || '{}'))
+        const supported = ['playNext', 'addQueue', 'savePlaylist', 'saveLibrary']
+        if (payload?.item && supported.includes(payload.action)) await performItemAction(payload.item, payload.action)
+      } catch {
+        publishAction('error', 'Telefon işlemi okunamadı')
+      }
+    }
+    if (command.type === 'selectPlaylist') {
+      const playlistId = String(command.value || '')
+      const selected = await webContents.executeJavaScript(`(() => {
+        const playlistId = ${JSON.stringify(playlistId)};
+        const option = [...document.querySelectorAll('ytmusic-playlist-add-to-option-renderer')]
+          .find((root) => String((root.data || root.__data?.data || {}).playlistId || '') === playlistId
+            && (root.offsetParent !== null || root.getClientRects().length > 0));
+        if (!option) return false;
+        option.click();
+        return true;
+      })()`, true)
+      state = { ...state, playlistPicker: { status: 'idle', itemTitle: '', playlists: [] } }
+      if (selected) publishAction('success', 'Parça oynatma listesine kaydedildi')
+      else publishAction('error', 'Oynatma listesi seçilemedi')
+      setTimeout(() => void capture(), 400)
+    }
+    if (command.type === 'cancelPlaylistPicker') {
+      sendKey('Escape')
+      state = { ...state, playlistPicker: { status: 'idle', itemTitle: '', playlists: [] } }
+      publishState()
     }
     if (command.type === 'navigateUrl') {
       try {
@@ -358,6 +640,8 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           : '';
         const elements = [...document.querySelectorAll('video, audio')];
         const player = elements.find((item) => Number.isFinite(item.duration) && item.duration > 0) || elements[0];
+        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerData = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
         const textFrom = (root, selectors) => {
           for (const selector of selectors) {
             const value = root.querySelector(selector)?.textContent?.trim();
@@ -366,11 +650,22 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           return '';
         };
         const allQueueRoots = [...document.querySelectorAll('ytmusic-player-queue ytmusic-player-queue-item')];
-        const selectedQueueIndex = allQueueRoots.findIndex((root) => Boolean(root.data?.selected || root.__data?.data?.selected));
+        const queueVideoId = (root) => {
+          const data = root?.data || root?.__data?.data || {};
+          let videoId = data.videoId || data.navigationEndpoint?.watchEndpoint?.videoId || '';
+          try {
+            const link = root?.querySelector('a[href*="watch?v="]');
+            videoId = videoId || (link ? new URL(link.href).searchParams.get('v') : '') || '';
+          } catch {}
+          return videoId;
+        };
+        const playerVideoId = String(playerData.video_id || playerData.videoId || '');
+        const selectedByVideoIndex = playerVideoId ? allQueueRoots.findIndex((root) => queueVideoId(root) === playerVideoId) : -1;
+        const selectedByFlagIndex = allQueueRoots.findIndex((root) => Boolean(root.data?.selected || root.__data?.data?.selected));
+        const selectedQueueIndex = selectedByVideoIndex >= 0 ? selectedByVideoIndex : selectedByFlagIndex;
         const queueRoots = selectedQueueIndex >= 0 ? allQueueRoots.slice(selectedQueueIndex) : allQueueRoots;
         const selectedQueueRoot = selectedQueueIndex >= 0 ? allQueueRoots[selectedQueueIndex] : null;
-        const selectedQueueData = selectedQueueRoot?.data || selectedQueueRoot?.__data?.data || {};
-        let currentVideoId = selectedQueueData.videoId || selectedQueueData.navigationEndpoint?.watchEndpoint?.videoId || '';
+        let currentVideoId = playerVideoId || queueVideoId(selectedQueueRoot);
         try {
           const selectedLink = selectedQueueRoot?.querySelector('a[href*="watch?v="]');
           currentVideoId = currentVideoId || (selectedLink ? new URL(selectedLink.href).searchParams.get('v') : '') || new URL(location.href).searchParams.get('v') || '';
@@ -512,7 +807,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           for (const [itemIndex, root] of itemRoots.entries()) {
             const item = itemFromRoot(root, sectionIndex, itemIndex);
             if (item) items.push(item);
-            if (items.length >= 40) break;
+            if (items.length >= 120) break;
           }
           if (items.length) browseSections.push({
             id: 'section-' + sectionIndex + '-' + sectionTitle,
@@ -520,7 +815,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
             layout: sectionRoot.matches('ytmusic-shelf-renderer') ? 'list' : 'rail',
             items,
           });
-          if (browseSections.length >= 12) break;
+          if (browseSections.length >= 30) break;
         }
         const remainingRoots = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer, ytmusic-two-row-item-renderer')]
           .filter((root) => !root.closest('ytmusic-player-page'));
@@ -528,7 +823,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         for (const [itemIndex, root] of remainingRoots.entries()) {
           const item = itemFromRoot(root, 99, itemIndex);
           if (item) remaining.push(item);
-          if (remaining.length >= 80) break;
+          if (remaining.length >= 240) break;
         }
         if (remaining.length) {
           if (route === 'search') {
@@ -585,8 +880,8 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           .map((root) => root.textContent || '').join(' ');
         const lyricsUnavailable = Boolean(selectedLyricsTab && !lyricsLines.length && /not available|kullanılamıyor|mevcut değil|bulunamadı/i.test(selectedLyricsText + ' ' + lyricsMessageText));
         return {
-          title: metadata && metadata.title || '',
-          artist: metadata && metadata.artist || '',
+          title: playerData.title || metadata && metadata.title || '',
+          artist: playerData.author || metadata && metadata.artist || '',
           album: metadata && metadata.album || '',
           artwork,
           playbackState: session && session.playbackState || 'none',
@@ -613,6 +908,14 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       const title = String(media.title || '').trim()
       const artist = String(media.artist || '').trim()
       const currentVideoId = String(media.currentVideoId || '').trim()
+      if (expectedVideoId && currentVideoId !== expectedVideoId && Date.now() < expectedVideoDeadline) return
+      if (expectedVideoId && currentVideoId === expectedVideoId) {
+        expectedVideoId = ''
+        expectedVideoDeadline = 0
+      } else if (expectedVideoId && Date.now() >= expectedVideoDeadline) {
+        expectedVideoId = ''
+        expectedVideoDeadline = 0
+      }
       const id = title ? (currentVideoId ? `ytmusic:video:${currentVideoId}` : trackId(title, artist)) : state.trackId
       const previousTrack = state.catalog[id] || idleTrack
       const track = title ? {
@@ -638,7 +941,10 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         : []
       const normalizedTitle = title.toLocaleLowerCase('tr').trim()
       const currentQueueIndex = queueTracks.findIndex((item) => item.youtubeVideoId === currentVideoId || item.title.toLocaleLowerCase('tr').trim() === normalizedTitle)
-      if (currentQueueIndex >= 0) queueTracks[currentQueueIndex] = { ...queueTracks[currentQueueIndex], ...track, youtubeVideoId: currentVideoId || queueTracks[currentQueueIndex].youtubeVideoId }
+      if (currentQueueIndex >= 0) {
+        if (currentQueueIndex > 0) queueTracks.splice(0, currentQueueIndex)
+        queueTracks[0] = { ...queueTracks[0], ...track, youtubeVideoId: currentVideoId || queueTracks[0].youtubeVideoId }
+      }
       else if (title) queueTracks.unshift(track)
       if (queueTracks.length === 0) queueTracks.push(track)
       const catalog = Object.fromEntries(queueTracks.map((item) => [item.id, item]))
@@ -650,9 +956,9 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       const position = Math.max(0, Math.floor(Number(media.position) || 0))
       const volume = Math.max(0, Math.min(100, Math.round(Number(media.volume) || 0)))
       const browse = media.browse && typeof media.browse === 'object'
-        ? { ...media.browse, updatedAt: Date.now() }
+        ? mergeBrowseState(state.browse, media.browse)
         : state.browse
-      const browseSignature = JSON.stringify([browse?.route, browse?.url, browse?.filters, browse?.header, browse?.sections])
+      const browseSignature = JSON.stringify([browse?.route, browse?.url, browse?.filters, browse?.header, browse?.sections, browse?.loadingMore, browse?.hasMore])
       const previousLyrics = state.lyrics?.trackId === id ? state.lyrics : { trackId: id, status: 'idle', lines: [] }
       const lyrics = Array.isArray(media.lyricsLines) && media.lyricsLines.length
         ? { trackId: id, status: 'ready', lines: media.lyricsLines.map((line) => String(line)) }

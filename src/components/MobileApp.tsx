@@ -1,10 +1,10 @@
 import { FormEvent, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic,
-  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Search, SkipForward, Volume1, Volume2, X,
+  Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic, ListPlus,
+  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Volume1, Volume2, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
-import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, PlayerActions, PlayerState, RelatedState, Track } from '../types'
+import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, MusicItemAction, PlayerActions, PlayerState, RelatedState, Track } from '../types'
 import { Cover } from './Cover'
 import { FeedbackSheet } from './FeedbackSheet'
 import { PlayerControls } from './PlayerControls'
@@ -69,41 +69,68 @@ const QueueRow = memo(function QueueRow({ track, current, onSelect }: { track: T
   )
 })
 
-const BrowseItem = memo(function BrowseItem({ item, layout, onOpen }: { item: MusicBrowseItem; layout: MusicBrowseSection['layout']; onOpen: () => void }) {
+const BrowseItem = memo(function BrowseItem({ item, layout, onOpen, onMenu }: { item: MusicBrowseItem; layout: MusicBrowseSection['layout']; onOpen: () => void; onMenu: () => void }) {
+  const longPressTimerRef = useRef<number | null>(null)
+  const longPressTriggeredRef = useRef(false)
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current)
+    longPressTimerRef.current = null
+  }
+  const startLongPress = () => {
+    cancelLongPress()
+    longPressTriggeredRef.current = false
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true
+      onMenu()
+    }, 520)
+  }
+  const handleOpen = () => {
+    cancelLongPress()
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false
+      return
+    }
+    onOpen()
+  }
   if (layout === 'list') {
     return (
-      <button className="mobile-music-row" onClick={onOpen}>
-        <span className={`mobile-music-art ${item.kind === 'artist' ? 'is-round' : ''}`} style={item.thumbnailUrl ? { backgroundImage: `url(${item.thumbnailUrl})` } : undefined} />
-        <span className="mobile-music-copy"><b>{item.title}</b><small>{item.subtitle || 'YouTube Music'}</small></span>
-        <MoreVertical />
-      </button>
+      <div className="mobile-music-row" onPointerDown={startLongPress} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}>
+        <button className="mobile-item-main" onClick={handleOpen}>
+          <span className={`mobile-music-art ${item.kind === 'artist' ? 'is-round' : ''}`} style={item.thumbnailUrl ? { backgroundImage: `url(${item.thumbnailUrl})` } : undefined} />
+          <span className="mobile-music-copy"><b>{item.title}</b><small>{item.subtitle || 'YouTube Music'}</small></span>
+        </button>
+        <button className="mobile-item-menu" onClick={(event) => { event.stopPropagation(); cancelLongPress(); onMenu() }} aria-label={`${item.title} işlem menüsü`}><MoreVertical /></button>
+      </div>
     )
   }
   return (
-    <button className="mobile-music-card" onClick={onOpen}>
-      <span className={`mobile-music-art ${item.kind === 'artist' ? 'is-round' : ''}`} style={item.thumbnailUrl ? { backgroundImage: `url(${item.thumbnailUrl})` } : undefined}>
-        {item.videoId ? <i className="mobile-card-play"><Play fill="currentColor" /></i> : null}
-      </span>
-      <b>{item.title}</b>
-      <small>{item.subtitle || 'YouTube Music'}</small>
-    </button>
+    <div className="mobile-music-card" onPointerDown={startLongPress} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}>
+      <button className="mobile-card-main" onClick={handleOpen}>
+        <span className={`mobile-music-art ${item.kind === 'artist' ? 'is-round' : ''}`} style={item.thumbnailUrl ? { backgroundImage: `url(${item.thumbnailUrl})` } : undefined}>
+          {item.videoId ? <i className="mobile-card-play"><Play fill="currentColor" /></i> : null}
+        </span>
+        <b>{item.title}</b>
+        <small>{item.subtitle || 'YouTube Music'}</small>
+      </button>
+      <button className="mobile-card-menu" onClick={(event) => { event.stopPropagation(); cancelLongPress(); onMenu() }} aria-label={`${item.title} işlem menüsü`}><MoreVertical /></button>
+    </div>
   )
 })
 
-function BrowseSectionView({ section, onOpen }: { section: MusicBrowseSection; onOpen: (item: MusicBrowseItem) => void }) {
+function BrowseSectionView({ section, onOpen, onMenu }: { section: MusicBrowseSection; onOpen: (item: MusicBrowseItem) => void; onMenu: (item: MusicBrowseItem) => void }) {
   return (
     <section className={`mobile-music-section is-${section.layout}`}>
       <div className="mobile-section-title"><h2>{section.title}</h2><ChevronDown /></div>
       <div className={section.layout === 'rail' ? 'mobile-music-rail' : 'mobile-music-list'}>
-        {section.items.map((item) => <BrowseItem key={item.id} item={item} layout={section.layout} onOpen={() => onOpen(item)} />)}
+        {section.items.map((item) => <BrowseItem key={item.id} item={item} layout={section.layout} onOpen={() => onOpen(item)} onMenu={() => onMenu(item)} />)}
       </div>
     </section>
   )
 }
 
-const RelatedPanel = memo(function RelatedPanel({ related, onOpen }: { related?: RelatedState; onOpen: (item: MusicBrowseItem) => void }) {
+const RelatedPanel = memo(function RelatedPanel({ related, onOpen, onMenu }: { related?: RelatedState; onOpen: (item: MusicBrowseItem) => void; onMenu: (item: MusicBrowseItem) => void }) {
   if (related?.status === 'ready' && related.items.length) {
-    return <div className="mobile-music-list ytm-related-list">{related.items.map((item) => <BrowseItem key={item.id} item={item} layout="list" onOpen={() => onOpen(item)} />)}</div>
+    return <div className="mobile-music-list ytm-related-list">{related.items.map((item) => <BrowseItem key={item.id} item={item} layout="list" onOpen={() => onOpen(item)} onMenu={() => onMenu(item)} />)}</div>
   }
   const unavailable = related?.status === 'unavailable'
   return <div className="ytm-info-body"><ListMusic /><div><b>{unavailable ? 'Benzer içerik bulunamadı' : 'Benzer parçalar PC’den alınıyor'}</b><p>{unavailable ? 'YouTube Music bu parça için öneri sağlamadı.' : 'YouTube Music’in Benzer sekmesi açılıyor…'}</p></div></div>
@@ -133,6 +160,44 @@ const DetailHeader = memo(function DetailHeader({ header, onOpen }: { header: Mu
   )
 })
 
+function ItemActionSheet({ item, onClose, onAction }: { item: MusicBrowseItem; onClose: () => void; onAction: (action: MusicItemAction) => void }) {
+  return (
+    <div className="mobile-sheet-backdrop" onClick={onClose} role="presentation">
+      <section className="mobile-action-sheet" role="dialog" aria-modal="true" aria-label={`${item.title} işlemleri`} onClick={(event) => event.stopPropagation()}>
+        <div className="mobile-sheet-handle" />
+        <div className="mobile-sheet-track">
+          <span className={`mobile-music-art ${item.kind === 'artist' ? 'is-round' : ''}`} style={item.thumbnailUrl ? { backgroundImage: `url(${item.thumbnailUrl})` } : undefined} />
+          <span><b>{item.title}</b><small>{item.subtitle || 'YouTube Music'}</small></span>
+        </div>
+        <button onClick={() => onAction('playNext')}><SkipForward /><span><b>Bundan sonra oynat</b><small>Çalan parçadan hemen sonra başlat</small></span></button>
+        <button onClick={() => onAction('addQueue')}><ListPlus /><span><b>Sıraya ekle</b><small>Mevcut sıranın sonuna ekle</small></span></button>
+        {item.videoId ? <button onClick={() => onAction('savePlaylist')}><Save /><span><b>Oynatma listesine kaydet</b><small>Hesabındaki listeyi telefondan seç</small></span></button> : null}
+        <button onClick={() => onAction('saveLibrary')}><Library /><span><b>Kitaplığa kaydet</b><small>YouTube Music kitaplığına ekle</small></span></button>
+        <button className="mobile-sheet-cancel" onClick={onClose}>Vazgeç</button>
+      </section>
+    </div>
+  )
+}
+
+function PlaylistPickerSheet({ state, onSelect, onClose }: { state: NonNullable<PlayerState['playlistPicker']>; onSelect: (id: string) => void; onClose: () => void }) {
+  return (
+    <div className="mobile-sheet-backdrop" onClick={onClose} role="presentation">
+      <section className="mobile-action-sheet mobile-playlist-sheet" role="dialog" aria-modal="true" aria-label="Oynatma listesi seç" onClick={(event) => event.stopPropagation()}>
+        <div className="mobile-sheet-handle" />
+        <header><div><small>ŞURAYA KAYDET</small><h2>{state.itemTitle}</h2></div><button onClick={onClose} aria-label="Liste seçimini kapat"><X /></button></header>
+        {state.status === 'loading' ? <div className="mobile-playlist-loading"><i /><i /><i /><p>Oynatma listelerin PC’den alınıyor…</p></div> : (
+          <div className="mobile-playlist-options">
+            {state.playlists.map((playlist) => <button key={playlist.id} onClick={() => onSelect(playlist.id)}>
+              <span className="mobile-playlist-art" style={playlist.thumbnailUrl ? { backgroundImage: `url(${playlist.thumbnailUrl})` } : undefined}><ListMusic /></span>
+              <span><b>{playlist.title}</b><small>{playlist.subtitle || 'Oynatma listesi'}</small></span>
+            </button>)}
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
 export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '' }: Props) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
@@ -149,9 +214,13 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [navigationError, setNavigationError] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [notice, setNotice] = useState('')
+  const [menuItem, setMenuItem] = useState<MusicBrowseItem | null>(null)
   const mobileUpdate = useMobileUpdate()
   const [pairedComputer] = useState(readMobilePairing)
   const homeBootstrapRef = useRef(false)
+  const pendingNavigationRef = useRef<{ route: BrowseRoute; query: string } | null>(null)
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null)
+  const lastFeedbackIdRef = useRef('')
   const queue = useMemo(() => {
     const result: Track[] = []
     const seenIds = new Set<string>()
@@ -177,6 +246,13 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   }, [notice])
 
   useEffect(() => {
+    const feedback = state.actionFeedback
+    if (!feedback || feedback.id === lastFeedbackIdRef.current) return
+    lastFeedbackIdRef.current = feedback.id
+    setNotice(feedback.message)
+  }, [state.actionFeedback])
+
+  useEffect(() => {
     if (!connected) {
       homeBootstrapRef.current = false
       return
@@ -197,6 +273,12 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
 
   useEffect(() => {
     if (browse?.route === 'home' || browse?.route === 'explore' || browse?.route === 'library' || browse?.route === 'search' || browse?.route === 'detail') {
+      const pending = pendingNavigationRef.current
+      const incomingQuery = browse.route === 'search' ? queryFromBrowseUrl(browse.url).toLocaleLowerCase('tr') : ''
+      const pendingMatches = pending && pending.route === browse.route
+        && (pending.route !== 'search' || pending.query.toLocaleLowerCase('tr') === incomingQuery)
+      if (pending && !pendingMatches) return
+      if (pendingMatches) pendingNavigationRef.current = null
       setRequestedRoute(browse.route)
       if (browse.route === 'search') {
         try { setSearchQuery(new URL(browse.url).searchParams.get('q') || '') } catch {}
@@ -226,7 +308,18 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     return () => window.clearTimeout(timer)
   }, [actions, connected, navigationRetries, requestedRoute, requestedSearchQuery, showingRequestedPage])
 
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current
+    if (!sentinel || !connected || !showingRequestedPage || browse?.loadingMore || browse?.hasMore === false) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) actions.loadMoreMusic()
+    }, { rootMargin: '320px 0px' })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [actions, browse?.hasMore, browse?.loadingMore, browse?.updatedAt, connected, showingRequestedPage])
+
   const navigate = (destination: 'home' | 'explore' | 'library') => {
+    pendingNavigationRef.current = { route: destination, query: '' }
     setRequestedRoute(destination)
     setRequestedSearchQuery('')
     setNavigationRetries(0)
@@ -239,6 +332,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     event.preventDefault()
     const query = searchQuery.trim()
     if (!query) return
+    pendingNavigationRef.current = { route: 'search', query }
     setRequestedRoute('search')
     setRequestedSearchQuery(query)
     setNavigationRetries(0)
@@ -248,6 +342,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   }
 
   const retryNavigation = () => {
+    pendingNavigationRef.current = { route: requestedRoute === 'detail' ? 'home' : requestedRoute, query: requestedRoute === 'search' ? requestedSearchQuery : '' }
     setNavigationRetries(0)
     setNavigationError(false)
     actions.navigateMusic(requestedRoute === 'detail' ? 'home' : requestedRoute, requestedRoute === 'search' ? requestedSearchQuery : undefined)
@@ -267,6 +362,20 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     } else {
       setNotice(`${item.title} yükleniyor`)
     }
+  }
+
+  const performItemAction = (action: MusicItemAction) => {
+    if (!menuItem) return
+    actions.performMusicItemAction(menuItem, action)
+    if (action === 'savePlaylist') setNotice('Oynatma listelerin hazırlanıyor…')
+    else if (action === 'playNext') setNotice(`${menuItem.title} bundan sonra oynatılacak`)
+    else if (action === 'addQueue') setNotice(`${menuItem.title} sıraya ekleniyor`)
+    else setNotice(`${menuItem.title} kitaplığa kaydediliyor`)
+    setMenuItem(null)
+  }
+
+  const closePlaylistPicker = () => {
+    actions.cancelMusicPlaylist()
   }
 
   const openDetailAction = (href: string, label: string) => {
@@ -304,10 +413,12 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           <div className="ytm-volume-control"><Volume1 /><input className="range range--volume" type="range" min="0" max="100" value={state.volume} style={{ '--range-value': `${state.volume}%` } as React.CSSProperties} onChange={(event) => actions.setVolume(Number(event.target.value))} aria-label="PC sesi" /><Volume2 /></div>
           <section className="ytm-info-sheet">
             <div className="ytm-info-tabs" role="tablist"><button className={activeTab === 'queue' ? 'is-active' : ''} onClick={() => selectInfoTab('queue')}>SIRADAKİ</button><button className={activeTab === 'lyrics' ? 'is-active' : ''} onClick={() => selectInfoTab('lyrics')}>ŞARKI SÖZLERİ</button><button className={activeTab === 'related' ? 'is-active' : ''} onClick={() => selectInfoTab('related')}>BENZER</button></div>
-            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <RelatedPanel related={state.related?.trackId === track.id ? state.related : undefined} onOpen={openItem} />}
+            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <RelatedPanel related={state.related?.trackId === track.id ? state.related : undefined} onOpen={openItem} onMenu={setMenuItem} />}
           </section>
         </main>
         <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
+        {menuItem ? <ItemActionSheet item={menuItem} onClose={() => setMenuItem(null)} onAction={performItemAction} /> : null}
+        {state.playlistPicker && state.playlistPicker.status !== 'idle' ? <PlaylistPickerSheet state={state.playlistPicker} onSelect={actions.selectMusicPlaylist} onClose={closePlaylistPicker} /> : null}
         {notice ? <div className="ytm-toast" role="status">{notice}</div> : null}
       </div>
     )
@@ -336,7 +447,12 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         {!showingRequestedPage ? (
           <div className={`mobile-loading ${navigationError ? 'has-error' : ''}`}><i /><i /><i /><p>{navigationError ? `${routeLabels[requestedRoute]} yüklenemedi.` : `${routeLabels[requestedRoute]} PC’den yükleniyor…`}</p>{navigationError ? <button onClick={retryNavigation}>Tekrar dene</button> : null}</div>
         ) : browse?.sections.length ? (
-          browse.sections.map((section) => <BrowseSectionView key={section.id} section={section} onOpen={openItem} />)
+          <>
+            {browse.sections.map((section) => <BrowseSectionView key={section.id} section={section} onOpen={openItem} onMenu={setMenuItem} />)}
+            <div ref={loadMoreSentinelRef} className={`mobile-load-more ${browse.loadingMore ? 'is-loading' : ''}`} aria-live="polite">
+              {browse.loadingMore ? <><i /><i /><i /><span>Daha fazla içerik PC’den yükleniyor…</span></> : browse.hasMore === false ? <span>Tüm içerikler yüklendi</span> : <span>Daha fazla içerik için kaydır</span>}
+            </div>
+          </>
         ) : requestedRoute === 'detail' && browse?.header ? null : (
           <div className="mobile-empty-state"><MonitorSpeaker /><h2>PC’den içerik bekleniyor</h2><p>Ritim’de YouTube Music ana sayfası açıldığında kişisel önerilerin burada görünecek.</p></div>
         )}
@@ -362,6 +478,8 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
 
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}
       <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
+      {menuItem ? <ItemActionSheet item={menuItem} onClose={() => setMenuItem(null)} onAction={performItemAction} /> : null}
+      {state.playlistPicker && state.playlistPicker.status !== 'idle' ? <PlaylistPickerSheet state={state.playlistPicker} onSelect={actions.selectMusicPlaylist} onClose={closePlaylistPicker} /> : null}
       {!connected || pairingError ? (
         <div className="ytm-offline-banner">
           <i />

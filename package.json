@@ -1,7 +1,7 @@
 {
   "name": "ritim",
   "private": true,
-  "version": "0.7.7",
+  "version": "0.7.8",
   "author": "Eddiz",
   "description": "Senkron masaustu ve mobil muzik deneyimi",
   "main": "electron/main.cjs",
