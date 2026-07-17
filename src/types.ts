@@ -67,7 +67,30 @@ export type MusicBrowseState = {
   filters: MusicBrowseFilter[]
   header?: MusicBrowseHeader
   sections: MusicBrowseSection[]
+  loadingMore?: boolean
+  hasMore?: boolean
   updatedAt: number
+}
+
+export type MusicItemAction = 'playNext' | 'addQueue' | 'savePlaylist' | 'saveLibrary'
+
+export type MusicPlaylistOption = {
+  id: string
+  title: string
+  subtitle: string
+  thumbnailUrl?: string
+}
+
+export type MusicPlaylistPickerState = {
+  status: 'idle' | 'loading' | 'ready'
+  itemTitle: string
+  playlists: MusicPlaylistOption[]
+}
+
+export type PlayerActionFeedback = {
+  id: string
+  status: 'success' | 'error'
+  message: string
 }
 
 export type LyricsState = {
@@ -95,6 +118,8 @@ export type PlayerState = {
   browse?: MusicBrowseState
   lyrics?: LyricsState
   related?: RelatedState
+  playlistPicker?: MusicPlaylistPickerState
+  actionFeedback?: PlayerActionFeedback
   updatedAt: number
 }
 
@@ -107,8 +132,12 @@ export type PlayerActions = {
   setVolume: (volume: number) => void
   requestLyrics: () => void
   requestRelated: () => void
+  loadMoreMusic: () => void
   navigateMusic: (destination: 'home' | 'explore' | 'library' | 'search', query?: string) => void
   openMusicItem: (item: MusicBrowseItem) => void
+  performMusicItemAction: (item: MusicBrowseItem, action: MusicItemAction) => void
+  selectMusicPlaylist: (playlistId: string) => void
+  cancelMusicPlaylist: () => void
   openMusicFilter: (filter: MusicBrowseFilter) => void
   goBackMusic: () => void
   toggleShuffle: () => void

@@ -27,6 +27,9 @@ export function usePlayerSync(isCompanion: boolean) {
   const [peerCount, setPeerCount] = useState(1)
   const [pairingError, setPairingError] = useState('')
   const pendingVolumeRef = useRef<{ value: number; changedAt: number } | null>(null)
+  const pendingTrackRef = useRef<{ videoId: string; changedAt: number } | null>(null)
+  const stateRef = useRef(state)
+  stateRef.current = state
 
   useEffect(() => {
     const onConnect = () => {
@@ -46,17 +49,34 @@ export function usePlayerSync(isCompanion: boolean) {
       setPairingError(`PC bağlantısı kurulamadı • ${detail}`)
     }
     const onState = (incoming: PlayerState) => {
-      const pending = pendingVolumeRef.current
-      if (isCompanion && pending && Date.now() - pending.changedAt < 1800) {
-        if (Math.abs(incoming.volume - pending.value) <= 1) pendingVolumeRef.current = null
-        else {
-          setState({ ...incoming, volume: pending.value })
-          return
-        }
-      } else if (pending) {
+      let nextState = incoming
+      const pendingVolume = pendingVolumeRef.current
+      if (isCompanion && pendingVolume && Date.now() - pendingVolume.changedAt < 1800) {
+        if (Math.abs(incoming.volume - pendingVolume.value) <= 1) pendingVolumeRef.current = null
+        else nextState = { ...nextState, volume: pendingVolume.value }
+      } else if (pendingVolume) {
         pendingVolumeRef.current = null
       }
-      setState(incoming)
+      const pendingTrack = pendingTrackRef.current
+      if (isCompanion && pendingTrack && Date.now() - pendingTrack.changedAt < 4500) {
+        const incomingVideoId = incoming.catalog?.[incoming.trackId]?.youtubeVideoId || incoming.trackId?.replace(/^ytmusic:video:/, '') || ''
+        if (incomingVideoId === pendingTrack.videoId) {
+          pendingTrackRef.current = null
+        } else {
+          setState((current) => ({
+            ...nextState,
+            trackId: current.trackId,
+            isPlaying: true,
+            position: current.position,
+            queue: current.queue,
+            catalog: { ...nextState.catalog, ...current.catalog },
+          }))
+          return
+        }
+      } else if (pendingTrack) {
+        pendingTrackRef.current = null
+      }
+      setState(nextState)
     }
     const onPeers = (count: number) => setPeerCount(count)
     const onPairingError = (message: string) => {
@@ -148,11 +168,12 @@ export function usePlayerSync(isCompanion: boolean) {
     },
     selectTrack: (trackId) => {
       if (isYouTubeMusic) {
-        setState((previous) => {
-          const selected = previous.catalog[trackId]
-          if (selected?.youtubeVideoId) sendMusicCommand('playTrack', selected.youtubeVideoId)
-          return { ...previous, trackId, position: 0, isPlaying: true }
-        })
+        const selected = stateRef.current.catalog[trackId]
+        if (selected?.youtubeVideoId) {
+          pendingTrackRef.current = { videoId: selected.youtubeVideoId, changedAt: Date.now() }
+          sendMusicCommand('playTrack', selected.youtubeVideoId)
+        }
+        setState((previous) => ({ ...previous, trackId, position: 0, isPlaying: true }))
         return
       }
       commit((previous) => ({ ...previous, trackId, position: 0, isPlaying: true }))
@@ -191,11 +212,39 @@ export function usePlayerSync(isCompanion: boolean) {
       }))
       sendMusicCommand('requestRelated')
     },
+    loadMoreMusic: () => sendMusicCommand('loadMoreBrowse'),
     navigateMusic: (destination, query) => sendMusicCommand(`navigate:${destination}`, query),
     openMusicItem: (item) => {
-      if (item.videoId) sendMusicCommand('playTrack', item.videoId)
-      else if (item.href) sendMusicCommand('navigateUrl', item.href)
+      if (item.videoId) {
+        const optimisticId = `ytmusic:video:${item.videoId}`
+        const optimisticTrack: Track = {
+          id: optimisticId,
+          title: item.title,
+          artist: item.subtitle.split(' • ')[0].trim() || 'YouTube Music',
+          collection: 'YouTube Music',
+          duration: 0,
+          cover: 0,
+          thumbnailUrl: item.thumbnailUrl,
+          youtubeVideoId: item.videoId,
+          source: 'ytmusic',
+        }
+        pendingTrackRef.current = { videoId: item.videoId, changedAt: Date.now() }
+        setState((previous) => ({
+          ...previous,
+          trackId: optimisticId,
+          isPlaying: true,
+          position: 0,
+          catalog: { ...previous.catalog, [optimisticId]: optimisticTrack },
+          queue: [optimisticId, ...previous.queue.filter((id) => id !== optimisticId)],
+          lyrics: { trackId: optimisticId, status: 'idle', lines: [] },
+          related: { trackId: optimisticId, status: 'idle', items: [] },
+        }))
+        sendMusicCommand('playTrack', item.videoId)
+      } else if (item.href) sendMusicCommand('navigateUrl', item.href)
     },
+    performMusicItemAction: (item, action) => sendMusicCommand('itemAction', JSON.stringify({ item, action })),
+    selectMusicPlaylist: (playlistId) => sendMusicCommand('selectPlaylist', playlistId),
+    cancelMusicPlaylist: () => sendMusicCommand('cancelPlaylistPicker'),
     openMusicFilter: (filter) => {
       if (filter.href) sendMusicCommand('navigateUrl', filter.href)
     },
