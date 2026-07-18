@@ -33,7 +33,11 @@ Ritim, resmi YouTube Music sitesini ayrı bir Windows masaüstü uygulamasında 
 
 - Official `music.youtube.com` experience on Windows with a persistent Google session.
 - Native Android APK with in-app QR pairing—no browser tab required.
+- Sync V2 with desktop-authoritative state, command acknowledgements and reconnect recovery.
+- Android media notification and lock-screen controls for the PC player.
 - Home, Explore, Search, Library, artist/album details, queue and playback controls on mobile.
+- Play-next, remove and clear actions operate on the real YouTube Music queue.
+- Cached mobile content remains available while the PC connection is recovering.
 - Secure local pairing token; Google cookies and passwords never leave the PC.
 - Discord Rich Presence support.
 - GitHub Releases update checks on desktop and Android.

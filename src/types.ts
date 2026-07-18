@@ -93,6 +93,30 @@ export type PlayerActionFeedback = {
   message: string
 }
 
+export type SyncCommand = {
+  id: string
+  type: string
+  value?: number | string
+  issuedAt: number
+}
+
+export type SyncCommandAck = {
+  id: string
+  type: string
+  status: 'applied' | 'failed'
+  message?: string
+  appliedAt: number
+}
+
+export type SyncHealth = {
+  desktopOnline: boolean
+  companionCount: number
+  latencyMs: number | null
+  lastSyncedAt: number
+  pendingCommands: number
+  usingCache: boolean
+}
+
 export type LyricsState = {
   trackId: string
   status: 'idle' | 'loading' | 'ready' | 'unavailable'
@@ -120,6 +144,9 @@ export type PlayerState = {
   related?: RelatedState
   playlistPicker?: MusicPlaylistPickerState
   actionFeedback?: PlayerActionFeedback
+  syncRevision?: number
+  syncedAt?: number
+  lastCommandAck?: SyncCommandAck
   updatedAt: number
 }
 
@@ -138,6 +165,10 @@ export type PlayerActions = {
   performMusicItemAction: (item: MusicBrowseItem, action: MusicItemAction) => void
   selectMusicPlaylist: (playlistId: string) => void
   cancelMusicPlaylist: () => void
+  moveQueueItem: (trackId: string, direction: 'up' | 'down' | 'next') => void
+  removeQueueItem: (trackId: string) => void
+  clearQueue: () => void
+  reconnectSync: () => void
   openMusicFilter: (filter: MusicBrowseFilter) => void
   goBackMusic: () => void
   toggleShuffle: () => void

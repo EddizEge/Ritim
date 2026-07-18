@@ -11,6 +11,9 @@ Ritim, kendi YouTube Music hesabını Windows’ta ayrı bir masaüstü penceres
 - Sanatçı, albüm ve oynatma listesi detayları
 - Oynat/duraklat, önceki/sonraki, sarma, ses, karıştırma ve tekrar
 - Şimdi çalıyor ekranı ve tekilleştirilmiş sıradaki listesi
+- Gerçek YouTube Music sırası üzerinde bundan sonra oynat, sıradan kaldır ve sırayı temizle
+- Android bildirim ve kilit ekranından oynat/duraklat, önceki ve sonraki kontrolleri
+- Komut onayı, gecikme ölçümü, yeniden bağlanma ve çevrimdışı içerik önbelleği bulunan Sync V2
 - Uygulama içinden QR kodla güvenli telefon eşleştirme
 - Windows ve Android için GitHub sürüm denetimi
 - Discord Rich Presence
@@ -59,8 +62,9 @@ Android Ritim ── yerel ağ / Socket.IO ── Windows Ritim ── resmi You
 ```
 
 - Electron ana süreci resmi YouTube Music penceresini ve yerel senkron sunucusunu yönetir.
+- PC, Sync V2’de oynatıcı durumunun tek yetkili kaynağıdır; telefon komutları benzersiz kimlikle gönderilir ve PC tarafından onaylanır.
 - Music sayfasındaki köprü yalnızca görünür müzik meta verisini ve oynatıcı durumunu okur.
-- React/Capacitor Android uygulaması yapılandırılmış veriyi yerel bileşenlerle gösterir.
+- React/Capacitor Android uygulaması yapılandırılmış veriyi yerel bileşenlerle gösterir ve Android MediaSession üzerinden sistem medya kontrollerini yayınlar.
 - GitHub Actions etiketli sürümlerde Windows kurucusunu, `latest.yml` güncelleme bilgisini ve test APK’sını yayınlar.
 
 ## Sınırlar
