@@ -1272,7 +1272,12 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         catalog, browse, lyrics, related, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
-      presence?.update({ title: track.title, artist: track.artist, isPlaying })
+      presence?.update({
+        title: track.title,
+        artist: track.artist,
+        isPlaying,
+        startedAt: isPlaying ? Date.now() - position * 1000 : undefined,
+      })
     } catch (error) {
       if (!destroyed) console.warn('[Ritim] YouTube Music medya bilgisi okunamadı:', error.message)
     }

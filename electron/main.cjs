@@ -11,6 +11,7 @@ const { createUpdateController } = require('./updater.cjs')
 const isDev = !app.isPackaged
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
+const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '1528122277500030976'
 let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
 let mainWindow
 let musicView
@@ -239,7 +240,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       }
     }
   }
-  presence = createDiscordPresence(process.env.RITIM_DISCORD_CLIENT_ID)
+  presence = createDiscordPresence(DISCORD_CLIENT_ID)
   updateController = createUpdateController({
     app,
     beforeInstall: prepareForUpdate,
@@ -249,6 +250,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   })
 
   ipcMain.on('settings:open', createSettingsWindow)
+  ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const url = phoneUrl()
     const qrDataUrl = await QRCode.toDataURL(url, {
