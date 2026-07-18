@@ -11,6 +11,9 @@ Ritim lets you use your own YouTube Music account in a dedicated Windows desktop
 - Artist, album and playlist details
 - Play/pause, previous/next, seeking, volume, shuffle and repeat
 - Now Playing and a de-duplicated queue
+- Play next, remove and clear actions on the real YouTube Music queue
+- Android notification and lock-screen play/pause, previous and next controls
+- Sync V2 command acknowledgements, latency reporting, reconnect recovery and offline content cache
 - Secure in-app QR pairing
 - GitHub release checks on Windows and Android
 - Discord Rich Presence
@@ -59,8 +62,9 @@ Android Ritim ── local network / Socket.IO ── Windows Ritim ── offic
 ```
 
 - Electron owns the official YouTube Music window and the local sync server.
+- The desktop is the sole authoritative Sync V2 state source; phone commands carry unique IDs and receive desktop acknowledgements.
 - The page bridge reads visible music metadata and player state only.
-- The React/Capacitor Android app renders structured data with local UI components.
+- The React/Capacitor Android app renders structured data with local UI components and exposes system media controls through Android MediaSession.
 - GitHub Actions publishes the Windows installer, `latest.yml` updater metadata and a test APK for tagged releases.
 
 ## Limitations

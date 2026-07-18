@@ -127,6 +127,7 @@ function createMusicView() {
     },
   })
   musicView.setBackgroundColor('#090909')
+  musicView.setVisible(true)
   musicView.webContents.setWindowOpenHandler(({ url }) => {
     if (isMusicAuthUrl(url)) {
       void musicView.webContents.loadURL(url)
@@ -136,7 +137,20 @@ function createMusicView() {
     return { action: 'deny' }
   })
   mainWindow.contentView.addChildView(musicView)
+  musicView.setVisible(true)
   resizeMusicView()
+  musicView.webContents.on('did-finish-load', () => {
+    void musicView?.webContents.insertCSS(`
+      ytmusic-player-bar {
+        animation: none !important;
+        transform: translateY(0) !important;
+        opacity: 1 !important;
+      }
+      ytmusic-player-page[player-page-open] {
+        transform: translateY(0) !important;
+      }
+    `).catch(() => {})
+  })
   void musicView.webContents.loadURL('https://music.youtube.com/')
   musicBridge = createYouTubeMusicBridge({
     webContents: musicView.webContents,

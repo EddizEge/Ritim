@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { DesktopApp } from './components/DesktopApp'
 import { MobileApp } from './components/MobileApp'
 import { usePlayerSync } from './hooks/usePlayerSync'
+import { useNativeMediaSession } from './hooks/useNativeMediaSession'
 import { useYouTubeLibrary } from './hooks/useYouTubeLibrary'
 import { App as CapacitorApp } from '@capacitor/app'
 import { NativePairing } from './components/NativePairing'
@@ -23,10 +24,11 @@ function useCompanionMode() {
 
 function RitimApp({ isCompanion }: { isCompanion: boolean }) {
   const player = usePlayerSync(isCompanion)
+  useNativeMediaSession(player.state, player.actions, player.connected)
   const youtube = useYouTubeLibrary()
   const props = { ...player }
   return isCompanion
-    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} />
+    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} />
     : <DesktopApp {...props} youtube={youtube} />
 }
 

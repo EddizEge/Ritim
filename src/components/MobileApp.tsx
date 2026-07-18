@@ -1,10 +1,10 @@
 import { FormEvent, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic, ListPlus,
-  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Volume1, Volume2, X,
+  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Trash2, Volume1, Volume2, Wifi, WifiOff, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
-import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, MusicItemAction, PlayerActions, PlayerState, RelatedState, Track } from '../types'
+import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, MusicItemAction, PlayerActions, PlayerState, RelatedState, SyncHealth, Track } from '../types'
 import { Cover } from './Cover'
 import { FeedbackSheet } from './FeedbackSheet'
 import { PlayerControls } from './PlayerControls'
@@ -19,6 +19,7 @@ type Props = {
   peerCount: number
   room: string
   pairingError?: string
+  syncHealth: SyncHealth
 }
 
 type BrowseRoute = 'home' | 'explore' | 'library' | 'search' | 'detail'
@@ -54,18 +55,20 @@ const LyricsPanel = memo(function LyricsPanel({ lyrics }: { lyrics?: LyricsState
   return <div className="ytm-info-body"><ListMusic /><div><b>{unavailable ? 'Bu parçada şarkı sözü bulunamadı' : 'Şarkı sözleri PC’den alınıyor'}</b><p>{unavailable ? 'YouTube Music bazı parçalar için söz sağlamıyor.' : 'YouTube Music’in şarkı sözleri sekmesi açılıyor…'}</p></div></div>
 })
 
-const QueueRow = memo(function QueueRow({ track, current, onSelect }: { track: Track; current: boolean; onSelect: () => void }) {
+const QueueRow = memo(function QueueRow({ track, current, onSelect, onMenu }: { track: Track; current: boolean; onSelect: () => void; onMenu: () => void }) {
   return (
-    <button className={`ytm-queue-row ${current ? 'is-current' : ''}`} onClick={onSelect}>
-      <span className="ytm-queue-indicator">{current ? <><i /><i /><i /></> : <ListMusic />}</span>
-      <Cover index={track.cover} thumbnailUrl={track.thumbnailUrl} className="ytm-queue-cover" label="" />
-      <span className="ytm-queue-copy">
-        <b>{track.title}</b>
-        <small>{track.artist}{track.collection && track.collection !== 'YouTube Music' ? ` • ${track.collection}` : ''}</small>
-      </span>
-      <span className="ytm-queue-duration">{track.duration > 0 ? formatTime(track.duration) : '—'}</span>
-      <MoreVertical className="ytm-queue-more" />
-    </button>
+    <div className={`ytm-queue-row ${current ? 'is-current' : ''}`}>
+      <button className="ytm-queue-main" onClick={onSelect}>
+        <span className="ytm-queue-indicator">{current ? <><i /><i /><i /></> : <ListMusic />}</span>
+        <Cover index={track.cover} thumbnailUrl={track.thumbnailUrl} className="ytm-queue-cover" label="" />
+        <span className="ytm-queue-copy">
+          <b>{track.title}</b>
+          <small>{track.artist}{track.collection && track.collection !== 'YouTube Music' ? ` • ${track.collection}` : ''}</small>
+        </span>
+        <span className="ytm-queue-duration">{track.duration > 0 ? formatTime(track.duration) : '—'}</span>
+      </button>
+      <button className="ytm-queue-menu" onClick={onMenu} aria-label={`${track.title} sıra menüsü`}><MoreVertical className="ytm-queue-more" /></button>
+    </div>
   )
 })
 
@@ -198,7 +201,62 @@ function PlaylistPickerSheet({ state, onSelect, onClose }: { state: NonNullable<
   )
 }
 
-export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '' }: Props) {
+function QueueActionSheet({ track, current, onClose, onMove, onRemove, onPlay }: {
+  track: Track
+  current: boolean
+  onClose: () => void
+  onMove: (direction: 'up' | 'down' | 'next') => void
+  onRemove: () => void
+  onPlay: () => void
+}) {
+  return (
+    <div className="mobile-sheet-backdrop" onClick={onClose} role="presentation">
+      <section className="mobile-action-sheet mobile-queue-sheet" role="dialog" aria-modal="true" aria-label={`${track.title} sıra işlemleri`} onClick={(event) => event.stopPropagation()}>
+        <div className="mobile-sheet-handle" />
+        <header><div><small>SIRA İŞLEMLERİ</small><h2>{track.title}</h2><p>{track.artist}</p></div><button onClick={onClose} aria-label="Sıra menüsünü kapat"><X /></button></header>
+        <button onClick={onPlay}><Play /><span><b>Şimdi oynat</b><small>PC’de bu parçaya geç</small></span></button>
+        {!current ? <button onClick={() => onMove('next')}><SkipForward /><span><b>Bundan sonra oynat</b><small>YouTube Music sırasının başına taşı</small></span></button> : null}
+        {!current ? <button className="is-danger" onClick={onRemove}><Trash2 /><span><b>Sıradan kaldır</b><small>Gerçek YouTube Music sırasından sil</small></span></button> : null}
+        <button className="mobile-sheet-cancel" onClick={onClose}>Vazgeç</button>
+      </section>
+    </div>
+  )
+}
+
+function ConnectionCenterSheet({ health, connected, room, pairingError, onReconnect, onClose }: {
+  health: SyncHealth
+  connected: boolean
+  room: string
+  pairingError: string
+  onReconnect: () => void
+  onClose: () => void
+}) {
+  const lastSync = health.lastSyncedAt ? new Date(health.lastSyncedAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Henüz yok'
+  const online = connected && health.desktopOnline
+  return (
+    <div className="mobile-sheet-backdrop" onClick={onClose} role="presentation">
+      <section className="mobile-action-sheet mobile-connection-sheet" role="dialog" aria-modal="true" aria-label="Bağlantı merkezi" onClick={(event) => event.stopPropagation()}>
+        <div className="mobile-sheet-handle" />
+        <header><div><small>SYNC V2</small><h2>Bağlantı merkezi</h2></div><button onClick={onClose} aria-label="Bağlantı merkezini kapat"><X /></button></header>
+        <div className={`mobile-connection-status ${online ? 'is-online' : ''}`}>
+          {online ? <Wifi /> : <WifiOff />}
+          <span><b>{online ? 'Ritim PC bağlı' : 'Ritim PC çevrimdışı'}</b><small>{pairingError || (health.usingCache ? 'Kaydedilmiş içerik gösteriliyor' : `Oda: ${room}`)}</small></span>
+        </div>
+        <dl className="mobile-sync-metrics">
+          <div><dt>Gecikme</dt><dd>{health.latencyMs === null ? '—' : `${health.latencyMs} ms`}</dd></div>
+          <div><dt>Son eşitleme</dt><dd>{lastSync}</dd></div>
+          <div><dt>Bekleyen komut</dt><dd>{health.pendingCommands}</dd></div>
+          <div><dt>Bağlı telefon</dt><dd>{health.companionCount}</dd></div>
+        </dl>
+        <button onClick={onReconnect}><RefreshCw /><span><b>Şimdi yeniden bağlan</b><small>PC’den güncel durumu yeniden iste</small></span></button>
+        {isNativeMobile ? <button onClick={() => { clearMobilePairing(); window.location.reload() }}><MonitorSpeaker /><span><b>Başka bir PC bağla</b><small>Yeni QR kodunu tara</small></span></button> : null}
+        <button className="mobile-sheet-cancel" onClick={onClose}>Kapat</button>
+      </section>
+    </div>
+  )
+}
+
+export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth }: Props) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
   const idle = track.id === 'ytmusic:idle'
@@ -215,6 +273,8 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [menuItem, setMenuItem] = useState<MusicBrowseItem | null>(null)
+  const [queueMenuTrack, setQueueMenuTrack] = useState<Track | null>(null)
+  const [connectionOpen, setConnectionOpen] = useState(false)
   const mobileUpdate = useMobileUpdate()
   const [pairedComputer] = useState(readMobilePairing)
   const homeBootstrapRef = useRef(false)
@@ -374,6 +434,20 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     setMenuItem(null)
   }
 
+  const performQueueMove = (direction: 'up' | 'down' | 'next') => {
+    if (!queueMenuTrack) return
+    actions.moveQueueItem(queueMenuTrack.id, direction)
+    setNotice(direction === 'next' ? 'Parça bundan sonra oynatılıyor…' : 'YouTube Music sırası güncelleniyor…')
+    setQueueMenuTrack(null)
+  }
+
+  const removeQueueTrack = () => {
+    if (!queueMenuTrack) return
+    actions.removeQueueItem(queueMenuTrack.id)
+    setNotice('Parça sıradan kaldırılıyor…')
+    setQueueMenuTrack(null)
+  }
+
   const closePlaylistPicker = () => {
     actions.cancelMusicPlaylist()
   }
@@ -405,19 +479,21 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
             <div><h1>{track.title}</h1><p>{track.artist}{track.collection && track.collection !== 'YouTube Music' ? ` • ${track.collection}` : ''}</p></div>
             <button className={`ytm-icon-button ytm-like ${liked ? 'is-liked' : ''}`} onClick={actions.toggleLike} aria-label="Favori"><Heart fill={liked ? 'currentColor' : 'none'} /></button>
           </section>
-          <button className="ytm-output-device" onClick={() => setNotice('Ses PC’den geliyor')}>
-            <MonitorSpeaker /><span><small>ŞU CİHAZDA OYNATILIYOR</small><b>Ritim PC</b></span><i className={connected ? 'is-online' : ''} />
+          <button className="ytm-output-device" onClick={() => setConnectionOpen(true)}>
+            <MonitorSpeaker /><span><small>ŞU CİHAZDA OYNATILIYOR</small><b>Ritim PC</b></span><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} />
           </button>
           <Progress position={state.position} duration={track.duration} onSeek={actions.seek} />
           <PlayerControls state={state} actions={actions} large />
           <div className="ytm-volume-control"><Volume1 /><input className="range range--volume" type="range" min="0" max="100" value={state.volume} style={{ '--range-value': `${state.volume}%` } as React.CSSProperties} onChange={(event) => actions.setVolume(Number(event.target.value))} aria-label="PC sesi" /><Volume2 /></div>
           <section className="ytm-info-sheet">
             <div className="ytm-info-tabs" role="tablist"><button className={activeTab === 'queue' ? 'is-active' : ''} onClick={() => selectInfoTab('queue')}>SIRADAKİ</button><button className={activeTab === 'lyrics' ? 'is-active' : ''} onClick={() => selectInfoTab('lyrics')}>ŞARKI SÖZLERİ</button><button className={activeTab === 'related' ? 'is-active' : ''} onClick={() => selectInfoTab('related')}>BENZER</button></div>
-            {activeTab === 'queue' ? <div className="ytm-queue-list">{queue.slice(0, 12).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <RelatedPanel related={state.related?.trackId === track.id ? state.related : undefined} onOpen={openItem} onMenu={setMenuItem} />}
+            {activeTab === 'queue' ? <div className="ytm-queue-list"><div className="ytm-queue-toolbar"><span>{queue.length} parça</span><button onClick={() => { actions.clearQueue(); setNotice('Sıradaki parçalar temizleniyor…') }}><Trash2 />Sırayı temizle</button></div>{queue.slice(0, 20).map((item) => <QueueRow key={item.id} track={item} current={item.id === state.trackId} onSelect={() => actions.selectTrack(item.id)} onMenu={() => setQueueMenuTrack(item)} />)}</div> : activeTab === 'lyrics' ? <LyricsPanel lyrics={state.lyrics?.trackId === track.id ? state.lyrics : undefined} /> : <RelatedPanel related={state.related?.trackId === track.id ? state.related : undefined} onOpen={openItem} onMenu={setMenuItem} />}
           </section>
         </main>
         <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
         {menuItem ? <ItemActionSheet item={menuItem} onClose={() => setMenuItem(null)} onAction={performItemAction} /> : null}
+        {queueMenuTrack ? <QueueActionSheet track={queueMenuTrack} current={queueMenuTrack.id === state.trackId} onClose={() => setQueueMenuTrack(null)} onMove={performQueueMove} onRemove={removeQueueTrack} onPlay={() => { actions.selectTrack(queueMenuTrack.id); setQueueMenuTrack(null) }} /> : null}
+        {connectionOpen ? <ConnectionCenterSheet health={syncHealth} connected={connected} room={room} pairingError={pairingError} onReconnect={() => { actions.reconnectSync(); setNotice('PC bağlantısı yenileniyor…') }} onClose={() => setConnectionOpen(false)} /> : null}
         {state.playlistPicker && state.playlistPicker.status !== 'idle' ? <PlaylistPickerSheet state={state.playlistPicker} onSelect={actions.selectMusicPlaylist} onClose={closePlaylistPicker} /> : null}
         {notice ? <div className="ytm-toast" role="status">{notice}</div> : null}
       </div>
@@ -432,7 +508,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           <button onClick={() => setSearchOpen(true)} aria-label="Ara"><Search /></button>
           <button onClick={() => setFeedbackOpen(true)} aria-label="Hata bildir"><Bug /></button>
           {isNativeMobile ? <button className={mobileUpdate.updateAvailable ? 'has-update' : ''} onClick={() => void handleMobileUpdate()} aria-label="Güncellemeleri kontrol et">{mobileUpdate.updateAvailable ? <Download /> : <RefreshCw />}</button> : null}
-          <button className="mobile-device-button" onClick={() => setNotice(connected ? `Ritim PC bağlı • ${peerCount} cihaz` : 'PC bağlantısı bekleniyor')} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected ? 'is-online' : ''} /></button>
+          <button className="mobile-device-button" onClick={() => setConnectionOpen(true)} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} /></button>
         </div>
       </header>
 
@@ -479,6 +555,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}
       <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />
       {menuItem ? <ItemActionSheet item={menuItem} onClose={() => setMenuItem(null)} onAction={performItemAction} /> : null}
+      {connectionOpen ? <ConnectionCenterSheet health={syncHealth} connected={connected} room={room} pairingError={pairingError} onReconnect={() => { actions.reconnectSync(); setNotice('PC bağlantısı yenileniyor…') }} onClose={() => setConnectionOpen(false)} /> : null}
       {state.playlistPicker && state.playlistPicker.status !== 'idle' ? <PlaylistPickerSheet state={state.playlistPicker} onSelect={actions.selectMusicPlaylist} onClose={closePlaylistPicker} /> : null}
       {!connected || pairingError ? (
         <div className="ytm-offline-banner">

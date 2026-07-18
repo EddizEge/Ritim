@@ -32,8 +32,13 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   let navigationTask = null
   let expectedVideoId = ''
   let expectedVideoDeadline = 0
+  let expectedVolume = null
+  let expectedVolumeDeadline = 0
+  let volumeCommandSequence = 0
+  let lastVolumeReapplyAt = 0
   let actionSequence = 0
   let loadMoreTask = null
+  const appliedCommandIds = new Set()
   const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
@@ -68,6 +73,40 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     if (!clicked) sendKey(kind === 'next' ? 'MediaNextTrack' : 'MediaPreviousTrack')
     setTimeout(() => void capture(), 180)
     return clicked
+  }
+
+  async function applyVolumeLevel(level, sequence) {
+    if (destroyed || webContents.isDestroyed() || sequence !== volumeCommandSequence) return null
+    return webContents.executeJavaScript(`(() => {
+      const level = ${JSON.stringify(level)};
+      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      let appliedByApi = false;
+      try {
+        if (level > 0 && typeof playerApi?.unMute === 'function') playerApi.unMute();
+        if (typeof playerApi?.setVolume === 'function') {
+          playerApi.setVolume(level);
+          appliedByApi = true;
+        }
+      } catch {}
+      const mediaElements = [...document.querySelectorAll('video, audio')];
+      for (const media of mediaElements) {
+        try {
+          media.muted = false;
+          media.volume = level / 100;
+        } catch {}
+      }
+      let actualVolume = Number.NaN;
+      try {
+        const apiVolume = Number(playerApi?.getVolume?.());
+        const apiMuted = Boolean(playerApi?.isMuted?.());
+        if (Number.isFinite(apiVolume)) actualVolume = apiMuted ? 0 : apiVolume;
+      } catch {}
+      if (!Number.isFinite(actualVolume)) {
+        const activeMedia = mediaElements.find((media) => Number.isFinite(media.duration) && media.duration > 0) || mediaElements[0];
+        actualVolume = activeMedia ? (activeMedia.muted ? 0 : activeMedia.volume * 100) : level;
+      }
+      return { applied: appliedByApi || mediaElements.length > 0, actualVolume };
+    })()`, true)
   }
 
   function publishState() {
@@ -231,32 +270,48 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
 
   async function openPlayerInfoTab(kind) {
     if (destroyed || webContents.isDestroyed()) return false
-    return webContents.executeJavaScript(`(() => new Promise((resolve) => {
-      const kind = ${JSON.stringify(kind)};
-      const selectTab = () => {
-        const tabs = [...document.querySelectorAll('ytmusic-player-page tp-yt-paper-tab, ytmusic-player-page yt-tab-shape, #tabs tp-yt-paper-tab, #tabs yt-tab-shape')];
-        const pattern = kind === 'lyrics' ? /lyrics|şarkı sözleri|sözler/i : /related|benzer/i;
-        const tab = tabs.find((item) => pattern.test((item.textContent || '').trim()));
-        if (!tab || tab.getAttribute('aria-disabled') === 'true') {
-          resolve(false);
-          return;
-        }
-        tab.click();
-        resolve(true);
-      };
+    const getPlayerPageStatus = () => webContents.executeJavaScript(`(() => {
       const page = document.querySelector('ytmusic-player-page');
-      if (page?.playerPageOpen) {
-        selectTab();
-        return;
-      }
+      const pageRect = page?.getBoundingClientRect();
       const toggle = document.querySelector('ytmusic-player-bar .toggle-player-page-button');
-      if (!toggle) {
-        resolve(false);
-        return;
-      }
-      toggle.click();
-      setTimeout(selectTab, 350);
-    }))()`, true)
+      const toggleRect = toggle?.getBoundingClientRect();
+      return {
+        open: Boolean(page?.playerPageOpen),
+        visible: Boolean(page?.playerPageOpen && pageRect && pageRect.top < innerHeight - 80),
+        toggle: toggleRect ? { x: Math.round(toggleRect.left + toggleRect.width / 2), y: Math.round(toggleRect.top + toggleRect.height / 2) } : null,
+      };
+    })()`, true)
+    const trustedToggle = async (point) => {
+      if (!point) return false
+      webContents.focus()
+      webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
+      webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      return true
+    }
+    let status = await getPlayerPageStatus()
+    if (!status.visible && status.open) {
+      if (!await trustedToggle(status.toggle)) return false
+      await new Promise((resolve) => setTimeout(resolve, 260))
+      status = await getPlayerPageStatus()
+    }
+    if (!status.visible) {
+      if (!await trustedToggle(status.toggle)) return false
+      await new Promise((resolve) => setTimeout(resolve, 520))
+      status = await getPlayerPageStatus()
+    }
+    if (!status.visible) return false
+    return webContents.executeJavaScript(`(() => {
+      const kind = ${JSON.stringify(kind)};
+      const tabs = [...document.querySelectorAll('ytmusic-player-page tp-yt-paper-tab, ytmusic-player-page yt-tab-shape, #tabs tp-yt-paper-tab, #tabs yt-tab-shape')];
+      const pattern = kind === 'lyrics' ? /lyrics|şarkı sözleri|sözler/i
+        : kind === 'queue' ? /sıradaki|up next|queue/i
+        : /related|benzer/i;
+      const tab = tabs.find((item) => pattern.test((item.textContent || '').trim()));
+      if (!tab || tab.getAttribute('aria-disabled') === 'true') return false;
+      tab.click();
+      return true;
+    })()`, true)
   }
 
   function schedulePlayerInfoCapture(kind, requestedTrackId) {
@@ -368,6 +423,9 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         addQueue: /^(Sıraya ekle|Add to queue)$/i,
         savePlaylist: /^(Oynatma listesine (kaydet|ekle)|Save to playlist|Add to playlist)$/i,
         saveLibrary: /^(Kitaplığa kaydet|Save to library)$/i,
+        remove: /^(Sıradan kaldır|Kuyruktan kaldır|Remove from queue)$/i,
+        moveUp: /^(Yukarı taşı|Move up)$/i,
+        moveDown: /^(Aşağı taşı|Move down)$/i,
       };
       const item = [...document.querySelectorAll('[role="menuitem"], ytmusic-menu-navigation-item-renderer, ytmusic-menu-service-item-renderer')]
         .find((candidate) => (candidate.offsetParent !== null || candidate.getClientRects().length > 0)
@@ -376,6 +434,108 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       item.click();
       return true;
     })()`, true)
+  }
+
+  async function openQueueItemMenu(track) {
+    const queueVisible = await openPlayerInfoTab('queue')
+    if (!queueVisible) return false
+    await new Promise((resolve) => setTimeout(resolve, 260))
+    const target = {
+      videoId: String(track?.videoId || track?.id || '').replace(/^ytmusic:video:/, ''),
+      title: String(track?.title || ''),
+    }
+    const location = await webContents.executeJavaScript(`(() => {
+      const target = ${JSON.stringify(target)};
+      const roots = [...document.querySelectorAll('ytmusic-player-queue ytmusic-player-queue-item')];
+      const runsText = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+      const videoIdOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        let videoId = data.videoId || data.navigationEndpoint?.watchEndpoint?.videoId || '';
+        try { videoId = videoId || new URL(root.querySelector('a[href*="watch?v="]')?.href || '').searchParams.get('v') || ''; } catch {}
+        return videoId;
+      };
+      const titleOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        return runsText(data.title) || root.querySelector('#video-title, .song-title, ytmusic-formatted-string.title, .title')?.textContent?.trim() || '';
+      };
+      const root = roots.find((candidate) => target.videoId && videoIdOf(candidate) === target.videoId)
+        || roots.find((candidate) => target.title && titleOf(candidate) === target.title);
+      if (!root) return null;
+      root.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = root.getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`, true)
+    if (!location) return false
+    webContents.focus()
+    webContents.sendInputEvent({ type: 'mouseMove', x: location.x, y: location.y })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const button = await webContents.executeJavaScript(`(() => {
+      const target = ${JSON.stringify(target)};
+      const roots = [...document.querySelectorAll('ytmusic-player-queue ytmusic-player-queue-item')];
+      const runsText = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+      const videoIdOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        let videoId = data.videoId || data.navigationEndpoint?.watchEndpoint?.videoId || '';
+        try { videoId = videoId || new URL(root.querySelector('a[href*="watch?v="]')?.href || '').searchParams.get('v') || ''; } catch {}
+        return videoId;
+      };
+      const titleOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        return runsText(data.title) || root.querySelector('#video-title, .song-title, ytmusic-formatted-string.title, .title')?.textContent?.trim() || '';
+      };
+      const root = roots.find((candidate) => target.videoId && videoIdOf(candidate) === target.videoId)
+        || roots.find((candidate) => target.title && titleOf(candidate) === target.title);
+      const menu = root?.querySelector('button[aria-label*="İşlem menüsü" i], button[aria-label*="action menu" i], button[aria-label*="more" i], [aria-label*="İşlem menüsü" i], [aria-label*="menu" i]');
+      if (!menu) return null;
+      const rect = menu.getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`, true)
+    if (!button) return false
+    webContents.sendInputEvent({ type: 'mouseMove', x: button.x, y: button.y })
+    webContents.sendInputEvent({ type: 'mouseDown', x: button.x, y: button.y, button: 'left', clickCount: 1 })
+    webContents.sendInputEvent({ type: 'mouseUp', x: button.x, y: button.y, button: 'left', clickCount: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    return true
+  }
+
+  async function performQueueAction(track, action) {
+    const result = await webContents.executeJavaScript(`(() => {
+      const target = ${JSON.stringify({
+        videoId: String(track?.videoId || track?.id || '').replace(/^ytmusic:video:/, ''),
+        title: String(track?.title || ''),
+      })};
+      const action = ${JSON.stringify(action)};
+      const roots = [...document.querySelectorAll('ytmusic-player-queue ytmusic-player-queue-item')];
+      const videoIdOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        let videoId = data.videoId || data.navigationEndpoint?.watchEndpoint?.videoId || '';
+        try { videoId = videoId || new URL(root.querySelector('a[href*="watch?v="]')?.href || '').searchParams.get('v') || ''; } catch {}
+        return videoId;
+      };
+      const titleOf = (root) => {
+        const data = root?.data || root?.__data?.data || {};
+        const runs = (value) => value?.runs?.map((run) => run.text || '').join('') || value?.simpleText || '';
+        return runs(data.title) || root.querySelector('#video-title, .song-title, ytmusic-formatted-string.title, .title')?.textContent?.trim() || '';
+      };
+      const root = roots.find((candidate) => target.videoId && videoIdOf(candidate) === target.videoId)
+        || roots.find((candidate) => target.title && titleOf(candidate) === target.title);
+      if (!root) return { success: false, message: target.title + ' sıra içinde bulunamadı' };
+      const data = root.data || root.__data?.data || {};
+      const items = data.menu?.menuRenderer?.items || [];
+      const endpoint = action === 'playNext'
+        ? items.map((item) => item.menuServiceItemRenderer?.serviceEndpoint).find((value) => value?.queueAddEndpoint?.queueInsertPosition === 'INSERT_AFTER_CURRENT_VIDEO')
+        : action === 'remove'
+          ? items.map((item) => item.menuServiceItemRenderer?.serviceEndpoint).find((value) => value?.removeFromQueueEndpoint)
+          : null;
+      if (!endpoint) return { success: false, message: 'Bu sıra işlemi YouTube Music tarafından sunulmuyor' };
+      const app = document.querySelector('ytmusic-app');
+      if (typeof app?.onYtServiceRequest !== 'function') return { success: false, message: 'YouTube Music sıra komutu hazır değil' };
+      app.onYtServiceRequest({ detail: { endpoint } });
+      return { success: true };
+    })()`, true)
+    if (!result?.success) throw new Error(result?.message || 'Sıra güncellenemedi')
+    publishAction('success', action === 'remove' ? 'Parça sıradan kaldırıldı' : 'Sıra güncellendi')
+    for (const delay of [300, 1100, 2200]) setTimeout(() => void capture(), delay)
   }
 
   async function restoreBrowseScroll(scrollTop) {
@@ -532,15 +692,20 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       }
     }
     if (command.type === 'setVolume' && Number.isFinite(Number(command.value))) {
-      const volume = Math.max(0, Math.min(100, Number(command.value))) / 100
-      await webContents.executeJavaScript(`(() => {
-        const media = [...document.querySelectorAll('video, audio')]
-          .find((item) => Number.isFinite(item.duration) && item.duration > 0);
-        if (!media) return false;
-        media.muted = false;
-        media.volume = ${JSON.stringify(volume)};
-        return true;
-      })()`, true)
+      const level = Math.max(0, Math.min(100, Math.round(Number(command.value))))
+      const sequence = ++volumeCommandSequence
+      expectedVolume = level
+      expectedVolumeDeadline = Date.now() + 6000
+      lastVolumeReapplyAt = 0
+      state = { ...state, volume: level }
+      publishState()
+      await applyVolumeLevel(level, sequence)
+      for (const delay of [180, 700, 1800, 3500]) {
+        setTimeout(() => {
+          if (sequence !== volumeCommandSequence) return
+          void applyVolumeLevel(level, sequence).then(() => capture()).catch(() => {})
+        }, delay)
+      }
       setTimeout(() => void capture(), 80)
     }
     if (command.type === 'playTrack') {
@@ -568,6 +733,23 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       } catch {
         publishAction('error', 'Telefon işlemi okunamadı')
       }
+    }
+    if (command.type === 'queueAction') {
+      const payload = JSON.parse(String(command.value || '{}'))
+      const supported = ['playNext', 'moveUp', 'moveDown', 'remove']
+      if (!payload?.track || !supported.includes(payload.action)) throw new Error('Sıra komutu okunamadı')
+      await performQueueAction(payload.track, payload.action)
+    }
+    if (command.type === 'clearQueue') {
+      const cleared = await webContents.executeJavaScript(`(() => {
+        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        if (typeof playerApi?.clearQueue !== 'function') return false;
+        playerApi.clearQueue();
+        return true;
+      })()`, true)
+      if (!cleared) throw new Error('YouTube Music sırası temizlenemedi')
+      publishAction('success', 'Sıradaki parçalar temizlendi')
+      for (const delay of [180, 700]) setTimeout(() => void capture(), delay)
     }
     if (command.type === 'selectPlaylist') {
       const playlistId = String(command.value || '')
@@ -624,7 +806,21 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   }
 
   socket.on('player:command', (incoming) => {
-    void command(incoming).catch((error) => console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message))
+    const commandId = String(incoming?.id || '')
+    const commandType = String(incoming?.type || '')
+    if (commandId && appliedCommandIds.has(commandId)) {
+      socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
+      return
+    }
+    void command(incoming).then(() => {
+      if (!commandId) return
+      appliedCommandIds.add(commandId)
+      if (appliedCommandIds.size > 200) appliedCommandIds.delete(appliedCommandIds.values().next().value)
+      socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
+    }).catch((error) => {
+      console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message)
+      if (commandId) socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'failed', message: error.message, appliedAt: Date.now() })
+    })
   })
 
   async function capture() {
@@ -642,6 +838,12 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         const player = elements.find((item) => Number.isFinite(item.duration) && item.duration > 0) || elements[0];
         const playerApi = document.querySelector('ytmusic-player')?.playerApi;
         const playerData = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
+        let playerApiVolume = Number.NaN;
+        try {
+          const apiVolume = Number(playerApi?.getVolume?.());
+          const apiMuted = Boolean(playerApi?.isMuted?.());
+          if (Number.isFinite(apiVolume)) playerApiVolume = apiMuted ? 0 : apiVolume;
+        } catch {}
         const textFrom = (root, selectors) => {
           for (const selector of selectors) {
             const value = root.querySelector(selector)?.textContent?.trim();
@@ -662,7 +864,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         const playerVideoId = String(playerData.video_id || playerData.videoId || '');
         const selectedByVideoIndex = playerVideoId ? allQueueRoots.findIndex((root) => queueVideoId(root) === playerVideoId) : -1;
         const selectedByFlagIndex = allQueueRoots.findIndex((root) => Boolean(root.data?.selected || root.__data?.data?.selected));
-        const selectedQueueIndex = selectedByVideoIndex >= 0 ? selectedByVideoIndex : selectedByFlagIndex;
+        const selectedQueueIndex = selectedByFlagIndex >= 0 ? selectedByFlagIndex : selectedByVideoIndex;
         const queueRoots = selectedQueueIndex >= 0 ? allQueueRoots.slice(selectedQueueIndex) : allQueueRoots;
         const selectedQueueRoot = selectedQueueIndex >= 0 ? allQueueRoots[selectedQueueIndex] : null;
         let currentVideoId = playerVideoId || queueVideoId(selectedQueueRoot);
@@ -888,7 +1090,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           pageTitle: document.title || '',
           position: player && Number.isFinite(player.currentTime) ? player.currentTime : 0,
           duration: player && Number.isFinite(player.duration) ? player.duration : 0,
-          volume: player ? (player.muted ? 0 : player.volume * 100) : 68,
+          volume: Number.isFinite(playerApiVolume) ? playerApiVolume : player ? (player.muted ? 0 : player.volume * 100) : 68,
           paused: player ? player.paused : null,
           currentVideoId,
           queue,
@@ -954,7 +1156,19 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         ? !media.paused
         : media.playbackState === 'playing' || webContents.isCurrentlyAudible()
       const position = Math.max(0, Math.floor(Number(media.position) || 0))
-      const volume = Math.max(0, Math.min(100, Math.round(Number(media.volume) || 0)))
+      const capturedVolume = Math.max(0, Math.min(100, Math.round(Number(media.volume) || 0)))
+      let volume = capturedVolume
+      if (expectedVolume !== null && Date.now() < expectedVolumeDeadline) {
+        volume = expectedVolume
+        if (Math.abs(capturedVolume - expectedVolume) > 1 && Date.now() - lastVolumeReapplyAt > 500) {
+          lastVolumeReapplyAt = Date.now()
+          void applyVolumeLevel(expectedVolume, volumeCommandSequence).catch(() => {})
+        }
+      } else if (expectedVolume !== null) {
+        expectedVolume = null
+        expectedVolumeDeadline = 0
+        lastVolumeReapplyAt = 0
+      }
       const browse = media.browse && typeof media.browse === 'object'
         ? mergeBrowseState(state.browse, media.browse)
         : state.browse
