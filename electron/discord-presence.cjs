@@ -6,36 +6,89 @@ function createDiscordPresence(clientId) {
     return { update() {}, destroy() {} }
   }
 
-  const rpc = new DiscordRPC.Client({ transport: 'ipc' })
+  let rpc = null
   let ready = false
+  let destroyed = false
   let lastKey = ''
   let pending = null
+  let retryTimer = null
 
-  rpc.on('ready', () => {
-    ready = true
-    if (pending) update(pending)
-  })
-  rpc.login({ clientId }).catch((error) => console.warn('[Ritim] Discord baglantisi kurulamadi:', error.message))
+  function scheduleReconnect() {
+    if (destroyed || retryTimer) return
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      connect()
+    }, 15000)
+  }
+
+  function connect() {
+    if (destroyed || rpc) return
+    const client = new DiscordRPC.Client({ transport: 'ipc' })
+    rpc = client
+    client.once('ready', () => {
+      ready = true
+      lastKey = ''
+      console.log('[Ritim] Discord Rich Presence baglandi.')
+      if (pending) update(pending)
+    })
+    client.once('disconnected', () => {
+      if (rpc !== client) return
+      ready = false
+      rpc = null
+      scheduleReconnect()
+    })
+    client.login({ clientId }).catch((error) => {
+      if (rpc !== client) return
+      console.warn('[Ritim] Discord baglantisi kurulamadi:', error.message)
+      ready = false
+      rpc = null
+      try { client.destroy() } catch {}
+      scheduleReconnect()
+    })
+  }
+
+  connect()
 
   function update(payload) {
-    pending = payload
-    if (!ready) return
-    const key = `${payload.title}|${payload.artist}|${payload.isPlaying}`
+    if (!payload || typeof payload !== 'object') return
+    const title = String(payload.title || '').trim().slice(0, 128)
+    const artist = String(payload.artist || '').trim().slice(0, 100)
+    if (!title || title === 'YouTube Music') return
+    pending = { ...payload, title, artist }
+    if (!ready || !rpc) return
+    const key = `${title}|${artist}|${payload.isPlaying}|${Math.floor(Number(payload.startedAt) / 10000)}`
     if (key === lastKey) return
     lastKey = key
-    rpc.setActivity({
+    const activity = {
       type: 2,
-      details: payload.title,
-      state: `${payload.artist} • ${payload.isPlaying ? 'Dinliyor' : 'Duraklatıldı'}`,
+      details: title,
+      state: `${artist || 'YouTube Music'} • ${payload.isPlaying ? 'Dinliyor' : 'Duraklatıldı'}`,
       startTimestamp: payload.isPlaying && payload.startedAt ? new Date(payload.startedAt) : undefined,
+      largeImageKey: 'ritim',
+      largeImageText: 'Ritim • YouTube Music',
       instance: false,
-    }).catch(() => {})
+    }
+    rpc.setActivity(activity).catch((error) => {
+      const fallback = { ...activity }
+      delete fallback.largeImageKey
+      delete fallback.largeImageText
+      return rpc?.setActivity(fallback).catch(() => {
+        console.warn('[Ritim] Discord etkinligi guncellenemedi:', error.message)
+        lastKey = ''
+      })
+    })
   }
 
   return {
     update,
     destroy() {
-      try { rpc.destroy() } catch { /* Discord zaten kapali olabilir. */ }
+      destroyed = true
+      if (retryTimer) clearTimeout(retryTimer)
+      retryTimer = null
+      try { rpc?.clearActivity() } catch {}
+      try { rpc?.destroy() } catch { /* Discord zaten kapali olabilir. */ }
+      rpc = null
+      ready = false
     },
   }
 }
