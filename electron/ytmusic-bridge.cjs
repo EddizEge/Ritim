@@ -246,7 +246,65 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
     return true
   }
 
+  async function navigateToSearch(target) {
+    if (destroyed || webContents.isDestroyed()) return false
+    let query = ''
+    try {
+      query = new URL(target).searchParams.get('q')?.trim() || ''
+    } catch {}
+    if (!query) return false
+    await collapsePlayerPage()
+    const navigated = await webContents.executeJavaScript(`(() => new Promise((resolve) => {
+      const query = ${JSON.stringify(query)};
+      const searchBox = document.querySelector('ytmusic-search-box');
+      if (!searchBox || typeof searchBox.navigateToQueryResults !== 'function') {
+        resolve(false);
+        return;
+      }
+      const previousResults = document.querySelector('ytmusic-tabbed-search-results-renderer');
+      const previousResultsData = previousResults?.data || previousResults?.__data?.data;
+      try {
+        if (typeof searchBox.setQuery === 'function') searchBox.setQuery(query);
+        else if (searchBox.searchBoxInput) {
+          searchBox.searchBoxInput.value = query;
+          searchBox.searchBoxInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: query }));
+        }
+        searchBox.navigateToQueryResults(query);
+      } catch {
+        resolve(false);
+        return;
+      }
+      const normalizedQuery = query.toLocaleLowerCase('tr').trim();
+      const startedAt = Date.now();
+      const waitForRoute = () => {
+        let currentQuery = '';
+        try { currentQuery = new URL(location.href).searchParams.get('q')?.toLocaleLowerCase('tr').trim() || ''; } catch {}
+        const currentResults = document.querySelector('ytmusic-tabbed-search-results-renderer');
+        const currentResultsData = currentResults?.data || currentResults?.__data?.data;
+        const resultsChanged = currentResults && (currentResults !== previousResults || currentResultsData !== previousResultsData);
+        if (location.pathname.startsWith('/search') && currentQuery === normalizedQuery && resultsChanged) {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - startedAt >= 3000) {
+          resolve(true);
+          return;
+        }
+        setTimeout(waitForRoute, 80);
+      };
+      waitForRoute();
+    }))()`, true)
+    if (!navigated) return false
+    for (const delay of [200, 600, 1200, 2200]) {
+      setTimeout(() => {
+        if (!destroyed) void capture()
+      }, delay)
+    }
+    return true
+  }
+
   async function performNavigation({ target, destination }) {
+    if (destination === 'search' && await navigateToSearch(target)) return
     if (destination && await clickGuideDestination(destination)) return
     await loadMusicPage(target)
   }
@@ -800,7 +858,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         ? `https://music.youtube.com/search?q=${encodeURIComponent(String(command.value || '').trim())}`
         : routes[destination]
       if (target) {
-        await queueNavigation(target, destination === 'search' ? '' : destination)
+        await queueNavigation(target, destination)
       }
     }
   }
@@ -921,13 +979,14 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           : location.pathname.startsWith('/search') ? 'search'
           : 'detail';
         const searchQuery = new URL(location.href).searchParams.get('q') || '';
-        const chipRoots = [...document.querySelectorAll('ytmusic-chip-cloud-chip-renderer')];
+        const isRendered = (root) => Boolean(root && (root.offsetParent !== null || root.getClientRects().length > 0));
+        const chipRoots = [...document.querySelectorAll('ytmusic-chip-cloud-chip-renderer')].filter(isRendered);
         const filters = chipRoots.map((root, index) => {
           const data = root.data || root.__data?.data || {};
           const label = runsText(data.text) || root.textContent?.trim() || '';
           return { id: String(data.uniqueId || index + '-' + label), label, href: hrefFromEndpoint(data.navigationEndpoint), selected: Boolean(data.isSelected) };
         }).filter((item) => item.label && item.href);
-        const headerRoot = document.querySelector('ytmusic-immersive-header-renderer, ytmusic-visual-header-renderer, ytmusic-detail-header-renderer, ytmusic-editable-playlist-detail-header-renderer, ytmusic-header-renderer');
+        const headerRoot = [...document.querySelectorAll('ytmusic-immersive-header-renderer, ytmusic-visual-header-renderer, ytmusic-detail-header-renderer, ytmusic-editable-playlist-detail-header-renderer, ytmusic-header-renderer')].find(isRendered);
         let browseHeader;
         if (headerRoot) {
           const data = headerRoot.data || headerRoot.__data?.data || {};
@@ -955,7 +1014,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           };
         }
         const sectionRoots = [...document.querySelectorAll('ytmusic-carousel-shelf-renderer, ytmusic-shelf-renderer, ytmusic-grid-renderer')]
-          .filter((root) => !root.closest('ytmusic-player-page'));
+          .filter((root) => !root.closest('ytmusic-player-page') && isRendered(root));
         const browseSections = [];
         const seenSectionItems = new Set();
         const itemFromRoot = (root, sectionIndex, itemIndex, seenItems = seenSectionItems) => {
@@ -1020,7 +1079,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           if (browseSections.length >= 30) break;
         }
         const remainingRoots = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer, ytmusic-two-row-item-renderer')]
-          .filter((root) => !root.closest('ytmusic-player-page'));
+          .filter((root) => !root.closest('ytmusic-player-page') && isRendered(root));
         const remaining = [];
         for (const [itemIndex, root] of remainingRoots.entries()) {
           const item = itemFromRoot(root, 99, itemIndex);
@@ -1119,7 +1178,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         expectedVideoDeadline = 0
       }
       const id = title ? (currentVideoId ? `ytmusic:video:${currentVideoId}` : trackId(title, artist)) : state.trackId
-      const previousTrack = state.catalog[id] || idleTrack
+      const previousTrack = state.catalog[id] || state.catalog[state.trackId] || idleTrack
       const track = title ? {
         id, title, artist: artist || 'YouTube Music', collection: String(media.album || 'YouTube Music'),
         duration: Math.max(0, Math.round(Number(media.duration) || 0)), cover: 0,
@@ -1141,6 +1200,12 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
           }
         }).filter((item) => item.title && item.youtubeVideoId)
         : []
+      if (queueTracks.length === 0 && state.trackId !== idleTrack.id) {
+        for (const queueId of state.queue) {
+          const preservedTrack = state.catalog[queueId]
+          if (preservedTrack && preservedTrack.id !== idleTrack.id) queueTracks.push(preservedTrack)
+        }
+      }
       const normalizedTitle = title.toLocaleLowerCase('tr').trim()
       const currentQueueIndex = queueTracks.findIndex((item) => item.youtubeVideoId === currentVideoId || item.title.toLocaleLowerCase('tr').trim() === normalizedTitle)
       if (currentQueueIndex >= 0) {
@@ -1149,13 +1214,16 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
       }
       else if (title) queueTracks.unshift(track)
       if (queueTracks.length === 0) queueTracks.push(track)
-      const catalog = Object.fromEntries(queueTracks.map((item) => [item.id, item]))
+      const catalog = { ...state.catalog, ...Object.fromEntries(queueTracks.map((item) => [item.id, item])) }
       catalog[id] = { ...catalog[id], ...track }
       const queueIds = queueTracks.map((item) => item.id)
-      const isPlaying = typeof media.paused === 'boolean'
+      const isAudible = webContents.isCurrentlyAudible()
+      const isPlaying = isAudible || (typeof media.paused === 'boolean'
         ? !media.paused
-        : media.playbackState === 'playing' || webContents.isCurrentlyAudible()
-      const position = Math.max(0, Math.floor(Number(media.position) || 0))
+        : media.playbackState === 'playing')
+      const position = !title && !(Number(media.duration) > 0)
+        ? state.position
+        : Math.max(0, Math.floor(Number(media.position) || 0))
       const capturedVolume = Math.max(0, Math.min(100, Math.round(Number(media.volume) || 0)))
       let volume = capturedVolume
       if (expectedVolume !== null && Date.now() < expectedVolumeDeadline) {
@@ -1169,7 +1237,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         expectedVolumeDeadline = 0
         lastVolumeReapplyAt = 0
       }
-      const browse = media.browse && typeof media.browse === 'object'
+      const browse = !navigationTask && media.browse && typeof media.browse === 'object'
         ? mergeBrowseState(state.browse, media.browse)
         : state.browse
       const browseSignature = JSON.stringify([browse?.route, browse?.url, browse?.filters, browse?.header, browse?.sections, browse?.loadingMore, browse?.hasMore])
