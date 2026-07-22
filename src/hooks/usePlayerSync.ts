@@ -347,6 +347,11 @@ export function usePlayerSync(isCompanion: boolean) {
     loadMoreMusic: () => sendMusicCommand('loadMoreBrowse'),
     navigateMusic: (destination, query) => sendMusicCommand(`navigate:${destination}`, query),
     openMusicItem: (item) => {
+      const opensDetail = ['artist', 'profile', 'album', 'playlist', 'mix', 'podcast'].includes(item.kind)
+      if (opensDetail && item.href) {
+        sendMusicCommand('navigateUrl', item.href)
+        return
+      }
       if (item.videoId) {
         const optimisticId = `ytmusic:video:${item.videoId}`
         const optimisticTrack: Track = {
