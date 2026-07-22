@@ -22,7 +22,8 @@ export const ritimRoom = ROOM
 export const ritimPairingToken = PAIRING_TOKEN
 const VOLUME_ACK_TIMEOUT_MS = 6000
 const PLAYER_CACHE_KEY = 'ritim-player-cache-v2'
-const COMMAND_TIMEOUT_MS = 8000
+const COMMAND_TIMEOUT_MS = 20000
+const TRACK_ACK_TIMEOUT_MS = 15000
 let commandSequence = 0
 
 function readCachedPlayerState() {
@@ -109,7 +110,7 @@ export function usePlayerSync(isCompanion: boolean) {
         pendingVolumeRef.current = null
       }
       const pendingTrack = pendingTrackRef.current
-      if (isCompanion && pendingTrack && Date.now() - pendingTrack.changedAt < 4500) {
+      if (isCompanion && pendingTrack && Date.now() - pendingTrack.changedAt < TRACK_ACK_TIMEOUT_MS) {
         const incomingVideoId = incoming.catalog?.[incoming.trackId]?.youtubeVideoId || incoming.trackId?.replace(/^ytmusic:video:/, '') || ''
         if (incomingVideoId === pendingTrack.videoId) {
           pendingTrackRef.current = null
@@ -154,6 +155,10 @@ export function usePlayerSync(isCompanion: boolean) {
       if (pending) {
         window.clearTimeout(pending.timer)
         pendingCommandsRef.current.delete(ack.id)
+      }
+      if (ack.status === 'failed' && (pending?.type === 'playItem' || pending?.type === 'playQueueTrack' || pending?.type === 'playTrack')) {
+        pendingTrackRef.current = null
+        ritimSocket.emit('room:request-state', { room: ROOM })
       }
       setState((current) => ({
         ...current,
@@ -294,7 +299,11 @@ export function usePlayerSync(isCompanion: boolean) {
         const selected = stateRef.current.catalog[trackId]
         if (selected?.youtubeVideoId) {
           pendingTrackRef.current = { videoId: selected.youtubeVideoId, changedAt: Date.now() }
-          sendMusicCommand('playTrack', selected.youtubeVideoId)
+          sendMusicCommand('playQueueTrack', JSON.stringify({
+            id: selected.id,
+            videoId: selected.youtubeVideoId,
+            title: selected.title,
+          }))
         }
         setState((previous) => ({ ...previous, trackId, position: 0, isPlaying: true }))
         return
@@ -358,11 +367,11 @@ export function usePlayerSync(isCompanion: boolean) {
           isPlaying: true,
           position: 0,
           catalog: { ...previous.catalog, [optimisticId]: optimisticTrack },
-          queue: [optimisticId, ...previous.queue.filter((id) => id !== optimisticId)],
+          queue: [optimisticId],
           lyrics: { trackId: optimisticId, status: 'idle', lines: [] },
           related: { trackId: optimisticId, status: 'idle', items: [] },
         }))
-        sendMusicCommand('playTrack', item.videoId)
+        sendMusicCommand('playItem', JSON.stringify(item))
       } else if (item.href) sendMusicCommand('navigateUrl', item.href)
     },
     performMusicItemAction: (item, action) => sendMusicCommand('itemAction', JSON.stringify({ item, action })),
