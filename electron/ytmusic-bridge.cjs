@@ -1340,6 +1340,40 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
             : 'unknown';
           return { id: key, title, subtitle, thumbnailUrl: thumbnails.length ? thumbnails[thumbnails.length - 1].url : root.querySelector('img')?.src || '', href, videoId, kind };
         };
+        if (route === 'search') {
+          const featuredRoots = [...document.querySelectorAll('ytmusic-card-shelf-renderer')].filter(isRendered);
+          const featuredItems = [];
+          for (const [itemIndex, root] of featuredRoots.entries()) {
+            const data = root.data || root.__data?.data || {};
+            const title = runsText(data.title) || textFrom(root, ['#title', '.title', 'h2']);
+            const endpoint = findEndpoint(data.onTap) || findEndpoint(data.title);
+            const href = hrefFromEndpoint(endpoint)
+              || absoluteMusicHref(root.querySelector('a[href*="browse"], a[href*="channel"], a[href*="playlist"]')?.getAttribute('href') || '');
+            if (!title || !href) continue;
+            const key = href || 'featured:' + itemIndex + ':' + title;
+            if (seenSectionItems.has(key)) continue;
+            seenSectionItems.add(key);
+            const subtitle = runsText(data.subtitle) || textFrom(root, ['#subtitle', '.subtitle']);
+            const thumbnails = thumbnailList(data);
+            const pageType = pageTypeOf(endpoint);
+            const lower = (subtitle + ' ' + href).toLocaleLowerCase('tr');
+            const kind = pageType.includes('USER_CHANNEL') ? 'profile'
+              : pageType.includes('ARTIST') || lower.includes('sanatçı') ? 'artist'
+              : pageType.includes('ALBUM') || lower.includes('albüm') ? 'album'
+              : pageType.includes('PLAYLIST') || href.includes('playlist') ? 'playlist'
+              : 'unknown';
+            featuredItems.push({
+              id: key,
+              title,
+              subtitle,
+              thumbnailUrl: thumbnails.length ? thumbnails[thumbnails.length - 1].url : root.querySelector('img')?.src || '',
+              href,
+              videoId: '',
+              kind,
+            });
+          }
+          if (featuredItems.length) browseSections.push({ id: 'search-featured', title: 'En iyi sonuç', layout: 'list', items: featuredItems });
+        }
         const relatedItems = [];
         const seenRelatedItems = new Set();
         const relatedSections = [...document.querySelectorAll('ytmusic-player-page ytmusic-carousel-shelf-renderer')]
