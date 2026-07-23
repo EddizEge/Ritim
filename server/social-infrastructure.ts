@@ -112,6 +112,7 @@ export function createSocialInfrastructure(
   const configured = Boolean(databaseConfigured && redisConfigured)
   let postgresStatus: InfrastructureStatus = configured ? 'connecting' : 'disabled'
   let redisStatus: InfrastructureStatus = configured ? 'connecting' : 'disabled'
+  let durableSocialEvents = false
   const pool = databaseConfigured
     ? new Pool({
         ...(config.databaseUrl
@@ -164,10 +165,12 @@ export function createSocialInfrastructure(
       required: config.required,
       postgres: postgresStatus,
       redis: redisStatus,
-      // Alpha.2'nin bu ilk diliminde bağlantılar hazırdır; sosyal olayların
-      // repository katmanına taşınması ayrı bir sonraki adımdır.
-      durableSocialEvents: false,
+      durableSocialEvents,
     }
+  }
+
+  function setDurableSocialEvents(value: boolean) {
+    durableSocialEvents = Boolean(value)
   }
 
   async function probe() {
@@ -213,6 +216,7 @@ export function createSocialInfrastructure(
     pool,
     redis,
     health,
+    setDurableSocialEvents,
     probe,
     start,
     close,

@@ -10,10 +10,13 @@ revoke all on schema ritim from public;
 create table ritim.users (
   id bigint generated always as identity primary key,
   public_id uuid not null default gen_random_uuid() unique,
+  legacy_account_id_hash bytea unique,
   oidc_issuer text,
   oidc_subject text,
   display_name text not null check (char_length(display_name) between 1 and 60),
   handle text not null check (handle ~ '^@[a-z0-9_]{3,32}$'),
+  initials text not null default 'R' check (char_length(initials) between 1 and 3),
+  avatar_tone smallint not null default 0 check (avatar_tone between 0 and 11),
   avatar_url text,
   profile_visibility text not null default 'everyone'
     check (profile_visibility in ('everyone', 'contacts', 'hidden')),
@@ -64,8 +67,10 @@ create table ritim.conversations (
   id bigint generated always as identity primary key,
   public_id uuid not null default gen_random_uuid() unique,
   kind text not null default 'direct' check (kind in ('direct')),
+  direct_key text unique,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint conversations_direct_key_required check (kind <> 'direct' or direct_key is not null)
 );
 
 create table ritim.conversation_members (
@@ -133,6 +138,7 @@ create table ritim.listening_rooms (
   public_id uuid not null default gen_random_uuid() unique,
   owner_id bigint not null references ritim.users(id) on delete cascade,
   title text not null check (char_length(title) between 1 and 100),
+  cover smallint not null default 0 check (cover between 0 and 11),
   current_video_id text,
   playback_position_ms integer not null default 0 check (playback_position_ms >= 0),
   playback_state text not null default 'paused' check (playback_state in ('playing', 'paused')),
