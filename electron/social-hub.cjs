@@ -172,12 +172,31 @@ function createSocialHub(io, { store } = {}) {
     }
   }
 
+  function profileForIdentity(profile, identity) {
+    if (!identity) return profile
+    return {
+      ...profile,
+      displayName: identity.displayName,
+      handle: identity.handle,
+      initials: identity.initials,
+      avatarUrl: identity.avatarUrl,
+      avatarTone: identity.avatarTone,
+    }
+  }
+
   function attach(socket) {
     socket.on('social:join', safely('Katılım kaydedilemedi', async ({ accountId, deviceId, deviceRole, profile } = {}) => {
-      const normalizedAccountId = cleanText(accountId, 80)
-      const normalizedDeviceId = cleanText(deviceId, 100)
-      const normalizedRole = deviceRole === 'desktop' ? 'desktop' : 'companion'
-      const sanitized = sanitizeProfile(normalizedAccountId, normalizedRole, profile)
+      const identity = socket.data.socialIdentity
+      const normalizedAccountId = cleanText(identity?.accountId || accountId, 80)
+      const normalizedDeviceId = cleanText(identity?.deviceId || deviceId, 100)
+      const normalizedRole = identity
+        ? (identity.deviceRole === 'companion' ? 'companion' : 'desktop')
+        : (deviceRole === 'desktop' ? 'desktop' : 'companion')
+      const sanitized = sanitizeProfile(
+        normalizedAccountId,
+        normalizedRole,
+        profileForIdentity(profile, identity),
+      )
       if (!normalizedAccountId || !normalizedDeviceId || !sanitized) return
       socket.data.socialAccountId = normalizedAccountId
       socket.data.socialDeviceId = normalizedDeviceId
@@ -192,7 +211,11 @@ function createSocialHub(io, { store } = {}) {
       const deviceId = socket.data.socialDeviceId
       const deviceRole = socket.data.socialDeviceRole
       if (!accountId || !deviceId || !deviceRole) return
-      const sanitized = sanitizeProfile(accountId, deviceRole, profile)
+      const sanitized = sanitizeProfile(
+        accountId,
+        deviceRole,
+        profileForIdentity(profile, socket.data.socialIdentity),
+      )
       if (!sanitized) return
       socket.data.socialProfile = sanitized
       if (store) await store.upsertProfile(accountId, deviceId, sanitized)

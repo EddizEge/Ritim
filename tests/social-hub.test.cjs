@@ -102,3 +102,57 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     await new Promise((resolve) => httpServer.close(resolve))
   })
 })
+
+test('doğrulanmış socket kimliği istemcinin account ve profil iddiasını ezer', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  const verifiedIdentity = {
+    accountId: '10000000-0000-4000-8000-000000000001',
+    deviceId: '20000000-0000-4000-8000-000000000001',
+    sessionId: '30000000-0000-4000-8000-000000000001',
+    deviceRole: 'companion',
+    displayName: 'Doğrulanmış Kullanıcı',
+    handle: '@verified_user',
+    initials: 'DK',
+    avatarUrl: 'https://example.test/verified.png',
+    avatarTone: 7,
+  }
+  io.on('connection', (socket) => {
+    socket.data.socialIdentity = verifiedIdentity
+    hub.attach(socket)
+  })
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const address = httpServer.address()
+  const client = createClient(`http://127.0.0.1:${address.port}`, {
+    transports: ['websocket'],
+  })
+  context.after(async () => {
+    client.disconnect()
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+
+  const statePromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Doğrulanmış sosyal durum gelmedi')), 2000)
+    client.on('social:state', (state) => {
+      clearTimeout(timer)
+      resolve(state)
+    })
+  })
+  await new Promise((resolve) => client.once('connect', resolve))
+  client.emit('social:join', {
+    accountId: 'spoofed-account',
+    deviceId: 'spoofed-device',
+    deviceRole: 'desktop',
+    profile: profile('spoofed-account', 'Sahte Kullanıcı', 'desktop'),
+  })
+  const state = await statePromise
+
+  assert.equal(state.currentUser.id, verifiedIdentity.accountId)
+  assert.equal(state.currentUser.displayName, verifiedIdentity.displayName)
+  assert.equal(state.currentUser.handle, verifiedIdentity.handle)
+  assert.equal(state.currentUser.avatarUrl, verifiedIdentity.avatarUrl)
+  assert.equal(state.companionConnected, true)
+})

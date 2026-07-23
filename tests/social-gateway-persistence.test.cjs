@@ -6,6 +6,10 @@ const gatewayUrl = process.env.RITIM_SOCIAL_TEST_URL
 const phase = process.env.RITIM_SOCIAL_TEST_PHASE || 'seed'
 const messageText = 'Alpha2 kalıcı mesaj'
 const roomTitle = 'Alpha2 kalıcı oda'
+const accountA = process.env.RITIM_SOCIAL_TEST_ACCOUNT_A || 'alpha2-persistence-account-a'
+const accountB = process.env.RITIM_SOCIAL_TEST_ACCOUNT_B || 'alpha2-persistence-account-b'
+const accessTokenA = process.env.RITIM_SOCIAL_TEST_ACCESS_TOKEN_A
+const accessTokenB = process.env.RITIM_SOCIAL_TEST_ACCESS_TOKEN_B
 
 function profile(id, displayName) {
   return {
@@ -18,11 +22,12 @@ function profile(id, displayName) {
   }
 }
 
-async function connect(name, accountId, states) {
+async function connect(name, accountId, states, accessToken) {
   const client = createClient(gatewayUrl, {
     autoConnect: false,
     transports: ['websocket'],
     reconnection: false,
+    ...(accessToken ? { auth: { accessToken } } : {}),
   })
   client.on('social:state', (state) => states.set(name, state))
   client.connect()
@@ -57,10 +62,8 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
   skip: !gatewayUrl,
 }, async (context) => {
   const states = new Map()
-  const accountA = 'alpha2-persistence-account-a'
-  const accountB = 'alpha2-persistence-account-b'
-  const clientA = await connect('Alpha Bir', accountA, states)
-  const clientB = await connect('Alpha İki', accountB, states)
+  const clientA = await connect('Alpha Bir', accountA, states, accessTokenA)
+  const clientB = await connect('Alpha İki', accountB, states, accessTokenB)
   context.after(() => {
     clientA.disconnect()
     clientB.disconnect()

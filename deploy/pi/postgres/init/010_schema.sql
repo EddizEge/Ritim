@@ -50,17 +50,26 @@ create index devices_active_user_idx on ritim.devices (user_id, last_seen_at des
 
 create table ritim.sessions (
   id bigint generated always as identity primary key,
+  public_id uuid not null default gen_random_uuid() unique,
   user_id bigint not null references ritim.users(id) on delete cascade,
   device_id bigint not null references ritim.devices(id) on delete cascade,
   refresh_token_hash bytea not null unique,
+  token_family_id uuid not null default gen_random_uuid(),
+  parent_session_id bigint references ritim.sessions(id) on delete set null,
   expires_at timestamptz not null,
+  last_used_at timestamptz,
   rotated_at timestamptz,
   revoked_at timestamptz,
+  reuse_detected_at timestamptz,
   created_at timestamptz not null default now()
 );
 create index sessions_user_id_idx on ritim.sessions (user_id);
 create index sessions_device_id_idx on ritim.sessions (device_id);
+create index sessions_parent_session_id_idx on ritim.sessions (parent_session_id)
+  where parent_session_id is not null;
 create index sessions_active_expiry_idx on ritim.sessions (expires_at)
+  where revoked_at is null;
+create index sessions_active_family_idx on ritim.sessions (token_family_id, created_at desc)
   where revoked_at is null;
 
 create table ritim.conversations (
