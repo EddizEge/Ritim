@@ -10,7 +10,6 @@ const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
 
-const isDev = !app.isPackaged
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
 const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '1528122277500030976'
@@ -384,22 +383,20 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     safeStorage,
     shell,
   })
-  if (!isDev) {
-    const { startSyncServer } = require('./sync-server.cjs')
-    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
-      pairingToken: activePairingToken,
-      getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
-    })
-    if (!syncServer.listening) {
-      try {
-        await new Promise((resolve, reject) => {
-          syncServer.once('listening', resolve)
-          syncServer.once('error', reject)
-        })
-      } catch (error) {
-        console.error('[Ritim] Telefon köprüsü başlatılamadı:', error)
-        syncServer = null
-      }
+  const { startSyncServer } = require('./sync-server.cjs')
+  syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
+    pairingToken: activePairingToken,
+    getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
+  })
+  if (!syncServer.listening) {
+    try {
+      await new Promise((resolve, reject) => {
+        syncServer.once('listening', resolve)
+        syncServer.once('error', reject)
+      })
+    } catch (error) {
+      console.error('[Ritim] Telefon köprüsü başlatılamadı:', error)
+      syncServer = null
     }
   }
   presence = createDiscordPresence(DISCORD_CLIENT_ID)
@@ -480,7 +477,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       phoneUrl: url,
       qrDataUrl,
       room: ROOM,
-      serverReady: Boolean(syncServer?.listening || isDev),
+      serverReady: Boolean(syncServer?.listening),
       updateStatus: updateController?.getStatus(),
       socialAuth: socialAuthStatus,
     }
