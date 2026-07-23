@@ -30,7 +30,8 @@ function RitimApp({ isCompanion }: { isCompanion: boolean }) {
   const youtube = useYouTubeLibrary()
   const track = getTrack(player.state)
   const social = useSocial({
-    displayName: youtube.status.channelTitle,
+    displayName: player.state.accountProfile?.displayName || youtube.status.channelTitle,
+    avatarUrl: player.state.accountProfile?.avatarUrl,
     isCompanion,
     currentTrack: {
       id: track.id,

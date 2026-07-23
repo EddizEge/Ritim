@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { io } from 'socket.io-client'
 import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
-import { ritimRoom, ritimSocket } from './usePlayerSync'
+import { ritimPairingToken, ritimRoom, ritimSyncUrl } from './usePlayerSync'
 
 type Options = {
   displayName?: string
+  avatarUrl?: string
   currentTrack: SocialTrack
   isCompanion: boolean
 }
@@ -29,6 +31,15 @@ function profileHandle(displayName: string, isCompanion: boolean) {
   return `@${normalized || (isCompanion ? 'telefon' : 'ritimpc')}`
 }
 
+export function stableSocialAccountId(seed: string) {
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `ritim-${(hash >>> 0).toString(36)}`
+}
+
 function socialDeviceId(isCompanion: boolean) {
   const key = isCompanion ? 'ritim-social-phone-id' : 'ritim-social-web-id'
   const existing = localStorage.getItem(key)
@@ -38,21 +49,46 @@ function socialDeviceId(isCompanion: boolean) {
   return value
 }
 
-export function useSocial({ displayName, currentTrack, isCompanion }: Options): { state: SocialState; actions: SocialActions } {
+function defaultSocialUrl() {
+  try {
+    const url = new URL(ritimSyncUrl)
+    url.port = '8790'
+    return url.origin
+  } catch {
+    return `${window.location.protocol}//${window.location.hostname}:8790`
+  }
+}
+
+const socialUrl = import.meta.env.VITE_SOCIAL_URL || defaultSocialUrl()
+const socialSocket = io(socialUrl, {
+  autoConnect: false,
+  timeout: 3000,
+  reconnectionDelay: 900,
+})
+
+export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }: Options): { state: SocialState; actions: SocialActions } {
+  const accountId = useMemo(() => stableSocialAccountId(ritimPairingToken || ritimRoom), [])
   const deviceId = useMemo(() => socialDeviceId(isCompanion), [isCompanion])
+  const deviceRole = isCompanion ? 'companion' : 'desktop'
   const resolvedName = displayName?.trim() || (isCompanion ? 'Ritim Telefon' : 'Ritim Web')
-  const [connectionStatus, setConnectionStatus] = useState<SocialState['connectionStatus']>(() => ritimSocket.connected ? 'online' : 'connecting')
+  const [connectionStatus, setConnectionStatus] = useState<SocialState['connectionStatus']>(() => socialSocket.connected ? 'online' : 'connecting')
+
+  const localProfile = useMemo<SocialUser>(() => ({
+    id: accountId,
+    displayName: resolvedName,
+    handle: profileHandle(resolvedName, isCompanion),
+    initials: profileInitials(resolvedName),
+    avatarUrl,
+    avatarTone: isCompanion ? 3 : 5,
+    presence: 'online',
+    currentTrack,
+    reactionCount: 0,
+  }), [accountId, avatarUrl, currentTrack, isCompanion, resolvedName])
+
   const [snapshot, setSnapshot] = useState<SocialSnapshot>(() => ({
-    currentUser: {
-      id: deviceId,
-      displayName: resolvedName,
-      handle: profileHandle(resolvedName, isCompanion),
-      initials: profileInitials(resolvedName),
-      avatarTone: isCompanion ? 3 : 5,
-      presence: 'online',
-      currentTrack,
-      reactionCount: 0,
-    },
+    currentUser: localProfile,
+    currentDeviceCount: 1,
+    companionConnected: isCompanion,
     users: [],
     rooms: [],
     conversations: {},
@@ -60,30 +96,32 @@ export function useSocial({ displayName, currentTrack, isCompanion }: Options): 
   }))
   const selectedUserIdRef = useRef('')
   selectedUserIdRef.current = snapshot.selectedUserId
+  const profileRef = useRef(localProfile)
+  profileRef.current = localProfile
 
-  const currentUser = useMemo<SocialUser>(() => ({
-    id: deviceId,
-    displayName: resolvedName,
-    handle: profileHandle(resolvedName, isCompanion),
-    initials: profileInitials(resolvedName),
-    avatarTone: isCompanion ? 3 : 5,
-    presence: 'online',
-    currentTrack,
-    reactionCount: snapshot.currentUser.reactionCount,
-    lastReaction: snapshot.currentUser.lastReaction,
-  }), [currentTrack, deviceId, isCompanion, resolvedName, snapshot.currentUser.lastReaction, snapshot.currentUser.reactionCount])
+  const joinSocialAccount = useCallback(() => {
+    socialSocket.emit('social:join', {
+      accountId,
+      deviceId,
+      deviceRole,
+      profile: profileRef.current,
+    })
+  }, [accountId, deviceId, deviceRole])
 
   useEffect(() => {
-    const publishProfile = () => {
-      if (!ritimSocket.connected) return
-      ritimSocket.emit('social:profile', { room: ritimRoom, profile: currentUser })
-    }
     const onConnect = () => {
       setConnectionStatus('online')
-      queueMicrotask(publishProfile)
+      joinSocialAccount()
     }
-    const onDisconnect = () => setConnectionStatus('offline')
-    const onRoomStatus = () => publishProfile()
+    const onDisconnect = () => {
+      setConnectionStatus('offline')
+      setSnapshot((previous) => ({
+        ...previous,
+        users: previous.users.map((user) => ({ ...user, presence: 'offline' })),
+      }))
+    }
+    const onConnectError = () => setConnectionStatus('offline')
+    const onReconnectAttempt = () => setConnectionStatus('connecting')
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
       setSnapshot((previous) => {
@@ -96,52 +134,64 @@ export function useSocial({ displayName, currentTrack, isCompanion }: Options): 
       })
     }
 
-    ritimSocket.on('connect', onConnect)
-    ritimSocket.on('disconnect', onDisconnect)
-    ritimSocket.on('room:status', onRoomStatus)
-    ritimSocket.on('social:state', onSocialState)
-    publishProfile()
+    socialSocket.on('connect', onConnect)
+    socialSocket.on('disconnect', onDisconnect)
+    socialSocket.on('connect_error', onConnectError)
+    socialSocket.on('social:state', onSocialState)
+    socialSocket.io.on('reconnect_attempt', onReconnectAttempt)
+    if (!socialSocket.connected) socialSocket.connect()
+    else joinSocialAccount()
 
     return () => {
-      ritimSocket.off('connect', onConnect)
-      ritimSocket.off('disconnect', onDisconnect)
-      ritimSocket.off('room:status', onRoomStatus)
-      ritimSocket.off('social:state', onSocialState)
+      socialSocket.off('connect', onConnect)
+      socialSocket.off('disconnect', onDisconnect)
+      socialSocket.off('connect_error', onConnectError)
+      socialSocket.off('social:state', onSocialState)
+      socialSocket.io.off('reconnect_attempt', onReconnectAttempt)
+      socialSocket.disconnect()
     }
-  }, [currentUser])
+  }, [joinSocialAccount])
+
+  useEffect(() => {
+    if (socialSocket.connected) socialSocket.emit('social:profile', { profile: localProfile })
+  }, [localProfile])
 
   const selectUser = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
   }, [])
 
   const reactToUser = useCallback((userId: string, reaction = '♥') => {
-    ritimSocket.emit('social:reaction', { room: ritimRoom, targetUserId: userId, reaction })
+    socialSocket.emit('social:reaction', { targetUserId: userId, reaction })
   }, [])
 
   const sendMessage = useCallback((userId: string, text: string) => {
     const cleanText = text.trim().slice(0, 500)
     if (!cleanText) return
-    ritimSocket.emit('social:message', { room: ritimRoom, targetUserId: userId, text: cleanText })
+    socialSocket.emit('social:message', { targetUserId: userId, text: cleanText })
   }, [])
 
   const toggleListeningWith = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
-    ritimSocket.emit('social:listening', { room: ritimRoom, targetUserId: userId })
+    socialSocket.emit('social:listening', { targetUserId: userId })
   }, [])
 
   const createRoom = useCallback(() => {
-    ritimSocket.emit('social:create-room', {
-      room: ritimRoom,
+    socialSocket.emit('social:create-room', {
       title: currentTrack.title || `${resolvedName} dinliyor`,
       cover: currentTrack.cover,
     })
   }, [currentTrack.cover, currentTrack.title, resolvedName])
 
+  const reconnectSocial = useCallback(() => {
+    setConnectionStatus('connecting')
+    if (socialSocket.connected) joinSocialAccount()
+    else socialSocket.connect()
+  }, [joinSocialAccount])
+
   return {
     state: {
       ...snapshot,
       connectionStatus,
-      currentUser,
     },
     actions: {
       selectUser,
@@ -149,6 +199,7 @@ export function useSocial({ displayName, currentTrack, isCompanion }: Options): 
       sendMessage,
       toggleListeningWith,
       createRoom,
+      reconnectSocial,
     },
   }
 }
