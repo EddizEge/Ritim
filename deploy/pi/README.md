@@ -40,6 +40,11 @@ Bu klasör Alpha.2'nin ilk, henüz internete açılmayan Pi temelidir.
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.
 
+Windows istemci testinde gateway adresi `RITIM_SOCIAL_URL`, bu listedeki
+masaüstü OAuth client ID ise `RITIM_SOCIAL_GOOGLE_CLIENT_ID` ortam değişkeniyle
+verilir. Telefon ayrıca Google tokenı almaz; eşlenmiş PC'den tek kullanımlık
+companion ticket alarak aynı Ritim hesabına bağlanır.
+
 ## Ağ sınırı
 
 - PostgreSQL `5432` ve Redis `6379` yalnızca `ritim_backend` dahili ağındadır

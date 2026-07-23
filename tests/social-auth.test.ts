@@ -6,6 +6,7 @@ import {
 } from '../server/social-auth.js'
 import type {
   AuthIdentity,
+  CompanionTicketStore,
   GoogleIdentityProvider,
   SocialAuthConfig,
   SocialAuthRepository,
@@ -53,6 +54,22 @@ function createFakeAuthDependencies() {
   const repository: SocialAuthRepository = {
     async createIdentitySession(_input, tokenHash) {
       const identity = { ...baseIdentity, sessionId: nextSessionId() }
+      const family = {
+        revoked: false,
+        records: new Map([[tokenHash.toString('hex'), { rotated: false, identity }]]),
+      }
+      families.set(identity.sessionId, family)
+      sessions.set(identity.sessionId, { family, identity })
+      return identity
+    },
+    async createCompanionSession(accountId, _input, tokenHash) {
+      const identity = {
+        ...baseIdentity,
+        accountId,
+        deviceId: '20000000-0000-4000-8000-000000000002',
+        sessionId: nextSessionId(),
+        deviceRole: 'companion' as const,
+      }
       const family = {
         revoked: false,
         records: new Map([[tokenHash.toString('hex'), { rotated: false, identity }]]),
@@ -119,6 +136,23 @@ function createFakeAuthDependencies() {
   }
 
   return { repository, google }
+}
+
+function createFakeCompanionTickets(): CompanionTicketStore {
+  const tickets = new Map<string, string>()
+  let sequence = 0
+  return {
+    async issue(accountId) {
+      const ticket = `ritim_ct1_${String(++sequence).padStart(43, 'a')}`
+      tickets.set(ticket, accountId)
+      return { ticket, expiresIn: 120 }
+    },
+    async consume(ticket) {
+      const accountId = tickets.get(ticket) || null
+      tickets.delete(ticket)
+      return accountId
+    },
+  }
 }
 
 const loginInput = {
@@ -188,5 +222,30 @@ test('cihaz iptali mevcut access tokenını hemen geçersiz kılar', async () =>
   await assert.rejects(
     service.verifyAccessToken(tokens.accessToken),
     /iptal edilmiş/,
+  )
+})
+
+test('PC tek kullanımlık ticket ile telefonu aynı hesaba ekler', async () => {
+  const { repository, google } = createFakeAuthDependencies()
+  const tickets = createFakeCompanionTickets()
+  const service = createSocialAuthService(authConfig, repository, google, tickets)
+  const desktopTokens = await service.loginWithGoogleIdToken(loginInput)
+  const desktopIdentity = await service.verifyAccessToken(desktopTokens.accessToken)
+  const ticket = await service.createCompanionTicket(desktopIdentity)
+  const companionTokens = await service.exchangeCompanionTicket({
+    ticket: ticket.ticket,
+    deviceKey: 'companion-device-key-1234567890',
+    deviceName: 'Ediz Telefon',
+  })
+
+  assert.equal(companionTokens.user.id, desktopTokens.user.id)
+  assert.equal(companionTokens.device.role, 'companion')
+  await assert.rejects(
+    service.exchangeCompanionTicket({
+      ticket: ticket.ticket,
+      deviceKey: 'second-companion-key-123456789',
+      deviceName: 'İkinci Telefon',
+    }),
+    /geçersiz veya süresi dolmuş/,
   )
 })

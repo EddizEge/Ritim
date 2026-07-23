@@ -62,6 +62,72 @@ test('auth-required gateway token olmadan reddeder ve doğrulanmış kimliği ku
   assert.equal(state.currentUser.id, expectedAccountId)
   assert.notEqual(state.currentUser.displayName, 'Sahte Kullanıcı')
 
+  const ticketResponse = await fetch(`${gatewayUrl}/auth/companion-ticket`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  assert.equal(ticketResponse.status, 200)
+  const ticket = await ticketResponse.json()
+  const companionResponse = await fetch(`${gatewayUrl}/auth/companion/exchange`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ticket: ticket.ticket,
+      deviceKey: 'gateway-companion-device-key-123456',
+      deviceName: 'Gateway Test Telefon',
+    }),
+  })
+  assert.equal(companionResponse.status, 200)
+  const companionTokens = await companionResponse.json()
+  assert.equal(companionTokens.user.id, expectedAccountId)
+  assert.equal(companionTokens.device.role, 'companion')
+  const reusedTicket = await fetch(`${gatewayUrl}/auth/companion/exchange`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ticket: ticket.ticket,
+      deviceKey: 'gateway-second-phone-key-12345678',
+      deviceName: 'İkinci Test Telefon',
+    }),
+  })
+  assert.equal(reusedTicket.status, 401)
+
+  const companion = createClient(gatewayUrl, {
+    autoConnect: false,
+    transports: ['websocket'],
+    reconnection: false,
+    auth: { accessToken: companionTokens.accessToken },
+  })
+  context.after(() => companion.disconnect())
+  const companionState = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Telefon sosyal durumu gelmedi')), 5_000)
+    companion.on('social:state', (next) => {
+      if (next.currentDeviceCount < 2) return
+      clearTimeout(timer)
+      resolve(next)
+    })
+  })
+  companion.connect()
+  await new Promise((resolve, reject) => {
+    companion.once('connect', resolve)
+    companion.once('connect_error', reject)
+  })
+  companion.emit('social:join', {
+    accountId: 'spoofed-phone-account',
+    deviceId: 'spoofed-phone-device',
+    deviceRole: 'desktop',
+    profile: {
+      id: 'spoofed-phone-account',
+      displayName: 'Sahte Telefon',
+      handle: '@spoofed_phone',
+      initials: 'ST',
+      avatarTone: 9,
+    },
+  })
+  const linkedPhone = await companionState
+  assert.equal(linkedPhone.currentUser.id, expectedAccountId)
+  assert.equal(linkedPhone.companionConnected, true)
+
   const revokeResponse = await fetch(`${gatewayUrl}/auth/device/current`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${accessToken}` },

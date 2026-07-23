@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, safeStorage, shell } = require('electron')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -6,6 +6,7 @@ const path = require('node:path')
 const QRCode = require('qrcode')
 const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
+const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
 
@@ -22,6 +23,9 @@ let syncServer
 let presence
 let musicBridge
 let socialSocket
+let socialAuth
+let socialAuthStatus = { configured: false, required: false, authenticated: false }
+let socialStartSequence = 0
 let latestSocialState
 let socialConnectionStatus = 'connecting'
 let latestPlayerState
@@ -44,6 +48,7 @@ if (!hasSingleInstanceLock) {
 }
 
 function stopRuntime() {
+  socialStartSequence += 1
   socialSocket?.disconnect()
   socialSocket = null
   musicBridge?.destroy()
@@ -202,17 +207,32 @@ function broadcastSocialState(status, incomingState) {
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
     activeRoomId: previous?.activeRoomId,
+    authentication: socialAuthStatus,
     connectionStatus: status,
   }
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', latestSocialState)
 }
 
-function startSocialClient() {
+async function startSocialClient({ forceRefresh = false } = {}) {
+  const sequence = ++socialStartSequence
   socialSocket?.disconnect()
   broadcastSocialState('connecting')
+  let accessToken = ''
+  try {
+    const [status, token] = await Promise.all([
+      socialAuth?.status(),
+      socialAuth?.accessToken({ forceRefresh }),
+    ])
+    socialAuthStatus = status || socialAuthStatus
+    accessToken = token || ''
+  } catch (error) {
+    console.warn('[Ritim Social] Oturum hazırlanamadı:', error?.message || error)
+  }
+  if (sequence !== socialStartSequence || isShuttingDown) return
   socialSocket = io(SOCIAL_URL, {
     timeout: 3000,
     reconnectionDelay: 900,
+    ...(accessToken ? { auth: { accessToken } } : {}),
   })
   socialSocket.on('connect', () => {
     broadcastSocialState('connecting')
@@ -224,7 +244,20 @@ function startSocialClient() {
     })
   })
   socialSocket.on('disconnect', () => broadcastSocialState('offline'))
-  socialSocket.on('connect_error', () => broadcastSocialState('offline'))
+  let authRetryUsed = false
+  socialSocket.on('connect_error', (error) => {
+    broadcastSocialState('offline')
+    if (
+      accessToken
+      && !authRetryUsed
+      && /oturumu geçersiz/i.test(String(error?.message || ''))
+    ) {
+      authRetryUsed = true
+      void socialAuth?.invalidateAccessToken()
+        .then(() => startSocialClient({ forceRefresh: true }))
+        .catch(() => {})
+    }
+  })
   socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
   socialSocket.on('social:state', (state) => {
     broadcastSocialState('online', state)
@@ -345,9 +378,18 @@ function createWindow() {
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   const activePairingToken = getPairingToken()
+  socialAuth = createSocialAuthClient({
+    baseUrl: SOCIAL_URL,
+    userDataPath: app.getPath('userData'),
+    safeStorage,
+    shell,
+  })
   if (!isDev) {
     const { startSyncServer } = require('./sync-server.cjs')
-    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, { pairingToken: activePairingToken })
+    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
+      pairingToken: activePairingToken,
+      getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
+    })
     if (!syncServer.listening) {
       try {
         await new Promise((resolve, reject) => {
@@ -379,13 +421,33 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     rooms: [],
     conversations: {},
     selectedUserId: '',
+    authentication: socialAuthStatus,
     connectionStatus: socialConnectionStatus,
   })
   ipcMain.on('shell:social-action', (_event, action = {}) => {
     if (action.type === 'reconnect') {
       broadcastSocialState('connecting')
       if (socialSocket?.connected) publishDesktopSocialProfile()
-      else socialSocket?.connect()
+      else void startSocialClient()
+      return
+    }
+    if (action.type === 'sign-in') {
+      void socialAuth?.signIn()
+        .then(async () => {
+          socialAuthStatus = await socialAuth.status()
+          await startSocialClient()
+        })
+        .catch((error) => {
+          console.error('[Ritim Social] Google ile giriş tamamlanamadı:', error)
+          broadcastSocialState('offline')
+        })
+      return
+    }
+    if (action.type === 'sign-out') {
+      void socialAuth?.signOut().then(async (status) => {
+        socialAuthStatus = status
+        await startSocialClient()
+      })
       return
     }
     if (!socialSocket?.connected) return
@@ -420,6 +482,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       room: ROOM,
       serverReady: Boolean(syncServer?.listening || isDev),
       updateStatus: updateController?.getStatus(),
+      socialAuth: socialAuthStatus,
     }
   })
   ipcMain.handle('settings:copy-url', () => {
@@ -435,7 +498,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('settings:install-update', () => updateController?.install() || false)
 
   createWindow()
-  startSocialClient()
+  void startSocialClient()
   setTimeout(() => void updateController?.check(), 3500)
   app.on('activate', () => {
     if (!isShuttingDown && BrowserWindow.getAllWindows().length === 0) createWindow()

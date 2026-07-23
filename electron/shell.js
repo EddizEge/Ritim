@@ -6,6 +6,7 @@ const emptySettingsButton = document.getElementById('empty-settings-button')
 const connectionStatus = document.getElementById('connection-status')
 const socialCount = document.getElementById('social-count')
 const socialServiceNote = document.getElementById('social-service-note')
+const socialAuthButton = document.getElementById('social-auth-button')
 const socialRetryButton = document.getElementById('social-retry-button')
 const onlineCount = document.getElementById('online-count')
 const peopleSearchInput = document.getElementById('people-search-input')
@@ -195,14 +196,21 @@ function render() {
   createRoomButton.disabled = !socialOnline
   listenButton.disabled = !socialOnline
   messageInput.disabled = !socialOnline
+  const authentication = socialState?.authentication || {}
+  const needsAuthentication = authentication.required && !authentication.authenticated
   createRoomButton.lastChild.textContent = socialState?.activeRoomId ? ' Odan hazır' : ' Dinleme odası oluştur'
   socialServiceNote.className = `social-service-note is-${socialState?.connectionStatus || 'connecting'}`
-  socialServiceNote.querySelector('span').textContent = socialOnline
-    ? 'Ritim Social bağlantısı kuruldu.'
-    : socialState?.connectionStatus === 'offline'
-      ? 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
-      : 'Ritim Social’a bağlanıyor…'
-  socialRetryButton.hidden = socialState?.connectionStatus !== 'offline'
+  socialServiceNote.querySelector('span').textContent = needsAuthentication
+    ? 'Sosyal özellikler için Google hesabını Ritim Social’a bağla.'
+    : socialOnline
+      ? `Ritim Social bağlantısı kuruldu${authentication.user?.displayName ? ` • ${authentication.user.displayName}` : ''}.`
+      : socialState?.connectionStatus === 'offline'
+        ? 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
+        : 'Ritim Social’a bağlanıyor…'
+  socialAuthButton.hidden = !authentication.configured
+  socialAuthButton.textContent = authentication.authenticated ? 'Hesaptan çık' : 'Google ile bağlan'
+  socialAuthButton.dataset.action = authentication.authenticated ? 'sign-out' : 'sign-in'
+  socialRetryButton.hidden = socialState?.connectionStatus !== 'offline' || needsAuthentication
   renderPeople()
   renderChat()
   renderRooms()
@@ -218,6 +226,9 @@ listenButton.addEventListener('click', () => {
 })
 createRoomButton.addEventListener('click', () => window.ritimShell?.sendSocialAction('create-room', {}))
 socialRetryButton.addEventListener('click', () => window.ritimShell?.sendSocialAction('reconnect', {}))
+socialAuthButton.addEventListener('click', () => {
+  window.ritimShell?.sendSocialAction(socialAuthButton.dataset.action || 'sign-in', {})
+})
 peopleSearchInput.addEventListener('input', () => {
   peopleQuery = peopleSearchInput.value
   renderPeople()
