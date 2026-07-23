@@ -3,6 +3,7 @@ const { createServer } = require('node:http')
 const crypto = require('node:crypto')
 const path = require('node:path')
 const { Server } = require('socket.io')
+const { createSocialHub } = require('./social-hub.cjs')
 
 function safeEqual(left, right) {
   const a = Buffer.from(String(left || ''))
@@ -30,6 +31,7 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
 
   const server = createServer(app)
   const io = new Server(server, { cors: { origin: true, credentials: true } })
+  const socialHub = createSocialHub(io)
   const rooms = new Map()
   const commandOwners = new Map()
   let fallbackCommandSequence = 0
@@ -39,7 +41,7 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
     return [...socketIds].map((id) => io.sockets.sockets.get(id)).filter(Boolean)
   }
   const roomStatus = (room) => {
-    const sockets = socketsInRoom(room)
+    const sockets = socketsInRoom(room).filter((socket) => socket.data.role !== 'social-desktop')
     return {
       peerCount: sockets.length,
       desktopOnline: sockets.some((socket) => socket.data.role === 'desktop'),
@@ -63,6 +65,7 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
   }
 
   io.on('connection', (socket) => {
+    socialHub.attach(socket)
     socket.on('room:join', ({ room, role, state, token }) => {
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom) return
@@ -71,7 +74,7 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
         socket.emit('pairing:error', 'Bu QR kodun süresi dolmuş. PC’den yeni QR kodu tara.')
         return
       }
-      const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
+      const normalizedRole = role === 'companion' ? 'companion' : role === 'social-desktop' ? 'social-desktop' : 'desktop'
       socket.join(normalizedRoom)
       socket.data.room = normalizedRoom
       socket.data.role = normalizedRole
@@ -90,7 +93,8 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
       }
 
       const record = rooms.get(normalizedRoom)
-      if (record) socket.emit('player:state', record.state)
+      if (record && normalizedRole !== 'social-desktop') socket.emit('player:state', record.state)
+      socialHub.joined(socket, normalizedRoom)
       emitRoomStatus(normalizedRoom)
     })
 
@@ -144,13 +148,14 @@ function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
     socket.on('disconnect', () => {
       const room = socket.data.room
       if (!room) return
+      socialHub.disconnected(socket)
       const record = rooms.get(room)
       if (record?.desktopSocketId === socket.id) {
         const replacement = socketsInRoom(room).find((peer) => peer.data.role === 'desktop')
         record.desktopSocketId = replacement?.id || ''
       }
       emitRoomStatus(room)
-      if (roomStatus(room).peerCount === 0) rooms.delete(room)
+      if (socketsInRoom(room).length === 0) rooms.delete(room)
     })
   })
 

@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const QRCode = require('qrcode')
+const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
@@ -19,8 +20,12 @@ let settingsWindow
 let syncServer
 let presence
 let musicBridge
+let socialSocket
+let latestSocialState
+let latestPlayerState
 let updateController
 let isShuttingDown = false
+let activeShellView = 'music'
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -37,6 +42,8 @@ if (!hasSingleInstanceLock) {
 }
 
 function stopRuntime() {
+  socialSocket?.disconnect()
+  socialSocket = null
   musicBridge?.destroy()
   musicBridge = null
   presence?.destroy()
@@ -116,6 +123,70 @@ function resizeMusicView() {
   musicView.setBounds({ x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(0, height - APP_BAR_HEIGHT) })
 }
 
+function setShellView(nextView) {
+  activeShellView = nextView === 'social' ? 'social' : 'music'
+  if (musicView) {
+    musicView.setVisible(activeShellView === 'music')
+    if (activeShellView === 'music') resizeMusicView()
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('shell:view-changed', activeShellView)
+  }
+  return activeShellView
+}
+
+function desktopSocialProfile() {
+  const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
+  return {
+    id: `ritim-pc-${ROOM}`,
+    displayName: `Ritim PC • ${os.hostname()}`,
+    handle: '@ritimpc',
+    initials: 'PC',
+    avatarTone: 0,
+    presence: 'online',
+    currentTrack: track ? {
+      id: track.id,
+      videoId: track.youtubeVideoId,
+      title: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      position: latestPlayerState.position,
+      cover: track.cover,
+      thumbnailUrl: track.thumbnailUrl,
+      isPlaying: latestPlayerState.isPlaying,
+    } : undefined,
+    reactionCount: 0,
+  }
+}
+
+function publishDesktopSocialProfile() {
+  if (!socialSocket?.connected) return
+  socialSocket.emit('social:profile', { room: ROOM, profile: desktopSocialProfile() })
+}
+
+function startSocialClient() {
+  socialSocket?.disconnect()
+  socialSocket = io(process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', {
+    timeout: 3000,
+    reconnectionDelay: 900,
+    auth: { token: getPairingToken() },
+  })
+  socialSocket.on('connect', () => {
+    socialSocket.emit('room:join', {
+      room: ROOM,
+      role: 'social-desktop',
+      state: {},
+      token: getPairingToken(),
+    })
+    queueMicrotask(publishDesktopSocialProfile)
+  })
+  socialSocket.on('room:status', publishDesktopSocialProfile)
+  socialSocket.on('social:state', (state) => {
+    latestSocialState = state
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', state)
+  })
+}
+
 function createMusicView() {
   musicView = new WebContentsView({
     webPreferences: {
@@ -156,6 +227,10 @@ function createMusicView() {
   musicBridge = createYouTubeMusicBridge({
     webContents: musicView.webContents,
     presence,
+    onState: (state) => {
+      latestPlayerState = state
+      publishDesktopSocialProfile()
+    },
     room: ROOM,
     syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
   })
@@ -221,6 +296,7 @@ function createWindow() {
   })
   void mainWindow.loadFile(path.join(__dirname, 'shell.html'))
   createMusicView()
+  setShellView('music')
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
@@ -250,6 +326,23 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   })
 
   ipcMain.on('settings:open', createSettingsWindow)
+  ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
+  ipcMain.handle('shell:get-social-state', () => latestSocialState || null)
+  ipcMain.on('shell:social-action', (_event, action = {}) => {
+    if (!socialSocket?.connected) return
+    const payload = { room: ROOM, ...(action.payload || {}) }
+    if (action.type === 'message') socialSocket.emit('social:message', payload)
+    if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
+    if (action.type === 'listening') socialSocket.emit('social:listening', payload)
+    if (action.type === 'create-room') {
+      const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
+      socialSocket.emit('social:create-room', {
+        ...payload,
+        title: track?.title || 'Ritim PC dinliyor',
+        cover: track?.cover || 0,
+      })
+    }
+  })
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const url = phoneUrl()
@@ -283,6 +376,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('settings:install-update', () => updateController?.install() || false)
 
   createWindow()
+  startSocialClient()
   setTimeout(() => void updateController?.check(), 3500)
   app.on('activate', () => {
     if (!isShuttingDown && BrowserWindow.getAllWindows().length === 0) createWindow()

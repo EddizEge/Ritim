@@ -11,7 +11,7 @@ function parseDuration(value) {
   return parts.reduce((total, part) => total * 60 + part, 0)
 }
 
-function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', syncUrl = 'http://127.0.0.1:8787' }) {
+function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ-4821', syncUrl = 'http://127.0.0.1:8787' }) {
   const idleTrack = {
     id: 'ytmusic:idle', title: 'YouTube Music', artist: 'Bir parça çal', collection: 'music.youtube.com',
     duration: 0, cover: 0, source: 'ytmusic',
@@ -50,6 +50,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   socket.on('player:state', (incoming) => {
     if (!incoming || typeof incoming !== 'object') return
     state = { ...state, ...incoming }
+    onState?.(state)
   })
 
   function sendKey(keyCode) {
@@ -193,6 +194,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
   function publishState() {
     state = { ...state, updatedAt: Date.now() }
     socket.emit('player:update', { room, state })
+    onState?.(state)
   }
 
   function publishAction(status, message) {
@@ -1605,6 +1607,7 @@ function createYouTubeMusicBridge({ webContents, presence, room = 'EDIZ-4821', s
         catalog, browse, lyrics, related, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
+      onState?.(state)
       presence?.update({
         title: track.title,
         artist: track.artist,
