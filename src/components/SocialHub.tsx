@@ -144,7 +144,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
           {state.activeRoomId ? 'Odan hazır' : 'Dinleme odası oluştur'}
         </button>
       </header>
-      <div className="social-preview-note"><span>ALPHA.1</span> Sosyal sunucu bağlanana kadar etkileşimler bu cihazdaki önizleme verisiyle çalışır.</div>
+      <div className="social-preview-note"><span>ALPHA.1</span> {state.connectionStatus === 'online' ? 'Eşlenmiş cihazlarla canlı bağlantı kuruldu.' : 'Ritim PC bağlantısı bekleniyor…'}</div>
       <div className="social-desktop-layout">
         <div className="social-directory">
           <div className="social-section-heading">
@@ -161,7 +161,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
                 actions={actions}
               />
             )) : (
-              <div className="social-no-results"><Search /><b>Kullanıcı bulunamadı</b><p>Başka bir ad, kullanıcı adı veya parça ara.</p></div>
+              <div className="social-no-results"><UsersRound /><b>{deferredQuery ? 'Kullanıcı bulunamadı' : 'Henüz bağlı cihaz yok'}</b><p>{deferredQuery ? 'Başka bir ad, kullanıcı adı veya parça ara.' : 'Telefonu Ritim ayarlarındaki QR kodla eşleştir.'}</p></div>
             )}
           </div>
         </div>
@@ -202,11 +202,11 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
           <div><h1>Sosyal</h1><span><i />{onlineCount} kişi çevrimiçi</span></div>
           <button className={state.activeRoomId ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{state.activeRoomId ? 'Odan hazır' : 'Oda oluştur'}</button>
         </div>
-        <div className="mobile-social-preview"><span>ALPHA.1</span> Yerel sosyal önizleme</div>
+        <div className="mobile-social-preview"><span>ALPHA.1</span> {state.connectionStatus === 'online' ? 'PC ile canlı sosyal bağlantı' : 'PC bağlantısı bekleniyor'}</div>
         <section className="mobile-social-rooms">
           <div className="mobile-social-section-title"><h2>Dinleme odaları</h2><Radio /></div>
           <div className="mobile-room-rail">
-            {state.rooms.map((room) => (
+            {state.rooms.length ? state.rooms.map((room) => (
               <button className={state.activeRoomId === room.id ? 'mobile-room-card is-active' : 'mobile-room-card'} key={room.id}>
                 <Cover index={room.cover} className="mobile-room-cover" label="" />
                 <span className="mobile-room-live"><i />CANLI</span>
@@ -214,14 +214,14 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
                 <small>{room.memberCount} kişi</small>
                 <span className="mobile-room-members">{room.memberInitials.slice(0, 3).map((initials, index) => <i key={`${room.id}-${initials}`}>{initials}</i>)}{room.memberCount > 3 ? <em>+{room.memberCount - 3}</em> : null}</span>
               </button>
-            ))}
+            )) : <div className="social-no-results"><Radio /><b>Henüz oda yok</b><p>İlk dinleme odasını yukarıdan oluştur.</p></div>}
           </div>
         </section>
         <section className="mobile-social-list">
           <div className="mobile-social-section-title"><h2>Şu an dinleyenler</h2><small>{onlineCount} kişi</small></div>
-          {state.users.map((user) => (
+          {state.users.length ? state.users.map((user) => (
             <MobileSocialUserRow key={user.id} user={user} state={state} actions={actions} onMessage={() => setChatOpen(true)} />
-          ))}
+          )) : <div className="social-no-results"><UsersRound /><b>Ritim PC bekleniyor</b><p>PC uygulamasını açık tut ve aynı eşleme odasına bağlan.</p></div>}
         </section>
       </section>
       {chatOpen ? (
