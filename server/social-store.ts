@@ -49,6 +49,7 @@ type StoredRoom = {
 const PRESENCE_TTL_SECONDS = 60
 const PRESENCE_SET_TTL_SECONDS = 120
 const LISTENING_TTL_SECONDS = 120
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function sha256(value: string) {
   return crypto.createHash('sha256').update(value).digest()
@@ -56,6 +57,10 @@ function sha256(value: string) {
 
 function hashHex(value: string) {
   return sha256(value).toString('hex')
+}
+
+function accountKey(value: string) {
+  return UUID_PATTERN.test(value) ? value : hashHex(value)
 }
 
 function databaseHandle(profileHandle: string, accountHash: Buffer) {
@@ -84,10 +89,15 @@ async function inTransaction<T>(pool: Pool, operation: (client: PoolClient) => P
 }
 
 async function findUserId(client: PoolClient, accountId: string) {
-  const result = await client.query<{ id: string }>(
-    'select id from ritim.users where legacy_account_id_hash = $1',
-    [sha256(accountId)],
-  )
+  const result = UUID_PATTERN.test(accountId)
+    ? await client.query<{ id: string }>(
+        'select id from ritim.users where public_id = $1',
+        [accountId],
+      )
+    : await client.query<{ id: string }>(
+        'select id from ritim.users where legacy_account_id_hash = $1',
+        [sha256(accountId)],
+      )
   return result.rows[0]?.id
 }
 
@@ -97,6 +107,36 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     const deviceHash = sha256(deviceId)
 
     await inTransaction(pool, async (client) => {
+      if (UUID_PATTERN.test(accountId) && UUID_PATTERN.test(deviceId)) {
+        const userResult = await client.query<{ id: string }>(
+          `update ritim.users
+           set display_name = $2,
+               initials = $3,
+               avatar_tone = $4,
+               avatar_url = $5
+           where public_id = $1
+           returning id`,
+          [
+            accountId,
+            profile.displayName,
+            profile.initials,
+            profile.avatarTone,
+            profile.avatarUrl || null,
+          ],
+        )
+        const userId = userResult.rows[0]?.id
+        if (!userId) throw new Error('Doğrulanmış sosyal kullanıcı bulunamadı.')
+        const deviceResult = await client.query(
+          `update ritim.devices
+           set device_type = $3,
+               last_seen_at = now()
+           where public_id = $1 and user_id = $2 and revoked_at is null`,
+          [deviceId, userId, profile.deviceRole],
+        )
+        if (!deviceResult.rowCount) throw new Error('Doğrulanmış sosyal cihaz bulunamadı.')
+        return
+      }
+
       const userResult = await client.query<{ id: string }>(
         `insert into ritim.users (
           legacy_account_id_hash, display_name, handle, initials, avatar_tone, avatar_url
@@ -194,22 +234,22 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
 
   async function loadMessages(accountIds: string[]): Promise<StoredMessage[]> {
     if (accountIds.length < 2) return []
-    const accountByHash = new Map(accountIds.map((accountId) => [hashHex(accountId), accountId]))
-    const hashes = [...accountByHash.keys()].map((value) => Buffer.from(value, 'hex'))
-    const placeholders = hashes.map((_value, index) => `$${index + 1}`).join(', ')
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const keys = [...accountByKey.keys()]
+    const placeholders = keys.map((_value, index) => `$${index + 1}`).join(', ')
     const result = await pool.query<{
       public_id: string
-      sender_hash: string
-      target_hash: string
+      sender_key: string
+      target_key: string
       body: string
       sent_at: Date
     }>(
-      `select public_id, sender_hash, target_hash, body, sent_at
+      `select public_id, sender_key, target_key, body, sent_at
        from (
          select
            m.public_id,
-           encode(sender.legacy_account_id_hash, 'hex') as sender_hash,
-           encode(target.legacy_account_id_hash, 'hex') as target_hash,
+           coalesce(encode(sender.legacy_account_id_hash, 'hex'), sender.public_id::text) as sender_key,
+           coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text) as target_key,
            m.body,
            m.sent_at,
            m.id,
@@ -222,18 +262,20 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            on target_member.conversation_id = m.conversation_id
           and target_member.user_id <> m.sender_id
          join ritim.users target on target.id = target_member.user_id
-         where sender.legacy_account_id_hash in (${placeholders})
-           and target.legacy_account_id_hash in (${placeholders})
+         where coalesce(encode(sender.legacy_account_id_hash, 'hex'), sender.public_id::text)
+                 in (${placeholders})
+           and coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text)
+                 in (${placeholders})
            and m.deleted_at is null
        ) ranked
        where message_rank <= 100
        order by sent_at asc, id asc`,
-      hashes,
+      keys,
     )
 
     return result.rows.flatMap((row) => {
-      const senderId = accountByHash.get(row.sender_hash)
-      const targetId = accountByHash.get(row.target_hash)
+      const senderId = accountByKey.get(row.sender_key)
+      const targetId = accountByKey.get(row.target_key)
       if (!senderId || !targetId) return []
       return [{
         id: row.public_id,
@@ -284,20 +326,20 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
 
   async function loadRooms(accountIds: string[]): Promise<StoredRoom[]> {
     if (!accountIds.length) return []
-    const accountByHash = new Map(accountIds.map((accountId) => [hashHex(accountId), accountId]))
-    const hashes = [...accountByHash.keys()].map((value) => Buffer.from(value, 'hex'))
-    const placeholders = hashes.map((_value, index) => `$${index + 1}`).join(', ')
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const keys = [...accountByKey.keys()]
+    const placeholders = keys.map((_value, index) => `$${index + 1}`).join(', ')
     const result = await pool.query<{
       public_id: string
-      owner_hash: string
+      owner_key: string
       title: string
       cover: number
       member_count: string
       member_initials: string[]
     }>(
-      `select
+       `select
          room.public_id,
-         encode(owner.legacy_account_id_hash, 'hex') as owner_hash,
+         coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text) as owner_key,
          room.title,
          room.cover,
          count(member.user_id) filter (where member.left_at is null) as member_count,
@@ -311,13 +353,14 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
        left join ritim.room_members member on member.room_id = room.id
        left join ritim.users member_user on member_user.id = member.user_id
        where room.ended_at is null
-         and owner.legacy_account_id_hash in (${placeholders})
-       group by room.id, owner.legacy_account_id_hash
+         and coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text)
+               in (${placeholders})
+       group by room.id, owner.legacy_account_id_hash, owner.public_id
        order by room.started_at asc`,
-      hashes,
+      keys,
     )
     return result.rows.flatMap((row) => {
-      const ownerId = accountByHash.get(row.owner_hash)
+      const ownerId = accountByKey.get(row.owner_key)
       if (!ownerId) return []
       return [{
         id: `room-${row.public_id}`,

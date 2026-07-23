@@ -3,6 +3,13 @@ import express from 'express'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { Server } from 'socket.io'
+import {
+  createPostgresAuthRepository,
+  createSocialAuthService,
+  createSocketAuthentication,
+  mountSocialAuthRoutes,
+  readSocialAuthConfig,
+} from './social-auth.js'
 import { createSocialInfrastructure } from './social-infrastructure.js'
 import { createDurableSocialStore } from './social-store.js'
 
@@ -10,22 +17,34 @@ const localRequire = createRequire(import.meta.url)
 const { createSocialHub } = localRequire('../electron/social-hub.cjs')
 const PORT = Number(process.env.RITIM_SOCIAL_PORT || 8790)
 const infrastructure = createSocialInfrastructure()
+const authConfig = readSocialAuthConfig()
 
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '32kb' }))
 app.get('/health', (_request, response) => response.json({
   ok: true,
   service: 'ritim-social',
   protocol: 2,
   infrastructure: infrastructure.health(),
+  authentication: {
+    configured: authConfig.configured,
+    required: authConfig.required,
+  },
 }))
 app.get('/ready', async (_request, response) => {
-  const ready = await infrastructure.probe()
+  const infrastructureReady = await infrastructure.probe()
+  const authenticationReady = !authConfig.required || Boolean(authService)
+  const ready = infrastructureReady && authenticationReady
   response.status(ready ? 200 : 503).json({
     ok: ready,
     service: 'ritim-social',
     infrastructure: infrastructure.health(),
+    authentication: {
+      configured: authConfig.configured,
+      required: authConfig.required,
+      ready: authenticationReady,
+    },
   })
 })
 
@@ -35,6 +54,7 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 100_000,
 })
 let socialHub: ReturnType<typeof createSocialHub> | undefined
+let authService: ReturnType<typeof createSocialAuthService> | undefined
 
 async function shutdown(signal: string) {
   console.log(`[Ritim Social Alpha.2] ${signal} ile kapatiliyor.`)
@@ -49,6 +69,17 @@ async function main() {
   const store = infrastructure.pool && infrastructure.redis
     ? createDurableSocialStore(infrastructure.pool, infrastructure.redis)
     : undefined
+  if (authConfig.configured && !infrastructure.pool) {
+    throw new Error('Ritim kimlik servisi PostgreSQL altyapısı gerektirir.')
+  }
+  authService = authConfig.configured && infrastructure.pool
+    ? createSocialAuthService(
+        authConfig,
+        createPostgresAuthRepository(infrastructure.pool),
+      )
+    : undefined
+  mountSocialAuthRoutes(app, authService, authConfig)
+  io.use(createSocketAuthentication(authService, authConfig))
   infrastructure.setDurableSocialEvents(Boolean(store))
   socialHub = createSocialHub(io, { store })
   io.on('connection', (socket) => socialHub?.attach(socket))
