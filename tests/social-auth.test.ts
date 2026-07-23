@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  createPostgresAuthRepository,
   createSocialAuthService,
   readSocialAuthConfig,
 } from '../server/social-auth.js'
@@ -248,4 +249,65 @@ test('PC tek kullanımlık ticket ile telefonu aynı hesaba ekler', async () => 
     }),
     /geçersiz veya süresi dolmuş/,
   )
+})
+
+test('yeni cihaz oturumu aynı cihazdaki eski oturumları önce iptal eder', async () => {
+  const queries: string[] = []
+  const client = {
+    async query(sql: string) {
+      queries.push(sql)
+      if (/insert into ritim\.users/i.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 1,
+            account_public_id: '10000000-0000-4000-8000-000000000001',
+            display_name: 'Ediz Ege Mercan',
+            handle: '@edizegemercan_test',
+            initials: 'EE',
+            avatar_url: null,
+            avatar_tone: 2,
+          }],
+        }
+      }
+      if (/insert into ritim\.devices/i.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 2,
+            device_public_id: '20000000-0000-4000-8000-000000000001',
+            device_type: 'desktop',
+          }],
+        }
+      }
+      if (/insert into ritim\.sessions/i.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [{ session_public_id: '30000000-0000-4000-8000-000000000001' }],
+        }
+      }
+      return { rowCount: 0, rows: [] }
+    },
+    release() {},
+  }
+  const repository = createPostgresAuthRepository({
+    async connect() {
+      return client
+    },
+  } as never)
+
+  await repository.createIdentitySession({
+    issuer: 'https://accounts.google.com',
+    subject: 'google-subject-123',
+    audience: 'test-client.apps.googleusercontent.com',
+    displayName: 'Ediz Ege Mercan',
+    deviceKey: 'desktop-device-key-1234567890',
+    deviceRole: 'desktop',
+    deviceName: 'Ritim PC',
+  }, Buffer.alloc(32, 1), new Date(Date.now() + 86_400_000))
+
+  const revokeIndex = queries.findIndex((sql) => /update ritim\.sessions[\s\S]*where device_id/i.test(sql))
+  const createIndex = queries.findIndex((sql) => /insert into ritim\.sessions/i.test(sql))
+  assert.ok(revokeIndex >= 0)
+  assert.ok(createIndex > revokeIndex)
 })

@@ -286,6 +286,12 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
         throw new AuthError(409, 'device_identity_conflict', 'Bu cihaz anahtarı başka bir hesaba bağlı.')
       }
       const device = deviceResult.rows[0]
+      await client.query(
+        `update ritim.sessions
+         set revoked_at = coalesce(revoked_at, now())
+         where device_id = $1 and revoked_at is null`,
+        [device.id],
+      )
       const sessionResult = await client.query(
         `insert into ritim.sessions (
           user_id, device_id, refresh_token_hash, expires_at
@@ -334,6 +340,12 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
         throw new AuthError(409, 'device_identity_conflict', 'Bu telefon anahtarı başka bir hesaba bağlı.')
       }
       const device = deviceResult.rows[0]
+      await client.query(
+        `update ritim.sessions
+         set revoked_at = coalesce(revoked_at, now())
+         where device_id = $1 and revoked_at is null`,
+        [device.id],
+      )
       const sessionResult = await client.query(
         `insert into ritim.sessions (
           user_id, device_id, refresh_token_hash, expires_at
@@ -582,7 +594,13 @@ export function createGoogleIdentityProvider(config: SocialAuthConfig): GoogleId
     })
     const payload = await response.json() as Record<string, unknown>
     if (!response.ok || typeof payload.id_token !== 'string') {
-      throw new AuthError(401, 'google_exchange_failed', 'Google yetkilendirme kodu doğrulanamadı.')
+      const googleError = cleanText(payload.error, 80) || `http_${response.status}`
+      console.warn(`[Ritim Auth] Google kod değişimi reddedildi: ${googleError}`)
+      throw new AuthError(
+        401,
+        'google_exchange_failed',
+        `Google yetkilendirme kodu doğrulanamadı (${googleError}).`,
+      )
     }
     return payload.id_token
   }
