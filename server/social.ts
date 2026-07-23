@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { Server } from 'socket.io'
 import { createSocialInfrastructure } from './social-infrastructure.js'
+import { createDurableSocialStore } from './social-store.js'
 
 const localRequire = createRequire(import.meta.url)
 const { createSocialHub } = localRequire('../electron/social-hub.cjs')
@@ -33,12 +34,11 @@ const io = new Server(httpServer, {
   cors: { origin: true, credentials: true },
   maxHttpBufferSize: 100_000,
 })
-const socialHub = createSocialHub(io)
-
-io.on('connection', (socket) => socialHub.attach(socket))
+let socialHub: ReturnType<typeof createSocialHub> | undefined
 
 async function shutdown(signal: string) {
   console.log(`[Ritim Social Alpha.2] ${signal} ile kapatiliyor.`)
+  socialHub?.close()
   await new Promise<void>((resolve) => httpServer.close(() => resolve()))
   await infrastructure.close()
   process.exit(0)
@@ -46,6 +46,12 @@ async function shutdown(signal: string) {
 
 async function main() {
   await infrastructure.start()
+  const store = infrastructure.pool && infrastructure.redis
+    ? createDurableSocialStore(infrastructure.pool, infrastructure.redis)
+    : undefined
+  infrastructure.setDurableSocialEvents(Boolean(store))
+  socialHub = createSocialHub(io, { store })
+  io.on('connection', (socket) => socialHub?.attach(socket))
   httpServer.listen(PORT, '0.0.0.0', () => {
     const mode = infrastructure.health().configured ? 'PostgreSQL + Redis' : 'bellek ici gelistirme'
     console.log(`[Ritim Social Alpha.2] http://0.0.0.0:${PORT} • ${mode}`)

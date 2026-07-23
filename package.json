@@ -18,6 +18,7 @@
     "start:social": "tsx server/social.ts",
     "build:social": "tsc -p tsconfig.social.json",
     "test:social": "node --import tsx --test tests/social-hub.test.cjs tests/social-infrastructure.test.ts",
+    "test:social:persistence": "node --test tests/social-gateway-persistence.test.cjs",
     "infra:alpha2:config": "docker compose -f deploy/pi/compose.alpha2.yml config",
     "dist:win": "npm run build && electron-builder --config electron-builder.config.cjs --win nsis",
     "android:add": "cap add android",

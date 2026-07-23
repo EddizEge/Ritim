@@ -13,6 +13,7 @@
   },
   "include": [
     "server/social.ts",
-    "server/social-infrastructure.ts"
+    "server/social-infrastructure.ts",
+    "server/social-store.ts"
   ]
 }
