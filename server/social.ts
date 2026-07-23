@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { Server } from 'socket.io'
 import {
   createPostgresAuthRepository,
+  createRedisCompanionTicketStore,
   createSocialAuthService,
   createSocketAuthentication,
   mountSocialAuthRoutes,
@@ -76,6 +77,10 @@ async function main() {
     ? createSocialAuthService(
         authConfig,
         createPostgresAuthRepository(infrastructure.pool),
+        undefined,
+        infrastructure.redis
+          ? createRedisCompanionTicketStore(infrastructure.redis)
+          : undefined,
       )
     : undefined
   mountSocialAuthRoutes(app, authService, authConfig)

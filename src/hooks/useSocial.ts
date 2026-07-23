@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
+import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
 import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
 import { ritimPairingToken, ritimRoom, ritimSyncUrl } from './usePlayerSync'
 
@@ -98,6 +99,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   selectedUserIdRef.current = snapshot.selectedUserId
   const profileRef = useRef(localProfile)
   profileRef.current = localProfile
+  const connectSocialRef = useRef<() => void>(() => {})
 
   const joinSocialAccount = useCallback(() => {
     socialSocket.emit('social:join', {
@@ -109,6 +111,22 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   }, [accountId, deviceId, deviceRole])
 
   useEffect(() => {
+    let disposed = false
+    let authRetryUsed = false
+    const connectSocial = async () => {
+      setConnectionStatus('connecting')
+      const accessToken = await ensureSocialAccessToken({
+        socialUrl,
+        syncUrl: ritimSyncUrl,
+        pairingToken: ritimPairingToken,
+        isCompanion,
+      }).catch(() => '')
+      if (disposed) return
+      socialSocket.auth = accessToken ? { accessToken } : {}
+      if (socialSocket.connected) socialSocket.disconnect()
+      socialSocket.connect()
+    }
+    connectSocialRef.current = () => void connectSocial()
     const onConnect = () => {
       setConnectionStatus('online')
       joinSocialAccount()
@@ -120,7 +138,13 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
         users: previous.users.map((user) => ({ ...user, presence: 'offline' })),
       }))
     }
-    const onConnectError = () => setConnectionStatus('offline')
+    const onConnectError = (error: Error) => {
+      setConnectionStatus('offline')
+      if (!authRetryUsed && /oturumu geçersiz/i.test(error.message)) {
+        authRetryUsed = true
+        void invalidateSocialAccessToken().then(connectSocial)
+      }
+    }
     const onReconnectAttempt = () => setConnectionStatus('connecting')
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
@@ -139,10 +163,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     socialSocket.on('connect_error', onConnectError)
     socialSocket.on('social:state', onSocialState)
     socialSocket.io.on('reconnect_attempt', onReconnectAttempt)
-    if (!socialSocket.connected) socialSocket.connect()
-    else joinSocialAccount()
+    void connectSocial()
 
     return () => {
+      disposed = true
+      connectSocialRef.current = () => {}
       socialSocket.off('connect', onConnect)
       socialSocket.off('disconnect', onDisconnect)
       socialSocket.off('connect_error', onConnectError)
@@ -150,7 +175,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       socialSocket.io.off('reconnect_attempt', onReconnectAttempt)
       socialSocket.disconnect()
     }
-  }, [joinSocialAccount])
+  }, [isCompanion, joinSocialAccount])
 
   useEffect(() => {
     if (socialSocket.connected) socialSocket.emit('social:profile', { profile: localProfile })
@@ -184,9 +209,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
 
   const reconnectSocial = useCallback(() => {
     setConnectionStatus('connecting')
-    if (socialSocket.connected) joinSocialAccount()
-    else socialSocket.connect()
-  }, [joinSocialAccount])
+    connectSocialRef.current()
+  }, [])
 
   return {
     state: {

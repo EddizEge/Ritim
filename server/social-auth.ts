@@ -9,6 +9,7 @@ const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth
 const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com']
 const GOOGLE_SCOPES = ['openid', 'profile', 'email']
 const REFRESH_TOKEN_PREFIX = 'ritim_r1_'
+const COMPANION_TICKET_PREFIX = 'ritim_ct1_'
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const CLIENT_ID_PATTERN = /^[\w.-]+\.apps\.googleusercontent\.com$/
 const PKCE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/
@@ -65,6 +66,12 @@ export type SocialAuthRepository = {
     refreshTokenHash: Buffer,
     expiresAt: Date,
   ) => Promise<AuthIdentity>
+  createCompanionSession: (
+    accountId: string,
+    input: { deviceKey: string; deviceName: string },
+    refreshTokenHash: Buffer,
+    expiresAt: Date,
+  ) => Promise<AuthIdentity>
   rotateRefreshSession: (
     refreshTokenHash: Buffer,
     nextRefreshTokenHash: Buffer,
@@ -77,6 +84,11 @@ export type SocialAuthRepository = {
   ) => Promise<AuthIdentity | null>
   revokeSessionFamily: (accountId: string, sessionId: string) => Promise<boolean>
   revokeDevice: (accountId: string, deviceId: string) => Promise<boolean>
+}
+
+export type CompanionTicketStore = {
+  issue: (accountId: string) => Promise<{ ticket: string; expiresIn: number }>
+  consume: (ticket: string) => Promise<string | null>
 }
 
 export type GoogleIdentityProvider = {
@@ -285,6 +297,54 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
     })
   }
 
+  async function createCompanionSession(
+    accountId: string,
+    input: { deviceKey: string; deviceName: string },
+    tokenHash: Buffer,
+    expiresAt: Date,
+  ) {
+    if (!UUID_PATTERN.test(accountId)) {
+      throw new AuthError(401, 'invalid_companion_ticket', 'Telefon eşleme bileti geçersiz.')
+    }
+    return inTransaction(pool, async (client) => {
+      const userResult = await client.query(
+        `select id, public_id as account_public_id, display_name, handle, initials,
+          avatar_url, avatar_tone
+         from ritim.users
+         where public_id = $1
+         for update`,
+        [accountId],
+      )
+      const user = userResult.rows[0]
+      if (!user) throw new AuthError(401, 'invalid_companion_ticket', 'Telefon hesabı bulunamadı.')
+      const deviceResult = await client.query(
+        `insert into ritim.devices (
+          user_id, device_type, display_name, device_key_hash, last_seen_at
+        ) values ($1, 'companion', $2, $3, now())
+        on conflict (device_key_hash) do update set
+          device_type = 'companion',
+          display_name = excluded.display_name,
+          last_seen_at = now(),
+          revoked_at = null
+        where ritim.devices.user_id = excluded.user_id
+        returning id, public_id as device_public_id, device_type`,
+        [user.id, input.deviceName, sha256(input.deviceKey)],
+      )
+      if (!deviceResult.rowCount) {
+        throw new AuthError(409, 'device_identity_conflict', 'Bu telefon anahtarı başka bir hesaba bağlı.')
+      }
+      const device = deviceResult.rows[0]
+      const sessionResult = await client.query(
+        `insert into ritim.sessions (
+          user_id, device_id, refresh_token_hash, expires_at
+        ) values ($1, $2, $3, $4)
+        returning public_id as session_public_id`,
+        [user.id, device.id, tokenHash, expiresAt],
+      )
+      return rowIdentity({ ...user, ...device, ...sessionResult.rows[0] })
+    })
+  }
+
   async function rotateRefreshSession(
     tokenHash: Buffer,
     nextTokenHash: Buffer,
@@ -439,11 +499,36 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
 
   return {
     createIdentitySession,
+    createCompanionSession,
     rotateRefreshSession,
     resolveAccessSession,
     revokeSessionFamily,
     revokeDevice,
   }
+}
+
+export function createRedisCompanionTicketStore(redis: {
+  set: (key: string, value: string, options: { EX: number }) => Promise<unknown>
+  getDel: (key: string) => Promise<string | null>
+}): CompanionTicketStore {
+  const expiresIn = 120
+
+  async function issue(accountId: string) {
+    const ticket = `${COMPANION_TICKET_PREFIX}${crypto.randomBytes(32).toString('base64url')}`
+    await redis.set(
+      `ritim:companion-ticket:${sha256(ticket).toString('hex')}`,
+      accountId,
+      { EX: expiresIn },
+    )
+    return { ticket, expiresIn }
+  }
+
+  async function consume(ticket: string) {
+    if (!new RegExp(`^${COMPANION_TICKET_PREFIX}[A-Za-z0-9_-]{43}$`).test(ticket)) return null
+    return redis.getDel(`ritim:companion-ticket:${sha256(ticket).toString('hex')}`)
+  }
+
+  return { issue, consume }
 }
 
 export function createGoogleIdentityProvider(config: SocialAuthConfig): GoogleIdentityProvider {
@@ -509,6 +594,7 @@ export function createSocialAuthService(
   config: SocialAuthConfig,
   repository: SocialAuthRepository,
   googleProvider = createGoogleIdentityProvider(config),
+  companionTickets?: CompanionTicketStore,
 ) {
   if (!config.configured || !config.jwtSecret) {
     throw new Error('Ritim kimlik servisi yapılandırılmamış.')
@@ -625,6 +711,41 @@ export function createSocialAuthService(
     return tokenPair(result.identity, nextRawToken)
   }
 
+  async function createCompanionTicket(identity: AuthIdentity) {
+    if (identity.deviceRole !== 'desktop') {
+      throw new AuthError(403, 'desktop_required', 'Telefon oturumu yalnızca eşlenmiş PC tarafından verilebilir.')
+    }
+    if (!companionTickets) {
+      throw new AuthError(503, 'companion_pairing_unavailable', 'Telefon oturumu eşleme servisi hazır değil.')
+    }
+    return companionTickets.issue(identity.accountId)
+  }
+
+  async function exchangeCompanionTicket(input: Record<string, unknown>) {
+    if (!companionTickets) {
+      throw new AuthError(503, 'companion_pairing_unavailable', 'Telefon oturumu eşleme servisi hazır değil.')
+    }
+    const ticket = cleanText(input.ticket, 100)
+    const deviceKey = cleanText(input.deviceKey, 200)
+    const deviceName = cleanText(input.deviceName, 80)
+    if (!DEVICE_KEY_PATTERN.test(deviceKey)) {
+      throw new AuthError(400, 'invalid_device_key', 'Telefon cihaz anahtarı geçersiz.')
+    }
+    if (!deviceName) throw new AuthError(400, 'invalid_device_name', 'Telefon cihaz adı gerekli.')
+    const accountId = await companionTickets.consume(ticket)
+    if (!accountId) {
+      throw new AuthError(401, 'invalid_companion_ticket', 'Telefon eşleme bileti geçersiz veya süresi dolmuş.')
+    }
+    const rawRefreshToken = refreshToken()
+    const identity = await repository.createCompanionSession(
+      accountId,
+      { deviceKey, deviceName },
+      refreshTokenHash(rawRefreshToken),
+      new Date(Date.now() + config.refreshTokenTtlSeconds * 1000),
+    )
+    return tokenPair(identity, rawRefreshToken)
+  }
+
   async function verifyAccessToken(rawAccessToken: string) {
     if (!rawAccessToken || rawAccessToken.length > 10_000) {
       throw new AuthError(401, 'invalid_access_token', 'Erişim tokenı gerekli.')
@@ -660,6 +781,8 @@ export function createSocialAuthService(
     exchangeGoogleCode,
     loginWithGoogleIdToken,
     rotateRefreshToken,
+    createCompanionTicket,
+    exchangeCompanionTicket,
     verifyAccessToken,
     logout,
     revokeCurrentDevice,
@@ -728,6 +851,9 @@ export function mountSocialAuthRoutes(
   app.post('/auth/refresh', requireService(async (request, response) => {
     response.json(await service!.rotateRefreshToken(cleanText(request.body?.refreshToken, 200)))
   }))
+  app.post('/auth/companion/exchange', requireService(async (request, response) => {
+    response.json(await service!.exchangeCompanionTicket(request.body || {}))
+  }))
 
   const requireAccessToken = (
     handler: (request: Request, response: Response, identity: AuthIdentity) => Promise<void>,
@@ -739,6 +865,9 @@ export function mountSocialAuthRoutes(
   app.post('/auth/logout', requireAccessToken(async (_request, response, identity) => {
     await service!.logout(identity)
     response.status(204).end()
+  }))
+  app.post('/auth/companion-ticket', requireAccessToken(async (_request, response, identity) => {
+    response.json(await service!.createCompanionTicket(identity))
   }))
   app.delete('/auth/device/current', requireAccessToken(async (_request, response, identity) => {
     await service!.revokeCurrentDevice(identity)

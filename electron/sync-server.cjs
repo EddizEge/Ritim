@@ -1,4 +1,5 @@
 const express = require('express')
+const cors = require('cors')
 const { createServer } = require('node:http')
 const crypto = require('node:crypto')
 const path = require('node:path')
@@ -18,13 +19,41 @@ function safeRoom(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24)
 }
 
-function startSyncServer(distPath, port = 8787, { pairingToken = '' } = {}) {
+function startSyncServer(distPath, port = 8787, {
+  pairingToken = '',
+  getSocialCompanionTicket,
+} = {}) {
   const app = express()
+  app.use(cors({
+    origin: true,
+    allowedHeaders: ['content-type', 'authorization', 'x-ritim-pairing-token'],
+  }))
+  app.use(express.json({ limit: '8kb' }))
   app.use(express.static(distPath))
   app.get('/health', (_request, response) => response.json({ ok: true, service: 'ritim-sync', protocol: 2 }))
   app.get('/pairing', (request, response) => {
     if (!isLoopback(request.socket.remoteAddress)) return response.status(404).end()
     return response.json({ token: pairingToken })
+  })
+  app.post('/social/session-ticket', async (request, response) => {
+    const authorization = String(request.headers.authorization || '')
+    const suppliedToken = authorization.startsWith('Bearer ')
+      ? authorization.slice(7).trim()
+      : request.headers['x-ritim-pairing-token']
+    if (!pairingToken || !safeEqual(suppliedToken, pairingToken)) {
+      return response.status(401).json({ ok: false, message: 'Telefon eşleme anahtarı geçersiz.' })
+    }
+    if (typeof getSocialCompanionTicket !== 'function') {
+      return response.status(503).json({ ok: false, message: 'PC sosyal hesabı henüz hazır değil.' })
+    }
+    try {
+      return response.json(await getSocialCompanionTicket())
+    } catch (error) {
+      return response.status(503).json({
+        ok: false,
+        message: error?.message || 'Telefon sosyal oturumu hazırlanamadı.',
+      })
+    }
   })
   app.use((_request, response) => response.sendFile(path.join(distPath, 'index.html')))
 
