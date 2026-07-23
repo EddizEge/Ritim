@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   Bell, ChevronLeft, ChevronRight, CircleUserRound, Compass, ExternalLink, Heart, Home,
   Library, ListMusic, LoaderCircle, LogOut, MessageSquareText, MonitorSmartphone, Music2,
-  MoreVertical, Plus, Search, Volume2, X,
+  MoreVertical, Plus, Search, UsersRound, Volume2, X,
 } from 'lucide-react'
 import { formatTime, getTrack, playlists as demoPlaylists, tracks as demoTracks } from '../data'
 import type { YouTubeLibraryController } from '../hooks/useYouTubeLibrary'
@@ -12,6 +12,8 @@ import { PlayerControls } from './PlayerControls'
 import { Progress } from './Progress'
 import { YouTubePlayer } from './YouTubePlayer'
 import { YouTubeMark } from './YouTubeMark'
+import { DesktopSocialHub } from './SocialHub'
+import type { SocialActions, SocialState } from '../social/types'
 
 type Props = {
   state: PlayerState
@@ -20,9 +22,11 @@ type Props = {
   peerCount: number
   room: string
   youtube: YouTubeLibraryController
+  socialState: SocialState
+  socialActions: SocialActions
 }
 
-type DesktopView = 'home' | 'music'
+type DesktopView = 'home' | 'music' | 'social'
 
 function Sidebar({ connected, peerCount, youtube, activeView, onViewChange }: Pick<Props, 'connected' | 'peerCount' | 'youtube'> & { activeView: DesktopView; onViewChange: (view: DesktopView) => void }) {
   const livePlaylists = youtube.status.authenticated ? youtube.playlists : []
@@ -32,6 +36,7 @@ function Sidebar({ connected, peerCount, youtube, activeView, onViewChange }: Pi
       <nav className="primary-nav" aria-label="Ana menü">
         <button className={`nav-item ${activeView === 'home' ? 'is-selected' : ''}`} onClick={() => onViewChange('home')}><Home fill={activeView === 'home' ? 'currentColor' : 'none'} />Ritim Ana Sayfa</button>
         <button className={`nav-item music-nav-item ${activeView === 'music' ? 'is-selected' : ''}`} onClick={() => onViewChange('music')}><Music2 />YouTube Music</button>
+        <button className={`nav-item social-nav-item ${activeView === 'social' ? 'is-selected' : ''}`} onClick={() => onViewChange('social')}><UsersRound fill={activeView === 'social' ? 'currentColor' : 'none'} />Sosyal<span className="nav-badge">2</span></button>
         <button className="nav-item"><Compass />Keşfet</button>
         <button className="nav-item"><Library />Kitaplık</button>
       </nav>
@@ -100,7 +105,7 @@ function Queue({ state, actions }: Pick<Props, 'state' | 'actions'>) {
   )
 }
 
-function BottomPlayer({ state, actions, connected, room }: Omit<Props, 'peerCount' | 'youtube'>) {
+function BottomPlayer({ state, actions, connected, room }: Pick<Props, 'state' | 'actions' | 'connected' | 'room'>) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
   const isMusicTrack = track.source === 'ytmusic'
@@ -219,32 +224,38 @@ export function DesktopApp(props: Props) {
   return (
     <div className="desktop-shell">
       <Sidebar connected={props.connected} peerCount={props.peerCount} youtube={props.youtube} activeView={activeView} onViewChange={setActiveView} />
-      <main className="desktop-content">
-        <header className="topbar">
-          <div className="history-buttons"><button><ChevronLeft /></button><button><ChevronRight /></button></div>
-          <form className="search-box" onSubmit={submitSearch}><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} disabled={!props.youtube.status.authenticated} placeholder={props.youtube.status.authenticated ? 'YouTube’da şarkı, sanatçı veya albüm ara' : 'YouTube’u bağladıktan sonra ara'} /></form>
-          <div className="topbar-actions"><button><Bell /></button><button title={props.youtube.status.channelTitle || 'Hesap'}><CircleUserRound /></button></div>
-        </header>
-        <div className="content-scroll">
-          {activeView === 'music' ? (
-            <section className="music-host-placeholder" aria-label="YouTube Music görünümü">
-              <Music2 />
-              <h1>YouTube Music yükleniyor</h1>
-              <p>Masaüstü uygulamasında kişisel Music ana sayfan bu alanda açılır.</p>
-            </section>
-          ) : (
-            <>
-              <MusicConnectPanel onOpenMusic={() => setActiveView('music')} />
-              {props.youtube.status.authenticated ? <ConnectedStrip youtube={props.youtube} /> : null}
-              <AlbumRail title={props.youtube.status.authenticated ? props.youtube.sectionTitle : 'Sana özel'} items={liveItems} state={props.state} actions={props.actions} />
-              <AlbumRail title={props.youtube.status.authenticated ? 'Sıradaki keşifler' : 'Son çalınanlar'} items={liveItems.length > 3 ? [...liveItems.slice(3), ...liveItems.slice(0, 3)] : liveItems} state={props.state} actions={props.actions} />
-              <div className={currentTrack.source === 'youtube' ? 'lower-media-row' : ''}>
-                <Queue state={props.state} actions={props.actions} />
-                {currentTrack.source === 'youtube' ? <YouTubePlayer track={currentTrack} state={props.state} actions={props.actions} /> : null}
-              </div>
-            </>
-          )}
-        </div>
+      <main className={`desktop-content ${activeView === 'social' ? 'is-social' : ''}`}>
+        {activeView === 'social' ? (
+          <DesktopSocialHub state={props.socialState} actions={props.socialActions} />
+        ) : (
+          <>
+            <header className="topbar">
+              <div className="history-buttons"><button><ChevronLeft /></button><button><ChevronRight /></button></div>
+              <form className="search-box" onSubmit={submitSearch}><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} disabled={!props.youtube.status.authenticated} placeholder={props.youtube.status.authenticated ? 'YouTube’da şarkı, sanatçı veya albüm ara' : 'YouTube’u bağladıktan sonra ara'} /></form>
+              <div className="topbar-actions"><button><Bell /></button><button title={props.youtube.status.channelTitle || 'Hesap'}><CircleUserRound /></button></div>
+            </header>
+            <div className="content-scroll">
+              {activeView === 'music' ? (
+                <section className="music-host-placeholder" aria-label="YouTube Music görünümü">
+                  <Music2 />
+                  <h1>YouTube Music yükleniyor</h1>
+                  <p>Masaüstü uygulamasında kişisel Music ana sayfan bu alanda açılır.</p>
+                </section>
+              ) : (
+                <>
+                  <MusicConnectPanel onOpenMusic={() => setActiveView('music')} />
+                  {props.youtube.status.authenticated ? <ConnectedStrip youtube={props.youtube} /> : null}
+                  <AlbumRail title={props.youtube.status.authenticated ? props.youtube.sectionTitle : 'Sana özel'} items={liveItems} state={props.state} actions={props.actions} />
+                  <AlbumRail title={props.youtube.status.authenticated ? 'Sıradaki keşifler' : 'Son çalınanlar'} items={liveItems.length > 3 ? [...liveItems.slice(3), ...liveItems.slice(0, 3)] : liveItems} state={props.state} actions={props.actions} />
+                  <div className={currentTrack.source === 'youtube' ? 'lower-media-row' : ''}>
+                    <Queue state={props.state} actions={props.actions} />
+                    {currentTrack.source === 'youtube' ? <YouTubePlayer track={currentTrack} state={props.state} actions={props.actions} /> : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
       </main>
       <BottomPlayer state={props.state} actions={props.actions} connected={props.connected} room={props.room} />
     </div>
