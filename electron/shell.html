@@ -26,7 +26,7 @@
         </button>
       </nav>
       <span class="spacer"></span>
-      <span id="connection-status" class="status"><i></i><span>Telefon bekleniyor</span></span>
+      <span id="connection-status" class="status"><i></i><span>Telefon bağlı değil</span></span>
       <button id="settings-button" class="settings-button" type="button" aria-label="Ritim ayarlarını aç">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3V9.6h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66.99.3.27.69.42 1.09.42H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
         Ayarlar
@@ -38,7 +38,7 @@
         <div>
           <span class="eyebrow"><i></i> CANLI • ALPHA.1</span>
           <h1>Birlikte dinlemek<br />daha güzel.</h1>
-          <p>Eşlenmiş telefonları gör, tepki gönder ve müzik kesilmeden konuş.</p>
+          <p>Diğer Ritim kullanıcılarının ne dinlediğini gör, tepki gönder ve konuş.</p>
         </div>
         <button id="create-room-button" class="primary-button" type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg>
@@ -46,12 +46,22 @@
         </button>
       </section>
 
+      <div id="social-service-note" class="social-service-note is-connecting">
+        <i></i>
+        <span>Ritim Social’a bağlanıyor…</span>
+        <button id="social-retry-button" type="button" hidden>Yeniden bağlan</button>
+      </div>
+
       <section class="social-workspace">
         <aside class="people-panel">
           <header>
             <div><span class="section-kicker">KULLANICILAR</span><h2>Şu an burada</h2></div>
             <span id="online-count" class="online-pill">0 çevrimiçi</span>
           </header>
+          <label class="people-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="people-search-input" type="search" placeholder="Kullanıcı veya şarkı ara" autocomplete="off" />
+          </label>
           <div id="people-list" class="people-list"></div>
         </aside>
 
@@ -60,9 +70,9 @@
             <span class="empty-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>
             </span>
-            <h2>Telefonunu bekliyoruz</h2>
-            <p>Ritim mobil uygulamasını aynı QR kodla eşleştir. Bağlandığında burada görünecek.</p>
-            <button id="empty-settings-button" type="button">Eşleme ayarlarını aç</button>
+            <h2>Henüz başka kullanıcı yok</h2>
+            <p>Başka bir Ritim hesabı sosyal servise bağlandığında burada görünecek.</p>
+            <button id="empty-settings-button" type="button">Hesap ayarlarını aç</button>
           </div>
           <div id="chat-content" class="chat-content" hidden>
             <header class="chat-header">
@@ -87,7 +97,7 @@
           <div id="rooms-list" class="rooms-list"></div>
           <div class="privacy-note">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            <span><b>Yerel ve eşlenmiş</b><small>Bu Alpha yalnızca Ritim odandaki cihazlarla çalışır.</small></span>
+            <span><b>Merkezi sosyal bağlantı</b><small>PC ve telefonun tek hesap; burada yalnızca diğer hesaplar görünür.</small></span>
           </div>
         </aside>
       </section>

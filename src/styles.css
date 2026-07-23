@@ -222,6 +222,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-create-room svg { width: 16px; }
 .social-preview-note { display: flex; align-items: center; gap: 8px; padding: 0 24px; border-bottom: 1px solid #212323; color: #7f8283; background: #0d0e0e; font-size: 8px; }
 .social-preview-note span, .mobile-social-preview span { color: #ff7a84; font-weight: 850; letter-spacing: .1em; }
+.social-preview-note p, .mobile-social-preview p { margin: 0; }
+.social-preview-note button, .mobile-social-preview button { display: flex; align-items: center; gap: 5px; margin-left: auto; padding: 4px 7px; border: 1px solid #55343a; border-radius: 6px; color: #ff8e9e; background: #211317; font-size: 8px; font-weight: 750; }
+.social-preview-note button svg, .mobile-social-preview button svg { width: 11px; height: 11px; }
+.social-preview-note.is-offline, .mobile-social-preview.is-offline { color: #c899a1; background: #160f11; }
 .social-desktop-layout { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(290px, 350px); min-height: 0; }
 .social-directory { min-width: 0; min-height: 0; padding: 18px 20px 20px 24px; overflow: hidden; }
 .social-section-heading { display: flex; align-items: center; justify-content: space-between; height: 33px; margin-bottom: 8px; }
@@ -237,6 +241,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-user-identity b { font-size: 11px; }
 .social-user-identity small { margin-top: 4px; color: #777a7b; font-size: 8px; }
 .social-avatar { position: relative; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 50%; color: #fff; background: #3d2028; font-size: 12px; font-weight: 800; letter-spacing: -.2px; }
+.social-avatar img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
 .social-avatar.tone-1 { background: #243649; }
 .social-avatar.tone-2 { background: #4a3426; }
 .social-avatar.tone-3 { background: #273e37; }
@@ -545,7 +550,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-social-heading > button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 12px; border: 1px solid #ff5362; border-radius: 19px; color: #ff6573; background: transparent; font-size: 10px; font-weight: 750; }
 .mobile-social-heading > button.is-active { color: #c2f4d0; border-color: #28683d; background: #163020; }
 .mobile-social-heading > button svg { width: 16px; }
-.mobile-social-preview { display: flex; align-items: center; gap: 7px; margin: 0 18px 20px; color: #737677; font-size: 8px; }
+.mobile-social-preview { display: flex; align-items: center; gap: 7px; margin: 0 18px 12px; padding: 8px 9px; border-radius: 8px; color: #737677; background: #111314; font-size: 8px; }
+.mobile-social-search { display: flex; align-items: center; gap: 8px; margin: 0 18px 20px; padding: 0 11px; border: 1px solid #282b2e; border-radius: 9px; background: #111314; }
+.mobile-social-search svg { width: 14px; color: #727679; }
+.mobile-social-search input { width: 100%; height: 38px; border: 0; outline: 0; color: #f4f4f4; background: transparent; font-size: 10px; }
 .mobile-social-section-title { display: flex; align-items: center; justify-content: space-between; padding: 0 18px 11px; }
 .mobile-social-section-title h2 { margin: 0; font-size: 20px; letter-spacing: -.5px; }
 .mobile-social-section-title > svg { width: 19px; color: #ff5b6a; }

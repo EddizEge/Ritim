@@ -5,7 +5,10 @@ const settingsButton = document.getElementById('settings-button')
 const emptySettingsButton = document.getElementById('empty-settings-button')
 const connectionStatus = document.getElementById('connection-status')
 const socialCount = document.getElementById('social-count')
+const socialServiceNote = document.getElementById('social-service-note')
+const socialRetryButton = document.getElementById('social-retry-button')
 const onlineCount = document.getElementById('online-count')
+const peopleSearchInput = document.getElementById('people-search-input')
 const peopleList = document.getElementById('people-list')
 const chatEmpty = document.getElementById('chat-empty')
 const chatContent = document.getElementById('chat-content')
@@ -22,6 +25,7 @@ const roomsList = document.getElementById('rooms-list')
 
 let socialState = null
 let selectedUserId = ''
+let peopleQuery = ''
 
 function setView(view) {
   const isSocial = view === 'social'
@@ -38,9 +42,34 @@ function selectedUser() {
   return socialState?.users?.find((user) => user.id === selectedUserId)
 }
 
+function renderAvatar(element, user) {
+  element.replaceChildren()
+  if (user.avatarUrl) {
+    const image = document.createElement('img')
+    image.src = user.avatarUrl
+    image.alt = ''
+    image.referrerPolicy = 'no-referrer'
+    element.append(image)
+  } else {
+    element.textContent = user.initials
+  }
+}
+
 function renderPeople() {
-  const users = socialState?.users || []
+  const query = peopleQuery.trim().toLocaleLowerCase('tr')
+  const users = (socialState?.users || []).filter((user) => {
+    if (!query) return true
+    return [user.displayName, user.handle, user.currentTrack?.title, user.currentTrack?.artist]
+      .filter(Boolean)
+      .some((value) => value.toLocaleLowerCase('tr').includes(query))
+  })
   peopleList.replaceChildren()
+  if (!users.length) {
+    const empty = document.createElement('span')
+    empty.className = 'message-placeholder'
+    empty.textContent = query ? 'Aramana uygun kullanıcı bulunamadı.' : 'Henüz başka kullanıcı yok.'
+    peopleList.append(empty)
+  }
   for (const user of users) {
     const card = document.createElement('article')
     card.className = `person-card${selectedUserId === user.id ? ' is-active' : ''}`
@@ -54,7 +83,7 @@ function renderPeople() {
 
     const avatar = document.createElement('span')
     avatar.className = 'avatar'
-    avatar.textContent = user.initials
+    renderAvatar(avatar, user)
     const copy = document.createElement('span')
     copy.className = 'person-copy'
     const name = document.createElement('b')
@@ -83,7 +112,7 @@ function renderChat() {
   chatContent.hidden = !user
   if (!user) return
 
-  chatAvatar.textContent = user.initials
+  renderAvatar(chatAvatar, user)
   chatName.textContent = user.displayName
   chatPresence.textContent = socialState.listeningWithUserId === user.id ? 'Birlikte dinliyorsunuz' : 'Çevrimiçi'
   listenButton.textContent = socialState.listeningWithUserId === user.id ? 'Birliktesiniz' : 'Birlikte dinle'
@@ -156,13 +185,24 @@ function render() {
   const users = socialState?.users || []
   if (!users.some((user) => user.id === selectedUserId)) selectedUserId = users[0]?.id || ''
   const online = users.filter((user) => user.presence === 'online').length
-  connectionStatus.classList.toggle('is-online', online > 0)
-  connectionStatus.querySelector('span').textContent = online > 0 ? `${online} telefon bağlı` : 'Telefon bekleniyor'
+  connectionStatus.classList.toggle('is-online', Boolean(socialState?.companionConnected))
+  connectionStatus.querySelector('span').textContent = socialState?.companionConnected ? 'Telefon senkron' : 'Telefon bağlı değil'
   onlineCount.textContent = `${online} çevrimiçi`
   socialCount.hidden = online === 0
   socialCount.textContent = String(online)
   createRoomButton.classList.toggle('is-active', Boolean(socialState?.activeRoomId))
+  const socialOnline = socialState?.connectionStatus === 'online'
+  createRoomButton.disabled = !socialOnline
+  listenButton.disabled = !socialOnline
+  messageInput.disabled = !socialOnline
   createRoomButton.lastChild.textContent = socialState?.activeRoomId ? ' Odan hazır' : ' Dinleme odası oluştur'
+  socialServiceNote.className = `social-service-note is-${socialState?.connectionStatus || 'connecting'}`
+  socialServiceNote.querySelector('span').textContent = socialOnline
+    ? 'Ritim Social bağlantısı kuruldu.'
+    : socialState?.connectionStatus === 'offline'
+      ? 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
+      : 'Ritim Social’a bağlanıyor…'
+  socialRetryButton.hidden = socialState?.connectionStatus !== 'offline'
   renderPeople()
   renderChat()
   renderRooms()
@@ -177,6 +217,11 @@ listenButton.addEventListener('click', () => {
   if (user) window.ritimShell?.sendSocialAction('listening', { targetUserId: user.id })
 })
 createRoomButton.addEventListener('click', () => window.ritimShell?.sendSocialAction('create-room', {}))
+socialRetryButton.addEventListener('click', () => window.ritimShell?.sendSocialAction('reconnect', {}))
+peopleSearchInput.addEventListener('input', () => {
+  peopleQuery = peopleSearchInput.value
+  renderPeople()
+})
 messageForm.addEventListener('submit', (event) => {
   event.preventDefault()
   const user = selectedUser()

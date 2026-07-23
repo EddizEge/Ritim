@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState, type FormEvent } from 'react'
 import {
-  Heart, MessageCircle, MoreVertical, Plus, Radio, Search, Send, SmilePlus,
+  Heart, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send, SmilePlus,
   UsersRound, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
@@ -15,10 +15,35 @@ type SocialProps = {
 function SocialAvatar({ user, small = false }: { user: SocialUser; small?: boolean }) {
   return (
     <span className={`social-avatar tone-${user.avatarTone % 6} ${small ? 'is-small' : ''}`} aria-label={`${user.displayName} avatarı`}>
-      {user.initials}
+      {user.avatarUrl ? <img src={user.avatarUrl} alt="" referrerPolicy="no-referrer" /> : user.initials}
       <i className={`is-${user.presence}`} />
     </span>
   )
+}
+
+function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
+  const online = state.connectionStatus === 'online'
+  const connecting = state.connectionStatus === 'connecting'
+  const text = online
+    ? (mobile ? `${state.currentDeviceCount} cihazın tek Ritim hesabında senkron` : 'Ritim Social bağlantısı kuruldu.')
+    : connecting
+      ? 'Ritim Social’a bağlanıyor…'
+      : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
+  return (
+    <div className={mobile ? `mobile-social-preview is-${state.connectionStatus}` : `social-preview-note is-${state.connectionStatus}`}>
+      <span>ALPHA.1</span>
+      <p>{text}</p>
+      {!online && !connecting ? <button onClick={actions.reconnectSocial}><RefreshCw />Yeniden bağlan</button> : null}
+    </div>
+  )
+}
+
+function matchesSocialQuery(user: SocialUser, query: string) {
+  if (!query) return true
+  const track = user.currentTrack
+  return [user.displayName, user.handle, track?.title, track?.artist]
+    .filter(Boolean)
+    .some((value) => value?.toLocaleLowerCase('tr').includes(query))
 }
 
 function TrackProgress({ track }: { track: SocialTrack }) {
@@ -123,13 +148,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase('tr'))
   const visibleUsers = useMemo(() => {
-    if (!deferredQuery) return state.users
-    return state.users.filter((user) => {
-      const track = user.currentTrack
-      return [user.displayName, user.handle, track?.title, track?.artist]
-        .filter(Boolean)
-        .some((value) => value?.toLocaleLowerCase('tr').includes(deferredQuery))
-    })
+    return state.users.filter((user) => matchesSocialQuery(user, deferredQuery))
   }, [deferredQuery, state.users])
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
 
@@ -144,7 +163,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
           {state.activeRoomId ? 'Odan hazır' : 'Dinleme odası oluştur'}
         </button>
       </header>
-      <div className="social-preview-note"><span>ALPHA.1</span> {state.connectionStatus === 'online' ? 'Eşlenmiş cihazlarla canlı bağlantı kuruldu.' : 'Ritim PC bağlantısı bekleniyor…'}</div>
+      <SocialConnectionNotice state={state} actions={actions} />
       <div className="social-desktop-layout">
         <div className="social-directory">
           <div className="social-section-heading">
@@ -161,7 +180,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
                 actions={actions}
               />
             )) : (
-              <div className="social-no-results"><UsersRound /><b>{deferredQuery ? 'Kullanıcı bulunamadı' : 'Henüz bağlı cihaz yok'}</b><p>{deferredQuery ? 'Başka bir ad, kullanıcı adı veya parça ara.' : 'Telefonu Ritim ayarlarındaki QR kodla eşleştir.'}</p></div>
+              <div className="social-no-results"><UsersRound /><b>{deferredQuery ? 'Kullanıcı bulunamadı' : 'Henüz başka kullanıcı yok'}</b><p>{deferredQuery ? 'Başka bir ad, kullanıcı adı veya parça ara.' : 'Başka bir Ritim hesabı bağlandığında burada görünecek.'}</p></div>
             )}
           </div>
         </div>
@@ -193,6 +212,12 @@ function MobileSocialUserRow({ user, state, actions, onMessage }: { user: Social
 
 export function MobileSocialHub({ state, actions }: SocialProps) {
   const [chatOpen, setChatOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase('tr'))
+  const visibleUsers = useMemo(
+    () => state.users.filter((user) => matchesSocialQuery(user, deferredQuery)),
+    [deferredQuery, state.users],
+  )
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
 
   return (
@@ -202,7 +227,8 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
           <div><h1>Sosyal</h1><span><i />{onlineCount} kişi çevrimiçi</span></div>
           <button className={state.activeRoomId ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{state.activeRoomId ? 'Odan hazır' : 'Oda oluştur'}</button>
         </div>
-        <div className="mobile-social-preview"><span>ALPHA.1</span> {state.connectionStatus === 'online' ? 'PC ile canlı sosyal bağlantı' : 'PC bağlantısı bekleniyor'}</div>
+        <SocialConnectionNotice state={state} actions={actions} mobile />
+        <label className="mobile-social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kullanıcı veya şarkı ara" /></label>
         <section className="mobile-social-rooms">
           <div className="mobile-social-section-title"><h2>Dinleme odaları</h2><Radio /></div>
           <div className="mobile-room-rail">
@@ -219,9 +245,9 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
         </section>
         <section className="mobile-social-list">
           <div className="mobile-social-section-title"><h2>Şu an dinleyenler</h2><small>{onlineCount} kişi</small></div>
-          {state.users.length ? state.users.map((user) => (
+          {visibleUsers.length ? visibleUsers.map((user) => (
             <MobileSocialUserRow key={user.id} user={user} state={state} actions={actions} onMessage={() => setChatOpen(true)} />
-          )) : <div className="social-no-results"><UsersRound /><b>Ritim PC bekleniyor</b><p>PC uygulamasını açık tut ve aynı eşleme odasına bağlan.</p></div>}
+          )) : <div className="social-no-results"><UsersRound /><b>{deferredQuery ? 'Kullanıcı bulunamadı' : 'Henüz başka kullanıcı yok'}</b><p>{deferredQuery ? 'Başka bir ad, kullanıcı adı veya şarkı ara.' : 'Başka bir Ritim hesabı bağlandığında burada görünecek.'}</p></div>}
         </section>
       </section>
       {chatOpen ? (

@@ -13,6 +13,7 @@ const isDev = !app.isPackaged
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
 const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '1528122277500030976'
+const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || 'http://127.0.0.1:8790'
 let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
 let mainWindow
 let musicView
@@ -22,6 +23,7 @@ let presence
 let musicBridge
 let socialSocket
 let latestSocialState
+let socialConnectionStatus = 'connecting'
 let latestPlayerState
 let updateController
 let isShuttingDown = false
@@ -135,13 +137,36 @@ function setShellView(nextView) {
   return activeShellView
 }
 
+function stableSocialAccountId(seed) {
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `ritim-${(hash >>> 0).toString(36)}`
+}
+
+function desktopSocialIdentity() {
+  // The pairing token is the account identity shared by this PC and its phone.
+  // Using the room in development made the companion appear as another person.
+  const accountId = stableSocialAccountId(getPairingToken())
+  return {
+    accountId,
+    deviceId: `desktop-${accountId}`,
+  }
+}
+
 function desktopSocialProfile() {
   const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
+  const accountProfile = latestPlayerState?.accountProfile
+  const { accountId } = desktopSocialIdentity()
+  const displayName = accountProfile?.displayName || `Ritim PC • ${os.hostname()}`
   return {
-    id: `ritim-pc-${ROOM}`,
-    displayName: `Ritim PC • ${os.hostname()}`,
-    handle: '@ritimpc',
-    initials: 'PC',
+    id: accountId,
+    displayName,
+    handle: `@${displayName.toLocaleLowerCase('tr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '') || 'ritimpc'}`,
+    initials: displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('tr') || 'PC',
+    avatarUrl: accountProfile?.avatarUrl,
     avatarTone: 0,
     presence: 'online',
     currentTrack: track ? {
@@ -161,29 +186,48 @@ function desktopSocialProfile() {
 
 function publishDesktopSocialProfile() {
   if (!socialSocket?.connected) return
-  socialSocket.emit('social:profile', { room: ROOM, profile: desktopSocialProfile() })
+  socialSocket.emit('social:profile', { profile: desktopSocialProfile() })
+}
+
+function broadcastSocialState(status, incomingState) {
+  socialConnectionStatus = status
+  const previous = incomingState || latestSocialState
+  latestSocialState = {
+    currentUser: previous?.currentUser || desktopSocialProfile(),
+    currentDeviceCount: previous?.currentDeviceCount || 1,
+    companionConnected: Boolean(previous?.companionConnected),
+    users: (previous?.users || []).map((user) => status === 'online' ? user : { ...user, presence: 'offline' }),
+    rooms: previous?.rooms || [],
+    conversations: previous?.conversations || {},
+    selectedUserId: previous?.selectedUserId || '',
+    listeningWithUserId: previous?.listeningWithUserId,
+    activeRoomId: previous?.activeRoomId,
+    connectionStatus: status,
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', latestSocialState)
 }
 
 function startSocialClient() {
   socialSocket?.disconnect()
-  socialSocket = io(process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', {
+  broadcastSocialState('connecting')
+  socialSocket = io(SOCIAL_URL, {
     timeout: 3000,
     reconnectionDelay: 900,
-    auth: { token: getPairingToken() },
   })
   socialSocket.on('connect', () => {
-    socialSocket.emit('room:join', {
-      room: ROOM,
-      role: 'social-desktop',
-      state: {},
-      token: getPairingToken(),
+    broadcastSocialState('connecting')
+    const identity = desktopSocialIdentity()
+    socialSocket.emit('social:join', {
+      ...identity,
+      deviceRole: 'desktop',
+      profile: desktopSocialProfile(),
     })
-    queueMicrotask(publishDesktopSocialProfile)
   })
-  socialSocket.on('room:status', publishDesktopSocialProfile)
+  socialSocket.on('disconnect', () => broadcastSocialState('offline'))
+  socialSocket.on('connect_error', () => broadcastSocialState('offline'))
+  socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
   socialSocket.on('social:state', (state) => {
-    latestSocialState = state
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', state)
+    broadcastSocialState('online', state)
   })
 }
 
@@ -327,10 +371,25 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
   ipcMain.on('settings:open', createSettingsWindow)
   ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
-  ipcMain.handle('shell:get-social-state', () => latestSocialState || null)
+  ipcMain.handle('shell:get-social-state', () => latestSocialState || {
+    currentUser: desktopSocialProfile(),
+    currentDeviceCount: 1,
+    companionConnected: false,
+    users: [],
+    rooms: [],
+    conversations: {},
+    selectedUserId: '',
+    connectionStatus: socialConnectionStatus,
+  })
   ipcMain.on('shell:social-action', (_event, action = {}) => {
+    if (action.type === 'reconnect') {
+      broadcastSocialState('connecting')
+      if (socialSocket?.connected) publishDesktopSocialProfile()
+      else socialSocket?.connect()
+      return
+    }
     if (!socialSocket?.connected) return
-    const payload = { room: ROOM, ...(action.payload || {}) }
+    const payload = action.payload || {}
     if (action.type === 'message') socialSocket.emit('social:message', payload)
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
     if (action.type === 'listening') socialSocket.emit('social:listening', payload)

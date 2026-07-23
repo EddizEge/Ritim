@@ -1,12 +1,9 @@
 import cors from 'cors'
 import express from 'express'
 import { createServer } from 'node:http'
-import { createRequire } from 'node:module'
 import { Server } from 'socket.io'
 import type { PlayerState, SyncCommand, SyncCommandAck } from '../src/types'
 
-const require = createRequire(import.meta.url)
-const { createSocialHub } = require('../electron/social-hub.cjs')
 const PORT = Number(process.env.RITIM_PORT || 8787)
 const app = express()
 app.use(cors())
@@ -15,7 +12,6 @@ app.get('/health', (_request, response) => response.json({ ok: true, service: 'r
 
 const httpServer = createServer(app)
 const io = new Server(httpServer, { cors: { origin: true, credentials: true } })
-const socialHub = createSocialHub(io)
 
 type RoomRecord = {
   state: PlayerState
@@ -37,7 +33,7 @@ function socketsInRoom(room: string) {
 }
 
 function roomStatus(room: string) {
-  const sockets = socketsInRoom(room).filter((socket) => socket?.data.role !== 'social-desktop')
+  const sockets = socketsInRoom(room)
   return {
     peerCount: sockets.length,
     desktopOnline: sockets.some((socket) => socket?.data.role === 'desktop'),
@@ -63,11 +59,10 @@ function normalizeCommand(command: Partial<SyncCommand> | undefined): SyncComman
 }
 
 io.on('connection', (socket) => {
-  socialHub.attach(socket)
   socket.on('room:join', ({ room, role, state }: { room: string; role: string; state: PlayerState }) => {
     const normalizedRoom = safeRoom(room)
     if (!normalizedRoom) return
-    const normalizedRole = role === 'companion' ? 'companion' : role === 'social-desktop' ? 'social-desktop' : 'desktop'
+    const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
     socket.join(normalizedRoom)
     socket.data.room = normalizedRoom
     socket.data.role = normalizedRole
@@ -85,8 +80,7 @@ io.on('connection', (socket) => {
     }
 
     const record = rooms.get(normalizedRoom)
-    if (record && normalizedRole !== 'social-desktop') socket.emit('player:state', record.state)
-    socialHub.joined(socket, normalizedRoom)
+    if (record) socket.emit('player:state', record.state)
     emitRoomStatus(normalizedRoom)
   })
 
@@ -141,7 +135,6 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const room = socket.data.room as string | undefined
     if (!room) return
-    socialHub.disconnected(socket)
     const record = rooms.get(room)
     if (record?.desktopSocketId === socket.id) {
       const replacement = socketsInRoom(room).find((peer) => peer?.data.role === 'desktop')

@@ -17,6 +17,7 @@ export type SocialUser = {
   displayName: string
   handle: string
   initials: string
+  avatarUrl?: string
   avatarTone: number
   presence: 'online' | 'away' | 'offline'
   currentTrack?: SocialTrack
@@ -43,6 +44,8 @@ export type SocialMessage = {
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
   currentUser: SocialUser
+  currentDeviceCount: number
+  companionConnected: boolean
   users: SocialUser[]
   rooms: SocialRoom[]
   conversations: Record<string, SocialMessage[]>
@@ -57,4 +60,5 @@ export type SocialActions = {
   sendMessage: (userId: string, text: string) => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
+  reconnectSocial: () => void
 }

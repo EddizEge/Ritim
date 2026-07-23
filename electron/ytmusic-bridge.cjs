@@ -1195,6 +1195,17 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           }
           return '';
         };
+        const accountNav = document.querySelector('ytmusic-nav-bar');
+        const accountAvatarElement = accountNav?.querySelector(
+          '#avatar img, img#avatar, #avatar-container img, button[aria-label*="avatar" i] img, img[src*="googleusercontent.com"], img[src*="ggpht.com"]'
+        );
+        const accountAvatarUrl = accountAvatarElement?.currentSrc || accountAvatarElement?.src || '';
+        const accountHeader = document.querySelector('ytmusic-carousel-shelf-basic-header-renderer');
+        const accountName = textFrom(accountHeader || document, [
+          '#strapline',
+          '.strapline-text',
+          'yt-formatted-string.strapline',
+        ]).slice(0, 60);
         const allQueueRoots = [...document.querySelectorAll('ytmusic-player-queue ytmusic-player-queue-item')];
         const queueVideoId = (root) => {
           const data = root?.data || root?.__data?.data || {};
@@ -1470,6 +1481,10 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           .map((root) => root.textContent || '').join(' ');
         const lyricsUnavailable = Boolean(selectedLyricsTab && !lyricsLines.length && /not available|kullanılamıyor|mevcut değil|bulunamadı/i.test(selectedLyricsText + ' ' + lyricsMessageText));
         return {
+          accountProfile: accountName || accountAvatarUrl ? {
+            displayName: accountName,
+            avatarUrl: accountAvatarUrl,
+          } : null,
           title: playerData.title || metadata && metadata.title || '',
           artist: playerData.author || metadata && metadata.artist || '',
           album: metadata && metadata.album || '',
@@ -1499,6 +1514,15 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const title = String(media.title || '').trim()
       const artist = String(media.artist || '').trim()
       const currentVideoId = String(media.currentVideoId || '').trim()
+      const previousAccountProfile = state.accountProfile
+      const capturedAccountName = String(media.accountProfile?.displayName || '').trim()
+      const capturedAvatarUrl = String(media.accountProfile?.avatarUrl || '').trim()
+      const accountProfile = capturedAccountName || previousAccountProfile?.displayName
+        ? {
+            displayName: capturedAccountName || previousAccountProfile.displayName,
+            avatarUrl: capturedAvatarUrl || previousAccountProfile?.avatarUrl || undefined,
+          }
+        : undefined
       const normalizedCapturedTitle = title.toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim()
       const normalizedExpectedTitle = expectedTrackTitle.toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim()
       const expectedTitleReady = !normalizedExpectedTitle || normalizedCapturedTitle === normalizedExpectedTitle
@@ -1599,12 +1623,13 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
         : previousRelated
       const lyricsSignature = JSON.stringify([lyrics.status, lyrics.lines])
       const relatedSignature = JSON.stringify([related.status, related.items])
-      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature])
+      const accountSignature = JSON.stringify(accountProfile)
+      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature, accountSignature])
       if (signature === lastSignature) return
       lastSignature = signature
       state = {
         ...state, trackId: id, isPlaying, position, volume, queue: queueIds,
-        catalog, browse, lyrics, related, updatedAt: Date.now(),
+        catalog, browse, lyrics, related, accountProfile, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
       onState?.(state)
