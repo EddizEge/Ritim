@@ -15,6 +15,7 @@
     "server/social.ts",
     "server/social-auth.ts",
     "server/social-infrastructure.ts",
+    "server/social-security.ts",
     "server/social-store.ts"
   ]
 }

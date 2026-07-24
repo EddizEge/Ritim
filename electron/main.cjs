@@ -198,6 +198,10 @@ function broadcastSocialState(status, incomingState) {
   const previous = incomingState || latestSocialState
   latestSocialState = {
     currentUser: previous?.currentUser || desktopSocialProfile(),
+    privacy: previous?.privacy || {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
     currentDeviceCount: previous?.currentDeviceCount || 1,
     companionConnected: Boolean(previous?.companionConnected),
     users: (previous?.users || []).map((user) => status === 'online' ? user : { ...user, presence: 'offline' }),
@@ -412,6 +416,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
   ipcMain.handle('shell:get-social-state', () => latestSocialState || {
     currentUser: desktopSocialProfile(),
+    privacy: {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
     currentDeviceCount: 1,
     companionConnected: false,
     users: [],
@@ -451,6 +459,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     const payload = action.payload || {}
     if (action.type === 'message') socialSocket.emit('social:message', payload)
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
+    if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
+    if (action.type === 'block') socialSocket.emit('social:block', payload)
     if (action.type === 'listening') socialSocket.emit('social:listening', payload)
     if (action.type === 'create-room') {
       const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]

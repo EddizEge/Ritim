@@ -75,6 +75,17 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   const reactedState = await waitForState('Ediz PC', (state) => state.users[0]?.reactionCount === 1)
   assert.equal(reactedState.users[0].lastReaction, '🔥')
 
+  desktopB.emit('social:privacy', {
+    profileVisibility: 'hidden',
+    listeningVisibility: 'hidden',
+  })
+  await waitForState('Ediz PC', (state) => state.users.length === 0)
+  desktopB.emit('social:privacy', {
+    profileVisibility: 'everyone',
+    listeningVisibility: 'everyone',
+  })
+  await waitForState('Ediz PC', (state) => state.users.length === 1)
+
   desktopB.emit('social:create-room', { title: 'Gece sürüşü', cover: 2 })
   const roomState = await waitForState('Ediz PC', (state) => state.rooms.length === 1)
   assert.equal(roomState.rooms[0].title, 'Gece sürüşü')
@@ -90,6 +101,10 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     !state.listeningWithUserId && state.rooms[0]?.memberCount === 1
   ))
   assert.equal(stoppedListeningState.rooms[0].memberCount, 1)
+
+  desktopB.emit('social:block', { targetUserId: 'account-a' })
+  await waitForState('Ediz PC', (state) => state.users.length === 0 && state.rooms.length === 0)
+  await waitForState('Deniz PC', (state) => state.users.length === 0)
 
   desktopB.disconnect()
   const disconnectedState = await waitForState('Ediz PC', (state) => state.users.length === 0)
@@ -155,4 +170,58 @@ test('doğrulanmış socket kimliği istemcinin account ve profil iddiasını ez
   assert.equal(state.currentUser.handle, verifiedIdentity.handle)
   assert.equal(state.currentUser.avatarUrl, verifiedIdentity.avatarUrl)
   assert.equal(state.companionConnected, true)
+})
+
+test('socket olay hız sınırı tepki spamini keser ve istemciyi bilgilendirir', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const abuseEvents = []
+  const hub = createSocialHub(io, { onAbuse: (event) => abuseEvents.push(event) })
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const address = httpServer.address()
+  const url = `http://127.0.0.1:${address.port}`
+  const sender = createClient(url, { autoConnect: false, transports: ['websocket'] })
+  const target = createClient(url, { autoConnect: false, transports: ['websocket'] })
+  context.after(async () => {
+    sender.disconnect()
+    target.disconnect()
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+  const connected = Promise.all([
+    new Promise((resolve) => sender.once('connect', resolve)),
+    new Promise((resolve) => target.once('connect', resolve)),
+  ])
+  sender.connect()
+  target.connect()
+  await connected
+  sender.emit('social:join', {
+    accountId: 'rate-a',
+    deviceId: 'rate-a-device',
+    deviceRole: 'desktop',
+    profile: profile('rate-a', 'Rate A', 'desktop'),
+  })
+  target.emit('social:join', {
+    accountId: 'rate-b',
+    deviceId: 'rate-b-device',
+    deviceRole: 'desktop',
+    profile: profile('rate-b', 'Rate B', 'desktop'),
+  })
+
+  const limited = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Tepki hız sınırı çalışmadı')), 2_000)
+    sender.on('social:error', (error) => {
+      if (error.code !== 'rate_limited' || error.event !== 'reaction') return
+      clearTimeout(timer)
+      resolve(error)
+    })
+  })
+  for (let index = 0; index < 31; index += 1) {
+    sender.emit('social:reaction', { targetUserId: 'rate-b', reaction: '♥' })
+  }
+  const error = await limited
+  assert.equal(error.retryAfter > 0, true)
+  assert.equal(abuseEvents.some((event) => event.category === 'socket_event:reaction'), true)
 })

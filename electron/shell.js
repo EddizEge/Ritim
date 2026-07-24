@@ -8,6 +8,9 @@ const socialCount = document.getElementById('social-count')
 const socialServiceNote = document.getElementById('social-service-note')
 const socialAuthButton = document.getElementById('social-auth-button')
 const socialRetryButton = document.getElementById('social-retry-button')
+const socialPrivacyToolbar = document.getElementById('social-privacy-toolbar')
+const profileVisibility = document.getElementById('profile-visibility')
+const listeningVisibility = document.getElementById('listening-visibility')
 const onlineCount = document.getElementById('online-count')
 const peopleSearchInput = document.getElementById('people-search-input')
 const peopleList = document.getElementById('people-list')
@@ -21,6 +24,7 @@ const messageList = document.getElementById('message-list')
 const messageForm = document.getElementById('message-form')
 const messageInput = document.getElementById('message-input')
 const listenButton = document.getElementById('listen-button')
+const blockButton = document.getElementById('block-button')
 const createRoomButton = document.getElementById('create-room-button')
 const roomsList = document.getElementById('rooms-list')
 
@@ -211,6 +215,9 @@ function render() {
   socialAuthButton.textContent = authentication.authenticated ? 'Hesaptan çık' : 'Google ile bağlan'
   socialAuthButton.dataset.action = authentication.authenticated ? 'sign-out' : 'sign-in'
   socialRetryButton.hidden = socialState?.connectionStatus !== 'offline' || needsAuthentication
+  socialPrivacyToolbar.hidden = !socialOnline
+  profileVisibility.value = socialState?.privacy?.profileVisibility || 'everyone'
+  listeningVisibility.value = socialState?.privacy?.listeningVisibility || 'everyone'
   renderPeople()
   renderChat()
   renderRooms()
@@ -228,6 +235,19 @@ createRoomButton.addEventListener('click', () => window.ritimShell?.sendSocialAc
 socialRetryButton.addEventListener('click', () => window.ritimShell?.sendSocialAction('reconnect', {}))
 socialAuthButton.addEventListener('click', () => {
   window.ritimShell?.sendSocialAction(socialAuthButton.dataset.action || 'sign-in', {})
+})
+function sendPrivacy() {
+  window.ritimShell?.sendSocialAction('privacy', {
+    profileVisibility: profileVisibility.value,
+    listeningVisibility: listeningVisibility.value,
+  })
+}
+profileVisibility.addEventListener('change', sendPrivacy)
+listeningVisibility.addEventListener('change', sendPrivacy)
+blockButton.addEventListener('click', () => {
+  const user = selectedUser()
+  if (!user || !window.confirm(`${user.displayName} kullanıcısını engellemek istiyor musun?`)) return
+  window.ritimShell?.sendSocialAction('block', { targetUserId: user.id })
 })
 peopleSearchInput.addEventListener('input', () => {
   peopleQuery = peopleSearchInput.value

@@ -1,4 +1,10 @@
 export type SocialConnectionStatus = 'preview' | 'connecting' | 'online' | 'offline'
+export type SocialVisibility = 'everyone' | 'contacts' | 'hidden'
+
+export type SocialPrivacy = {
+  profileVisibility: SocialVisibility
+  listeningVisibility: SocialVisibility
+}
 
 export type SocialTrack = {
   id: string
@@ -44,6 +50,7 @@ export type SocialMessage = {
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
   currentUser: SocialUser
+  privacy: SocialPrivacy
   currentDeviceCount: number
   companionConnected: boolean
   users: SocialUser[]
@@ -60,5 +67,7 @@ export type SocialActions = {
   sendMessage: (userId: string, text: string) => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
+  updatePrivacy: (privacy: SocialPrivacy) => void
+  blockUser: (userId: string) => void
   reconnectSocial: () => void
 }
