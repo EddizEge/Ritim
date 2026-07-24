@@ -4,6 +4,8 @@ const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
 
+const DEFAULT_SOCIAL_GOOGLE_CLIENT_ID = '881361547543-scabmbi925v6mj97vb4uumbicq5ababt.apps.googleusercontent.com'
+
 function base64url(buffer) {
   return buffer.toString('base64url')
 }
@@ -13,7 +15,9 @@ function createSocialAuthClient({
   userDataPath,
   safeStorage,
   shell,
-  clientId = process.env.RITIM_SOCIAL_GOOGLE_CLIENT_ID || process.env.RITIM_GOOGLE_CLIENT_ID || '',
+  clientId = process.env.RITIM_SOCIAL_GOOGLE_CLIENT_ID
+    || process.env.RITIM_GOOGLE_CLIENT_ID
+    || DEFAULT_SOCIAL_GOOGLE_CLIENT_ID,
   fetchImpl = fetch,
 }) {
   const sessionPath = path.join(userDataPath, 'social-session.bin')

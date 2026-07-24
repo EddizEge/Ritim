@@ -13,7 +13,9 @@ const { createUpdateController } = require('./updater.cjs')
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
 const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '1528122277500030976'
-const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || 'http://127.0.0.1:8790'
+const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
+const LOCAL_SOCIAL_URL = 'http://127.0.0.1:8790'
+const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || (app.isPackaged ? PUBLIC_SOCIAL_URL : LOCAL_SOCIAL_URL)
 let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
 let mainWindow
 let musicView
