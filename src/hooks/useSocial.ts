@@ -13,6 +13,8 @@ type Options = {
 
 type SocialSnapshot = Omit<SocialState, 'connectionStatus'>
 
+const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
+
 function profileInitials(displayName: string) {
   const initials = displayName
     .split(/\s+/)
@@ -51,6 +53,7 @@ function socialDeviceId(isCompanion: boolean) {
 }
 
 function defaultSocialUrl() {
+  if (import.meta.env.PROD) return PUBLIC_SOCIAL_URL
   try {
     const url = new URL(ritimSyncUrl)
     url.port = '8790'

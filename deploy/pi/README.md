@@ -1,6 +1,6 @@
 # Ritim Social Alpha.2 — Raspberry Pi
 
-Bu klasör Alpha.2'nin ilk, henüz internete açılmayan Pi temelidir.
+Bu klasör Alpha.2'nin Raspberry Pi üzerindeki kalıcı sosyal altyapısıdır.
 
 ## Başlangıç
 
@@ -40,10 +40,11 @@ Bu klasör Alpha.2'nin ilk, henüz internete açılmayan Pi temelidir.
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.
 
-Windows istemci testinde gateway adresi `RITIM_SOCIAL_URL`, bu listedeki
-masaüstü OAuth client ID ise `RITIM_SOCIAL_GOOGLE_CLIENT_ID` ortam değişkeniyle
-verilir. Telefon ayrıca Google tokenı almaz; eşlenmiş PC'den tek kullanımlık
-companion ticket alarak aynı Ritim hesabına bağlanır.
+Üretim Windows ve Android paketleri varsayılan olarak
+`https://social.edizegemercan.com.tr` adresini kullanır. Geliştirmede gateway
+adresi `RITIM_SOCIAL_URL` veya `VITE_SOCIAL_URL` ile değiştirilebilir. Telefon
+ayrıca Google tokenı almaz; eşlenmiş PC'den tek kullanımlık companion ticket
+alarak aynı Ritim hesabına bağlanır.
 
 ## Ağ sınırı
 
@@ -52,11 +53,13 @@ companion ticket alarak aynı Ritim hesabına bağlanır.
 - Gateway veritabanı için dahili ağa, loopback yayını için ayrı `ritim_edge`
   ağına bağlıdır.
 - Gateway yalnızca Pi loopback adresinde `8790` portuna bağlanır.
-- Bu compose dosyasında Cloudflare Tunnel yoktur.
+- Cloudflare Tunnel ayrı CasaOS container'ında çalışır ve
+  `social.edizegemercan.com.tr` adresini `http://127.0.0.1:8790` originine
+  yönlendirir.
 - Gateway origin allowlist, HTTP/auth/socket bağlantı limitleri, olay başına
   hız sınırları ve kimlik doğrulaması ile korunur.
-- Cloudflare public hostname eklenene kadar `RITIM_TRUST_PROXY=0` kalır ve
-  gateway `0.0.0.0` üzerinde host'a yayınlanmaz.
+- Cloudflare rotasında `RITIM_TRUST_PROXY=1` kullanılır; gateway yine
+  `0.0.0.0` üzerinde host'a yayınlanmaz.
 
 ## Veri yerleşimi
 
@@ -72,4 +75,5 @@ ile şifreleyip atomik olarak hedefe taşır; düz veritabanı dökümü diske y
   dosyasında, yalnızca root erişimiyle tutulur.
 
 `systemd/` altındaki service/timer dosyaları Pi'ye kurulduğunda Cloudflare'dan
-bağımsız olarak bu takvimi uygular.
+bağımsız olarak bu takvimi uygular. Gateway internete yalnızca Cloudflare
+HTTPS/WSS rotası, zorunlu Ritim kimlik doğrulaması ve hız sınırlarıyla açılır.
