@@ -15,7 +15,6 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
-import java.security.SecureRandom;
 import java.util.regex.Pattern;
 
 import javax.crypto.Cipher;
@@ -30,8 +29,6 @@ public class RitimSecureStoragePlugin extends Plugin {
     private static final Pattern SAFE_KEY = Pattern.compile("^[A-Za-z0-9._-]{1,80}$");
     private static final int IV_LENGTH = 12;
     private static final int MAX_VALUE_BYTES = 32 * 1024;
-    private final SecureRandom secureRandom = new SecureRandom();
-
     private SharedPreferences preferences() {
         return getContext().getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
     }
@@ -76,10 +73,12 @@ public class RitimSecureStoragePlugin extends Plugin {
             return;
         }
         try {
-            byte[] iv = new byte[IV_LENGTH];
-            secureRandom.nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey(), new GCMParameterSpec(128, iv));
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey());
+            byte[] iv = cipher.getIV();
+            if (iv == null || iv.length != IV_LENGTH) {
+                throw new IllegalStateException("Android Keystore geçersiz bir IV üretti.");
+            }
             byte[] ciphertext = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
             byte[] payload = ByteBuffer.allocate(1 + iv.length + ciphertext.length)
                 .put((byte) 1)
