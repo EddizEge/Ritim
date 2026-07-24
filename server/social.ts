@@ -12,6 +12,15 @@ import {
   readSocialAuthConfig,
 } from './social-auth.js'
 import { createSocialInfrastructure } from './social-infrastructure.js'
+import {
+  createCorsOriginCallback,
+  createRateGate,
+  createRateLimiter,
+  isOriginAllowed,
+  logAbuse,
+  readSocialSecurityConfig,
+  securityHeaders,
+} from './social-security.js'
 import { createDurableSocialStore } from './social-store.js'
 
 const localRequire = createRequire(import.meta.url)
@@ -19,9 +28,27 @@ const { createSocialHub } = localRequire('../electron/social-hub.cjs')
 const PORT = Number(process.env.RITIM_SOCIAL_PORT || 8790)
 const infrastructure = createSocialInfrastructure()
 const authConfig = readSocialAuthConfig()
+const securityConfig = readSocialSecurityConfig()
+const corsOrigin = createCorsOriginCallback(securityConfig.allowedOrigins)
+const socketConnectionGate = createRateGate({
+  name: 'socket_connection',
+  windowMs: securityConfig.socketWindowMs,
+  limit: securityConfig.socketLimit,
+  onLimited: logAbuse,
+})
 
 const app = express()
-app.use(cors())
+if (securityConfig.trustProxy) app.set('trust proxy', securityConfig.trustProxy)
+app.disable('x-powered-by')
+app.use(securityHeaders)
+app.use(cors({ origin: corsOrigin, credentials: true }))
+app.use(createRateLimiter({
+  name: 'http',
+  windowMs: securityConfig.requestWindowMs,
+  limit: securityConfig.requestLimit,
+  skip: (request) => request.path === '/health' || request.path === '/ready',
+  onLimited: logAbuse,
+}))
 app.use(express.json({ limit: '32kb' }))
 app.get('/health', (_request, response) => response.json({
   ok: true,
@@ -51,7 +78,24 @@ app.get('/ready', async (_request, response) => {
 
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
-  cors: { origin: true, credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
+  allowRequest: (request, callback) => {
+    const allowed = isOriginAllowed(request.headers.origin, securityConfig.allowedOrigins)
+    if (!allowed) {
+      logAbuse({
+        category: 'socket_origin',
+        fingerprint: 'origin',
+        path: request.url,
+        limit: 0,
+        windowMs: 0,
+      })
+    }
+    const forwardedAddress = securityConfig.trustProxy
+      ? String(request.headers['cf-connecting-ip'] || request.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      : ''
+    const gate = socketConnectionGate(forwardedAddress || request.socket.remoteAddress)
+    callback(null, allowed && gate.allowed)
+  },
   maxHttpBufferSize: 100_000,
 })
 let socialHub: ReturnType<typeof createSocialHub> | undefined
@@ -83,10 +127,27 @@ async function main() {
           : undefined,
       )
     : undefined
+  app.use('/auth', createRateLimiter({
+    name: 'auth',
+    windowMs: securityConfig.authWindowMs,
+    limit: securityConfig.authLimit,
+    onLimited: logAbuse,
+  }))
   mountSocialAuthRoutes(app, authService, authConfig)
+  app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction) => {
+    if (error instanceof Error && /origin reddedildi/i.test(error.message)) {
+      response.status(403).json({
+        ok: false,
+        error: 'origin_forbidden',
+        message: 'Bu uygulama kaynağının Ritim Social erişimine izin verilmiyor.',
+      })
+      return
+    }
+    next(error)
+  })
   io.use(createSocketAuthentication(authService, authConfig))
   infrastructure.setDurableSocialEvents(Boolean(store))
-  socialHub = createSocialHub(io, { store })
+  socialHub = createSocialHub(io, { store, onAbuse: logAbuse })
   io.on('connection', (socket) => socialHub?.attach(socket))
   httpServer.listen(PORT, '0.0.0.0', () => {
     const mode = infrastructure.health().configured ? 'PostgreSQL + Redis' : 'bellek ici gelistirme'

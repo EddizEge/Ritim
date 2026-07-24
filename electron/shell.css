@@ -12,7 +12,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #08090a; color: #f5f5f6; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { color: inherit; cursor: pointer; }
 
 .appbar {
@@ -83,6 +83,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-service-note.is-offline { color: #c9979f; border-color: #4b2e34; background: #181012; }
 .social-service-note.is-offline > i { background: #ff5b6c; }
 .social-service-note button { margin-left: auto; padding: 5px 8px; border: 1px solid #613641; border-radius: 7px; color: #ff8b9a; background: #29151b; font-size: 9px; font-weight: 750; }
+.social-privacy-toolbar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.social-privacy-toolbar label { display: flex; align-items: center; gap: 4px; color: #92979b; font-size: 8px; }
+.social-privacy-toolbar select { height: 24px; padding: 0 19px 0 6px; border: 1px solid #34383d; border-radius: 6px; color: #e0e2e3; background: #191b1e; }
+.social-privacy-toolbar + button { margin-left: 0; }
 
 .social-workspace {
   display: grid;
@@ -145,6 +149,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .chat-header small { margin-top: 3px; color: #55d47f; font-size: 9px; }
 .listen-button { margin-left: auto; min-height: 34px; padding: 0 11px; }
 .listen-button.is-active { border-color: #3f8557; color: #70df96; background: #173220; }
+.block-button { min-height: 34px; padding: 0 9px; border: 1px solid #55343b; border-radius: 9px; color: #e98796; background: #24171a; font-size: 9px; }
+.block-button:hover { border-color: #9a4554; color: #ff9dac; }
 .chat-track { display: grid; grid-template-columns: 40px 1fr; gap: 10px; padding: 12px 17px; border-bottom: 1px solid var(--line); background: #14171a; }
 .track-cover { width: 40px; height: 40px; border-radius: 7px; object-fit: cover; background: linear-gradient(145deg, #37232a, #1d1f22); }
 .track-copy { min-width: 0; }

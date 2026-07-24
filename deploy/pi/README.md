@@ -9,8 +9,8 @@ Bu klasör Alpha.2'nin ilk, henüz internete açılmayan Pi temelidir.
    JWT imzalama anahtarı üret.
 3. Google Cloud'da Ritim masaüstü/Android istemcileri için oluşturulan OAuth
    client ID değerlerini virgülle ayırarak `RITIM_GOOGLE_CLIENT_IDS` alanına
-   yaz. İstemci secret'ını yalnızca confidential Web OAuth istemcisi
-   kullanılıyorsa ekle.
+   yaz. İstemci türü token değişiminde secret gerektiriyorsa
+   `RITIM_GOOGLE_CLIENT_SECRET` alanına ekle.
 4. Linux üzerinde secret dosyasını yalnızca sahibi okuyabilecek şekilde sınırla:
 
    ```sh
@@ -53,11 +53,23 @@ companion ticket alarak aynı Ritim hesabına bağlanır.
   ağına bağlıdır.
 - Gateway yalnızca Pi loopback adresinde `8790` portuna bağlanır.
 - Bu compose dosyasında Cloudflare Tunnel yoktur.
-- İstemci OAuth bağlantısı ve rate limit tamamlanmadan `0.0.0.0` bind veya
-  Cloudflare public hostname eklenmez.
+- Gateway origin allowlist, HTTP/auth/socket bağlantı limitleri, olay başına
+  hız sınırları ve kimlik doğrulaması ile korunur.
+- Cloudflare public hostname eklenene kadar `RITIM_TRUST_PROXY=0` kalır ve
+  gateway `0.0.0.0` üzerinde host'a yayınlanmaz.
 
 ## Veri yerleşimi
 
-İlk aşamada named volume'lar Pi'nin 128 GB SSD'sindeki Docker veri dizininde
-kalır. 4 TB ve 2 TB diskler yedek/geri yükleme planı tamamlandığında ayrıca
-salt yedek hedefleri olarak bağlanacaktır.
+Named volume'lar Pi'nin 128 GB SSD'sindeki Docker veri dizininde kalır.
+`backup/ritim-backup.sh` PostgreSQL custom-format çıktısını AES-256-CBC/PBKDF2
+ile şifreleyip atomik olarak hedefe taşır; düz veritabanı dökümü diske yazılmaz.
+
+- Günlük yedek: 4 TB diskte `RitimBackups/daily`, 14 gün
+- Haftalık geri yükleme noktası: 2 TB diskte `RitimBackups/weekly`, 180 gün
+- Haftalık servis yedeği geçici `ritim_restore_smoke` veritabanına gerçekten
+  geri yükler, temel tablo sayılarını doğrular ve geçici veritabanını siler.
+- Şifreleme parolası `/DATA/AppData/ritim-alpha2/secrets/backup-passphrase`
+  dosyasında, yalnızca root erişimiyle tutulur.
+
+`systemd/` altındaki service/timer dosyaları Pi'ye kurulduğunda Cloudflare'dan
+bağımsız olarak bu takvimi uygular.

@@ -49,6 +49,22 @@
       <div id="social-service-note" class="social-service-note is-connecting">
         <i></i>
         <span>Ritim Social’a bağlanıyor…</span>
+        <div id="social-privacy-toolbar" class="social-privacy-toolbar" hidden>
+          <label>Profil
+            <select id="profile-visibility" aria-label="Profil görünürlüğü">
+              <option value="everyone">Herkes</option>
+              <option value="contacts">Konuştuklarım</option>
+              <option value="hidden">Gizli</option>
+            </select>
+          </label>
+          <label>Dinleme
+            <select id="listening-visibility" aria-label="Dinleme görünürlüğü">
+              <option value="everyone">Herkes</option>
+              <option value="contacts">Konuştuklarım</option>
+              <option value="hidden">Gizli</option>
+            </select>
+          </label>
+        </div>
         <button id="social-auth-button" type="button" hidden>Google ile bağlan</button>
         <button id="social-retry-button" type="button" hidden>Yeniden bağlan</button>
       </div>
@@ -80,6 +96,7 @@
               <span id="chat-avatar" class="avatar">RT</span>
               <span><b id="chat-name">Ritim Telefon</b><small id="chat-presence">Çevrimiçi</small></span>
               <button id="listen-button" class="listen-button" type="button">Birlikte dinle</button>
+              <button id="block-button" class="block-button" type="button" title="Kullanıcıyı engelle" aria-label="Kullanıcıyı engelle">Engelle</button>
             </header>
             <div id="chat-track" class="chat-track" hidden></div>
             <div id="message-list" class="message-list"></div>

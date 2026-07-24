@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState, type FormEvent } from 'react'
 import {
-  Heart, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send, SmilePlus,
+  Eye, Heart, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send, ShieldBan, SmilePlus,
   UsersRound, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
@@ -31,8 +31,43 @@ function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps 
       : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
   return (
     <div className={mobile ? `mobile-social-preview is-${state.connectionStatus}` : `social-preview-note is-${state.connectionStatus}`}>
-      <span>ALPHA.1</span>
+      <span>ALPHA.2</span>
       <p>{text}</p>
+      {online ? (
+        <div className="social-privacy-controls">
+          <Eye />
+          <label>
+            Profil
+            <select
+              aria-label="Profil görünürlüğü"
+              value={state.privacy.profileVisibility}
+              onChange={(event) => actions.updatePrivacy({
+                ...state.privacy,
+                profileVisibility: event.target.value as typeof state.privacy.profileVisibility,
+              })}
+            >
+              <option value="everyone">Herkes</option>
+              <option value="contacts">Konuştuklarım</option>
+              <option value="hidden">Gizli</option>
+            </select>
+          </label>
+          <label>
+            Dinleme
+            <select
+              aria-label="Dinleme görünürlüğü"
+              value={state.privacy.listeningVisibility}
+              onChange={(event) => actions.updatePrivacy({
+                ...state.privacy,
+                listeningVisibility: event.target.value as typeof state.privacy.listeningVisibility,
+              })}
+            >
+              <option value="everyone">Herkes</option>
+              <option value="contacts">Konuştuklarım</option>
+              <option value="hidden">Gizli</option>
+            </select>
+          </label>
+        </div>
+      ) : null}
       {!online && !connecting ? <button onClick={actions.reconnectSocial}><RefreshCw />Yeniden bağlan</button> : null}
     </div>
   )
@@ -95,7 +130,18 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
           <b>{selectedUser.displayName}</b>
           <small>{listeningTogether ? 'Birlikte dinliyorsunuz' : 'Çevrimiçi'}</small>
         </span>
-        <button aria-label="Sohbet seçenekleri"><MoreVertical /></button>
+        <button
+          aria-label={`${selectedUser.displayName} kullanıcısını engelle`}
+          title="Kullanıcıyı engelle"
+          onClick={() => {
+            if (window.confirm(`${selectedUser.displayName} kullanıcısını engellemek istiyor musun?`)) {
+              actions.blockUser(selectedUser.id)
+              onClose?.()
+            }
+          }}
+        >
+          <ShieldBan />
+        </button>
       </header>
       <div className="social-chat-messages" aria-live="polite">
         {conversation.length ? conversation.map((item) => (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
-import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
+import type { SocialActions, SocialPrivacy, SocialState, SocialTrack, SocialUser } from '../social/types'
 import { ritimPairingToken, ritimRoom, ritimSyncUrl } from './usePlayerSync'
 
 type Options = {
@@ -60,7 +60,25 @@ function defaultSocialUrl() {
   }
 }
 
-const socialUrl = import.meta.env.VITE_SOCIAL_URL || defaultSocialUrl()
+export function normalizeSocialUrl(value: string) {
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Ritim Social adresi HTTP veya HTTPS olmalıdır.')
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('Ritim Social adresi kullanıcı bilgisi, sorgu veya fragment içeremez.')
+  }
+  return url.origin
+}
+
+function configuredSocialUrl() {
+  const configured = String(import.meta.env.VITE_SOCIAL_URL || '').trim()
+  try {
+    return normalizeSocialUrl(configured || defaultSocialUrl())
+  } catch {
+    return normalizeSocialUrl(defaultSocialUrl())
+  }
+}
+
+const socialUrl = configuredSocialUrl()
 const socialSocket = io(socialUrl, {
   autoConnect: false,
   timeout: 3000,
@@ -88,6 +106,10 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
 
   const [snapshot, setSnapshot] = useState<SocialSnapshot>(() => ({
     currentUser: localProfile,
+    privacy: {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
     currentDeviceCount: 1,
     companionConnected: isCompanion,
     users: [],
@@ -207,6 +229,15 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     })
   }, [currentTrack.cover, currentTrack.title, resolvedName])
 
+  const updatePrivacy = useCallback((privacy: SocialPrivacy) => {
+    setSnapshot((current) => ({ ...current, privacy }))
+    socialSocket.emit('social:privacy', privacy)
+  }, [])
+
+  const blockUser = useCallback((userId: string) => {
+    socialSocket.emit('social:block', { targetUserId: userId })
+  }, [])
+
   const reconnectSocial = useCallback(() => {
     setConnectionStatus('connecting')
     connectSocialRef.current()
@@ -223,6 +254,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       sendMessage,
       toggleListeningWith,
       createRoom,
+      updatePrivacy,
+      blockUser,
       reconnectSocial,
     },
   }

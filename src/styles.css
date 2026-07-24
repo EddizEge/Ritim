@@ -226,6 +226,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-preview-note button, .mobile-social-preview button { display: flex; align-items: center; gap: 5px; margin-left: auto; padding: 4px 7px; border: 1px solid #55343a; border-radius: 6px; color: #ff8e9e; background: #211317; font-size: 8px; font-weight: 750; }
 .social-preview-note button svg, .mobile-social-preview button svg { width: 11px; height: 11px; }
 .social-preview-note.is-offline, .mobile-social-preview.is-offline { color: #c899a1; background: #160f11; }
+.social-privacy-controls { display: flex; align-items: center; gap: 7px; margin-left: auto; color: #96999a; }
+.social-privacy-controls > svg { width: 12px; height: 12px; color: #ff7a84; }
+.social-privacy-controls label { display: flex; align-items: center; gap: 4px; font-size: 7px; }
+.social-privacy-controls select { height: 22px; padding: 0 18px 0 6px; border: 1px solid #343738; border-radius: 5px; color: #d6d8d9; background: #171919; font: inherit; }
 .social-desktop-layout { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(290px, 350px); min-height: 0; }
 .social-directory { min-width: 0; min-height: 0; padding: 18px 20px 20px 24px; overflow: hidden; }
 .social-section-heading { display: flex; align-items: center; justify-content: space-between; height: 33px; margin-bottom: 8px; }
@@ -551,6 +555,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-social-heading > button.is-active { color: #c2f4d0; border-color: #28683d; background: #163020; }
 .mobile-social-heading > button svg { width: 16px; }
 .mobile-social-preview { display: flex; align-items: center; gap: 7px; margin: 0 18px 12px; padding: 8px 9px; border-radius: 8px; color: #737677; background: #111314; font-size: 8px; }
+.mobile-social-preview { flex-wrap: wrap; }
+.mobile-social-preview .social-privacy-controls { order: 2; width: 100%; margin-left: 0; padding-top: 5px; border-top: 1px solid #252728; }
+.mobile-social-preview .social-privacy-controls label { flex: 1; }
+.mobile-social-preview .social-privacy-controls select { flex: 1; min-width: 0; }
 .mobile-social-search { display: flex; align-items: center; gap: 8px; margin: 0 18px 20px; padding: 0 11px; border: 1px solid #282b2e; border-radius: 9px; background: #111314; }
 .mobile-social-search svg { width: 14px; color: #727679; }
 .mobile-social-search input { width: 100%; height: 38px; border: 0; outline: 0; color: #f4f4f4; background: transparent; font-size: 10px; }
