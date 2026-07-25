@@ -1,0 +1,11 @@
+[Unit]
+Description=Ritim Alpha.2 weekly restore-point timer
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=20m
+Unit=ritim-alpha2-backup-weekly.service
+
+[Install]
+WantedBy=timers.target

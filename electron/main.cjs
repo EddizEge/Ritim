@@ -1,17 +1,21 @@
-const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, safeStorage, shell } = require('electron')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const QRCode = require('qrcode')
+const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
+const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
 
-const isDev = !app.isPackaged
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
 const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '1528122277500030976'
+const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
+const LOCAL_SOCIAL_URL = 'http://127.0.0.1:8790'
+const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || (app.isPackaged ? PUBLIC_SOCIAL_URL : LOCAL_SOCIAL_URL)
 let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
 let mainWindow
 let musicView
@@ -19,8 +23,16 @@ let settingsWindow
 let syncServer
 let presence
 let musicBridge
+let socialSocket
+let socialAuth
+let socialAuthStatus = { configured: false, required: false, authenticated: false }
+let socialStartSequence = 0
+let latestSocialState
+let socialConnectionStatus = 'connecting'
+let latestPlayerState
 let updateController
 let isShuttingDown = false
+let activeShellView = 'music'
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -37,6 +49,9 @@ if (!hasSingleInstanceLock) {
 }
 
 function stopRuntime() {
+  socialStartSequence += 1
+  socialSocket?.disconnect()
+  socialSocket = null
   musicBridge?.destroy()
   musicBridge = null
   presence?.destroy()
@@ -116,6 +131,144 @@ function resizeMusicView() {
   musicView.setBounds({ x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(0, height - APP_BAR_HEIGHT) })
 }
 
+function setShellView(nextView) {
+  activeShellView = nextView === 'social' ? 'social' : 'music'
+  if (musicView) {
+    musicView.setVisible(activeShellView === 'music')
+    if (activeShellView === 'music') resizeMusicView()
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('shell:view-changed', activeShellView)
+  }
+  return activeShellView
+}
+
+function stableSocialAccountId(seed) {
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `ritim-${(hash >>> 0).toString(36)}`
+}
+
+function desktopSocialIdentity() {
+  // The pairing token is the account identity shared by this PC and its phone.
+  // Using the room in development made the companion appear as another person.
+  const accountId = stableSocialAccountId(getPairingToken())
+  return {
+    accountId,
+    deviceId: `desktop-${accountId}`,
+  }
+}
+
+function desktopSocialProfile() {
+  const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
+  const accountProfile = latestPlayerState?.accountProfile
+  const { accountId } = desktopSocialIdentity()
+  const displayName = accountProfile?.displayName || `Ritim PC • ${os.hostname()}`
+  return {
+    id: accountId,
+    displayName,
+    handle: `@${displayName.toLocaleLowerCase('tr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '') || 'ritimpc'}`,
+    initials: displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('tr') || 'PC',
+    avatarUrl: accountProfile?.avatarUrl,
+    avatarTone: 0,
+    presence: 'online',
+    currentTrack: track ? {
+      id: track.id,
+      videoId: track.youtubeVideoId,
+      title: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      position: latestPlayerState.position,
+      cover: track.cover,
+      thumbnailUrl: track.thumbnailUrl,
+      isPlaying: latestPlayerState.isPlaying,
+    } : undefined,
+    reactionCount: 0,
+  }
+}
+
+function publishDesktopSocialProfile() {
+  if (!socialSocket?.connected) return
+  socialSocket.emit('social:profile', { profile: desktopSocialProfile() })
+}
+
+function broadcastSocialState(status, incomingState) {
+  socialConnectionStatus = status
+  const previous = incomingState || latestSocialState
+  latestSocialState = {
+    currentUser: previous?.currentUser || desktopSocialProfile(),
+    privacy: previous?.privacy || {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
+    currentDeviceCount: previous?.currentDeviceCount || 1,
+    companionConnected: Boolean(previous?.companionConnected),
+    users: (previous?.users || []).map((user) => status === 'online' ? user : { ...user, presence: 'offline' }),
+    rooms: previous?.rooms || [],
+    conversations: previous?.conversations || {},
+    selectedUserId: previous?.selectedUserId || '',
+    listeningWithUserId: previous?.listeningWithUserId,
+    activeRoomId: previous?.activeRoomId,
+    authentication: socialAuthStatus,
+    connectionStatus: status,
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', latestSocialState)
+}
+
+async function startSocialClient({ forceRefresh = false } = {}) {
+  const sequence = ++socialStartSequence
+  socialSocket?.disconnect()
+  broadcastSocialState('connecting')
+  let accessToken = ''
+  try {
+    const [status, token] = await Promise.all([
+      socialAuth?.status(),
+      socialAuth?.accessToken({ forceRefresh }),
+    ])
+    socialAuthStatus = status || socialAuthStatus
+    accessToken = token || ''
+  } catch (error) {
+    console.warn('[Ritim Social] Oturum hazırlanamadı:', error?.message || error)
+  }
+  if (sequence !== socialStartSequence || isShuttingDown) return
+  socialSocket = io(SOCIAL_URL, {
+    timeout: 3000,
+    reconnectionDelay: 900,
+    ...(accessToken ? { auth: { accessToken } } : {}),
+  })
+  socialSocket.on('connect', () => {
+    broadcastSocialState('connecting')
+    const identity = desktopSocialIdentity()
+    socialSocket.emit('social:join', {
+      ...identity,
+      deviceRole: 'desktop',
+      profile: desktopSocialProfile(),
+    })
+  })
+  socialSocket.on('disconnect', () => broadcastSocialState('offline'))
+  let authRetryUsed = false
+  socialSocket.on('connect_error', (error) => {
+    broadcastSocialState('offline')
+    if (
+      accessToken
+      && !authRetryUsed
+      && /oturumu geçersiz/i.test(String(error?.message || ''))
+    ) {
+      authRetryUsed = true
+      void socialAuth?.invalidateAccessToken()
+        .then(() => startSocialClient({ forceRefresh: true }))
+        .catch(() => {})
+    }
+  })
+  socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
+  socialSocket.on('social:state', (state) => {
+    broadcastSocialState('online', state)
+  })
+}
+
 function createMusicView() {
   musicView = new WebContentsView({
     webPreferences: {
@@ -156,6 +309,10 @@ function createMusicView() {
   musicBridge = createYouTubeMusicBridge({
     webContents: musicView.webContents,
     presence,
+    onState: (state) => {
+      latestPlayerState = state
+      publishDesktopSocialProfile()
+    },
     room: ROOM,
     syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
   })
@@ -221,23 +378,31 @@ function createWindow() {
   })
   void mainWindow.loadFile(path.join(__dirname, 'shell.html'))
   createMusicView()
+  setShellView('music')
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   const activePairingToken = getPairingToken()
-  if (!isDev) {
-    const { startSyncServer } = require('./sync-server.cjs')
-    syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, { pairingToken: activePairingToken })
-    if (!syncServer.listening) {
-      try {
-        await new Promise((resolve, reject) => {
-          syncServer.once('listening', resolve)
-          syncServer.once('error', reject)
-        })
-      } catch (error) {
-        console.error('[Ritim] Telefon köprüsü başlatılamadı:', error)
-        syncServer = null
-      }
+  socialAuth = createSocialAuthClient({
+    baseUrl: SOCIAL_URL,
+    userDataPath: app.getPath('userData'),
+    safeStorage,
+    shell,
+  })
+  const { startSyncServer } = require('./sync-server.cjs')
+  syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
+    pairingToken: activePairingToken,
+    getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
+  })
+  if (!syncServer.listening) {
+    try {
+      await new Promise((resolve, reject) => {
+        syncServer.once('listening', resolve)
+        syncServer.once('error', reject)
+      })
+    } catch (error) {
+      console.error('[Ritim] Telefon köprüsü başlatılamadı:', error)
+      syncServer = null
     }
   }
   presence = createDiscordPresence(DISCORD_CLIENT_ID)
@@ -250,6 +415,64 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   })
 
   ipcMain.on('settings:open', createSettingsWindow)
+  ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
+  ipcMain.handle('shell:get-social-state', () => latestSocialState || {
+    currentUser: desktopSocialProfile(),
+    privacy: {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
+    currentDeviceCount: 1,
+    companionConnected: false,
+    users: [],
+    rooms: [],
+    conversations: {},
+    selectedUserId: '',
+    authentication: socialAuthStatus,
+    connectionStatus: socialConnectionStatus,
+  })
+  ipcMain.on('shell:social-action', (_event, action = {}) => {
+    if (action.type === 'reconnect') {
+      broadcastSocialState('connecting')
+      if (socialSocket?.connected) publishDesktopSocialProfile()
+      else void startSocialClient()
+      return
+    }
+    if (action.type === 'sign-in') {
+      void socialAuth?.signIn()
+        .then(async () => {
+          socialAuthStatus = await socialAuth.status()
+          await startSocialClient()
+        })
+        .catch((error) => {
+          console.error('[Ritim Social] Google ile giriş tamamlanamadı:', error)
+          broadcastSocialState('offline')
+        })
+      return
+    }
+    if (action.type === 'sign-out') {
+      void socialAuth?.signOut().then(async (status) => {
+        socialAuthStatus = status
+        await startSocialClient()
+      })
+      return
+    }
+    if (!socialSocket?.connected) return
+    const payload = action.payload || {}
+    if (action.type === 'message') socialSocket.emit('social:message', payload)
+    if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
+    if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
+    if (action.type === 'block') socialSocket.emit('social:block', payload)
+    if (action.type === 'listening') socialSocket.emit('social:listening', payload)
+    if (action.type === 'create-room') {
+      const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
+      socialSocket.emit('social:create-room', {
+        ...payload,
+        title: track?.title || 'Ritim PC dinliyor',
+        cover: track?.cover || 0,
+      })
+    }
+  })
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const url = phoneUrl()
@@ -266,8 +489,9 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       phoneUrl: url,
       qrDataUrl,
       room: ROOM,
-      serverReady: Boolean(syncServer?.listening || isDev),
+      serverReady: Boolean(syncServer?.listening),
       updateStatus: updateController?.getStatus(),
+      socialAuth: socialAuthStatus,
     }
   })
   ipcMain.handle('settings:copy-url', () => {
@@ -283,6 +507,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('settings:install-update', () => updateController?.install() || false)
 
   createWindow()
+  void startSocialClient()
   setTimeout(() => void updateController?.check(), 3500)
   app.on('activate', () => {
     if (!isShuttingDown && BrowserWindow.getAllWindows().length === 0) createWindow()
