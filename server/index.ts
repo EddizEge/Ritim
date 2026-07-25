@@ -141,7 +141,7 @@ io.on('connection', (socket) => {
       record.desktopSocketId = replacement?.id || ''
     }
     emitRoomStatus(room)
-    if (roomStatus(room).peerCount === 0) rooms.delete(room)
+    if (socketsInRoom(room).length === 0) rooms.delete(room)
   })
 })
 

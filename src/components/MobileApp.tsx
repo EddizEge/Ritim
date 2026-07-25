@@ -1,7 +1,7 @@
 import { FormEvent, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic, ListPlus,
-  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Trash2, Volume1, Volume2, Wifi, WifiOff, X,
+  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Trash2, UsersRound, Volume1, Volume2, Wifi, WifiOff, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
 import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, MusicItemAction, PlayerActions, PlayerState, RelatedState, SyncHealth, Track } from '../types'
@@ -11,6 +11,8 @@ import { PlayerControls } from './PlayerControls'
 import { Progress } from './Progress'
 import { clearMobilePairing, isNativeMobile, readMobilePairing } from '../mobileConfig'
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
+import { MobileSocialHub } from './SocialHub'
+import type { SocialActions, SocialState } from '../social/types'
 
 type Props = {
   state: PlayerState
@@ -20,6 +22,8 @@ type Props = {
   room: string
   pairingError?: string
   syncHealth: SyncHealth
+  socialState: SocialState
+  socialActions: SocialActions
 }
 
 type BrowseRoute = 'home' | 'explore' | 'library' | 'search' | 'detail'
@@ -256,7 +260,7 @@ function ConnectionCenterSheet({ health, connected, room, pairingError, onReconn
   )
 }
 
-export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth }: Props) {
+export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth, socialState, socialActions }: Props) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
   const idle = track.id === 'ytmusic:idle'
@@ -266,6 +270,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [playerOpen, setPlayerOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<InfoTab>('queue')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [socialOpen, setSocialOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [requestedSearchQuery, setRequestedSearchQuery] = useState('')
   const [navigationRetries, setNavigationRetries] = useState(0)
@@ -356,7 +361,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       setNavigationRetries(0)
       return
     }
-    if (!connected) return
+    if (!connected || socialOpen) return
     const timer = window.setTimeout(() => {
       if (navigationRetries < 2) {
         actions.navigateMusic(requestedRoute === 'detail' ? 'home' : requestedRoute, requestedRoute === 'search' ? requestedSearchQuery : undefined)
@@ -366,19 +371,20 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       }
     }, 3200)
     return () => window.clearTimeout(timer)
-  }, [actions, connected, navigationRetries, requestedRoute, requestedSearchQuery, showingRequestedPage])
+  }, [actions, connected, navigationRetries, requestedRoute, requestedSearchQuery, showingRequestedPage, socialOpen])
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current
-    if (!sentinel || !connected || !showingRequestedPage || browse?.loadingMore || browse?.hasMore === false) return
+    if (!sentinel || !connected || socialOpen || !showingRequestedPage || browse?.loadingMore || browse?.hasMore === false) return
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) actions.loadMoreMusic()
     }, { rootMargin: '320px 0px' })
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [actions, browse?.hasMore, browse?.loadingMore, browse?.updatedAt, connected, showingRequestedPage])
+  }, [actions, browse?.hasMore, browse?.loadingMore, browse?.updatedAt, connected, showingRequestedPage, socialOpen])
 
   const navigate = (destination: 'home' | 'explore' | 'library') => {
+    setSocialOpen(false)
     pendingNavigationRef.current = { route: destination, query: '' }
     setRequestedRoute(destination)
     setRequestedSearchQuery('')
@@ -398,6 +404,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     setNavigationRetries(0)
     setNavigationError(false)
     setSearchOpen(false)
+    setSocialOpen(false)
     actions.navigateMusic('search', query)
   }
 
@@ -505,32 +512,38 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       <header className="mobile-browse-header">
         <div className="mobile-brand"><i><Play fill="currentColor" /></i><span>Ritim</span></div>
         <div className="mobile-header-actions">
-          <button onClick={() => setSearchOpen(true)} aria-label="Ara"><Search /></button>
+          <button onClick={() => { setSocialOpen(false); setSearchOpen(true) }} aria-label="Ara"><Search /></button>
           <button onClick={() => setFeedbackOpen(true)} aria-label="Hata bildir"><Bug /></button>
           {isNativeMobile ? <button className={mobileUpdate.updateAvailable ? 'has-update' : ''} onClick={() => void handleMobileUpdate()} aria-label="Güncellemeleri kontrol et">{mobileUpdate.updateAvailable ? <Download /> : <RefreshCw />}</button> : null}
           <button className="mobile-device-button" onClick={() => setConnectionOpen(true)} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} /></button>
         </div>
       </header>
 
-      <main className="mobile-browse-content">
-        {requestedRoute === 'detail' ? (
-          <button className="mobile-detail-back" onClick={actions.goBackMusic}><ChevronLeft />Geri</button>
+      <main className={`mobile-browse-content ${socialOpen ? 'is-social' : ''}`}>
+        {socialOpen ? (
+          <MobileSocialHub state={socialState} actions={socialActions} />
         ) : (
-          <div className="mobile-page-heading"><h1>{requestedRoute === 'search' ? browse?.title || 'Arama' : routeLabels[requestedRoute]}</h1>{connected ? <span>Ritim PC</span> : <span className="is-offline">Çevrimdışı</span>}</div>
-        )}
-        {showingRequestedPage && requestedRoute === 'detail' && browse?.header ? <DetailHeader header={browse.header} onOpen={openDetailAction} /> : null}
-        {showingRequestedPage && (requestedRoute === 'search' || requestedRoute === 'library') ? <BrowseFilters filters={browse?.filters || []} onOpen={actions.openMusicFilter} /> : null}
-        {!showingRequestedPage ? (
-          <div className={`mobile-loading ${navigationError ? 'has-error' : ''}`}><i /><i /><i /><p>{navigationError ? `${routeLabels[requestedRoute]} yüklenemedi.` : `${routeLabels[requestedRoute]} PC’den yükleniyor…`}</p>{navigationError ? <button onClick={retryNavigation}>Tekrar dene</button> : null}</div>
-        ) : browse?.sections.length ? (
           <>
-            {browse.sections.map((section) => <BrowseSectionView key={section.id} section={section} onOpen={openItem} onMenu={setMenuItem} />)}
-            <div ref={loadMoreSentinelRef} className={`mobile-load-more ${browse.loadingMore ? 'is-loading' : ''}`} aria-live="polite">
-              {browse.loadingMore ? <><i /><i /><i /><span>Daha fazla içerik PC’den yükleniyor…</span></> : browse.hasMore === false ? <span>Tüm içerikler yüklendi</span> : <span>Daha fazla içerik için kaydır</span>}
-            </div>
+            {requestedRoute === 'detail' ? (
+              <button className="mobile-detail-back" onClick={actions.goBackMusic}><ChevronLeft />Geri</button>
+            ) : (
+              <div className="mobile-page-heading"><h1>{requestedRoute === 'search' ? browse?.title || 'Arama' : routeLabels[requestedRoute]}</h1>{connected ? <span>Ritim PC</span> : <span className="is-offline">Çevrimdışı</span>}</div>
+            )}
+            {showingRequestedPage && requestedRoute === 'detail' && browse?.header ? <DetailHeader header={browse.header} onOpen={openDetailAction} /> : null}
+            {showingRequestedPage && (requestedRoute === 'search' || requestedRoute === 'library') ? <BrowseFilters filters={browse?.filters || []} onOpen={actions.openMusicFilter} /> : null}
+            {!showingRequestedPage ? (
+              <div className={`mobile-loading ${navigationError ? 'has-error' : ''}`}><i /><i /><i /><p>{navigationError ? `${routeLabels[requestedRoute]} yüklenemedi.` : `${routeLabels[requestedRoute]} PC’den yükleniyor…`}</p>{navigationError ? <button onClick={retryNavigation}>Tekrar dene</button> : null}</div>
+            ) : browse?.sections.length ? (
+              <>
+                {browse.sections.map((section) => <BrowseSectionView key={section.id} section={section} onOpen={openItem} onMenu={setMenuItem} />)}
+                <div ref={loadMoreSentinelRef} className={`mobile-load-more ${browse.loadingMore ? 'is-loading' : ''}`} aria-live="polite">
+                  {browse.loadingMore ? <><i /><i /><i /><span>Daha fazla içerik PC’den yükleniyor…</span></> : browse.hasMore === false ? <span>Tüm içerikler yüklendi</span> : <span>Daha fazla içerik için kaydır</span>}
+                </div>
+              </>
+            ) : requestedRoute === 'detail' && browse?.header ? null : (
+              <div className="mobile-empty-state"><MonitorSpeaker /><h2>PC’den içerik bekleniyor</h2><p>Ritim’de YouTube Music ana sayfası açıldığında kişisel önerilerin burada görünecek.</p></div>
+            )}
           </>
-        ) : requestedRoute === 'detail' && browse?.header ? null : (
-          <div className="mobile-empty-state"><MonitorSpeaker /><h2>PC’den içerik bekleniyor</h2><p>Ritim’de YouTube Music ana sayfası açıldığında kişisel önerilerin burada görünecek.</p></div>
         )}
       </main>
 
@@ -546,10 +559,11 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
       ) : null}
 
       <nav className="ytm-bottom-nav mobile-main-nav" aria-label="Ritim gezinme">
-        <button className={requestedRoute === 'home' ? 'is-active' : ''} onClick={() => navigate('home')}><Home fill={requestedRoute === 'home' ? 'currentColor' : 'none'} /><span>Ana Sayfa</span></button>
-        <button className={requestedRoute === 'explore' ? 'is-active' : ''} onClick={() => navigate('explore')}><Compass /><span>Keşfet</span></button>
-        <button className={requestedRoute === 'search' ? 'is-active' : ''} onClick={() => setSearchOpen(true)}><Search /><span>Ara</span></button>
-        <button className={requestedRoute === 'library' ? 'is-active' : ''} onClick={() => navigate('library')}><Library fill={requestedRoute === 'library' ? 'currentColor' : 'none'} /><span>Kitaplık</span></button>
+        <button className={!socialOpen && requestedRoute === 'home' ? 'is-active' : ''} onClick={() => navigate('home')}><Home fill={!socialOpen && requestedRoute === 'home' ? 'currentColor' : 'none'} /><span>Ana Sayfa</span></button>
+        <button className={!socialOpen && requestedRoute === 'explore' ? 'is-active' : ''} onClick={() => navigate('explore')}><Compass /><span>Keşfet</span></button>
+        <button className={!socialOpen && requestedRoute === 'search' ? 'is-active' : ''} onClick={() => { setSocialOpen(false); setSearchOpen(true) }}><Search /><span>Ara</span></button>
+        <button className={socialOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setPlayerOpen(false); setSocialOpen(true) }}><UsersRound fill={socialOpen ? 'currentColor' : 'none'} /><span>Sosyal</span></button>
+        <button className={!socialOpen && requestedRoute === 'library' ? 'is-active' : ''} onClick={() => navigate('library')}><Library fill={!socialOpen && requestedRoute === 'library' ? 'currentColor' : 'none'} /><span>Kitaplık</span></button>
       </nav>
 
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}

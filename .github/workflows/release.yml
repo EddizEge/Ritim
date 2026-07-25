@@ -26,12 +26,17 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
+          $releaseVersion = $env:GITHUB_REF_NAME.TrimStart('v')
           $assets = @(
             "release/Ritim-Setup-$version.exe"
             "release/Ritim-Setup-$version.exe.blockmap"
             "release/latest.yml"
           )
-          gh release create "$env:GITHUB_REF_NAME" $assets --repo "$env:GITHUB_REPOSITORY" --verify-tag --title "Ritim $version" --generate-notes
+          $releaseFlags = @()
+          if ($env:GITHUB_REF_NAME.Contains('-')) {
+            $releaseFlags += '--prerelease'
+          }
+          gh release create "$env:GITHUB_REF_NAME" $assets $releaseFlags --repo "$env:GITHUB_REPOSITORY" --verify-tag --title "Ritim $releaseVersion" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

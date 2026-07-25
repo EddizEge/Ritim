@@ -7,6 +7,8 @@ import { useYouTubeLibrary } from './hooks/useYouTubeLibrary'
 import { App as CapacitorApp } from '@capacitor/app'
 import { NativePairing } from './components/NativePairing'
 import { isNativeMobile, parsePairingLink, readMobilePairing, saveMobilePairing } from './mobileConfig'
+import { getTrack } from './data'
+import { useSocial } from './hooks/useSocial'
 
 function useCompanionMode() {
   const forced = new URLSearchParams(window.location.search).get('companion') === '1'
@@ -26,10 +28,27 @@ function RitimApp({ isCompanion }: { isCompanion: boolean }) {
   const player = usePlayerSync(isCompanion)
   useNativeMediaSession(player.state, player.actions, player.connected)
   const youtube = useYouTubeLibrary()
+  const track = getTrack(player.state)
+  const social = useSocial({
+    displayName: player.state.accountProfile?.displayName || youtube.status.channelTitle,
+    avatarUrl: player.state.accountProfile?.avatarUrl,
+    isCompanion,
+    currentTrack: {
+      id: track.id,
+      videoId: track.youtubeVideoId,
+      title: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      position: player.state.position,
+      cover: track.cover,
+      thumbnailUrl: track.thumbnailUrl,
+      isPlaying: player.state.isPlaying,
+    },
+  })
   const props = { ...player }
   return isCompanion
-    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} />
-    : <DesktopApp {...props} youtube={youtube} />
+    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} socialState={social.state} socialActions={social.actions} />
+    : <DesktopApp {...props} youtube={youtube} socialState={social.state} socialActions={social.actions} />
 }
 
 export default function App() {

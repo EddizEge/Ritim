@@ -12,6 +12,7 @@ if (tokenFromUrl) localStorage.setItem('ritim-pairing-token', tokenFromUrl)
 
 const savedSyncUrl = localStorage.getItem('ritim-sync-url')
 const syncUrl = import.meta.env.VITE_SYNC_URL || savedSyncUrl || `${window.location.protocol}//${window.location.hostname}:8787`
+export const ritimSyncUrl = syncUrl
 export const ritimSocket = io(syncUrl, {
   autoConnect: false,
   timeout: 2500,

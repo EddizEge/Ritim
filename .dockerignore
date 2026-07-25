@@ -1,0 +1,16 @@
+.git
+.github
+.codex
+android
+build
+design
+dist
+dist-social
+docs
+node_modules
+release*
+*.log
+*.jks
+*.keystore
+.env
+deploy/pi/.env

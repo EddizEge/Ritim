@@ -1,0 +1,105 @@
+name: ritim-alpha2
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${RITIM_DB_NAME:-ritim}
+      POSTGRES_USER: ${RITIM_DB_ADMIN_USER:-ritim_admin}
+      POSTGRES_PASSWORD: ${RITIM_DB_ADMIN_PASSWORD:?RITIM_DB_ADMIN_PASSWORD gerekli}
+      RITIM_DB_APP_PASSWORD: ${RITIM_DB_APP_PASSWORD:?RITIM_DB_APP_PASSWORD gerekli}
+    volumes:
+      - ritim_postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - ritim_backend
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      RITIM_REDIS_PASSWORD: ${RITIM_REDIS_PASSWORD:?RITIM_REDIS_PASSWORD gerekli}
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$RITIM_REDIS_PASSWORD"
+    volumes:
+      - ritim_redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$RITIM_REDIS_PASSWORD\" redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - ritim_backend
+
+  social-gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/pi/Dockerfile.social
+    restart: unless-stopped
+    environment:
+      RITIM_SOCIAL_PORT: "8790"
+      RITIM_ALLOWED_ORIGINS: ${RITIM_ALLOWED_ORIGINS:-http://localhost,https://localhost,capacitor://localhost,http://127.0.0.1:5173}
+      RITIM_TRUST_PROXY: ${RITIM_TRUST_PROXY:-0}
+      RITIM_RATE_WINDOW_MS: ${RITIM_RATE_WINDOW_MS:-60000}
+      RITIM_RATE_REQUESTS: ${RITIM_RATE_REQUESTS:-180}
+      RITIM_AUTH_RATE_WINDOW_MS: ${RITIM_AUTH_RATE_WINDOW_MS:-900000}
+      RITIM_AUTH_RATE_REQUESTS: ${RITIM_AUTH_RATE_REQUESTS:-30}
+      RITIM_SOCKET_RATE_WINDOW_MS: ${RITIM_SOCKET_RATE_WINDOW_MS:-60000}
+      RITIM_SOCKET_RATE_CONNECTIONS: ${RITIM_SOCKET_RATE_CONNECTIONS:-45}
+      RITIM_INFRA_REQUIRED: "true"
+      RITIM_DB_POOL_SIZE: ${RITIM_DB_POOL_SIZE:-10}
+      RITIM_DB_HOST: postgres
+      RITIM_DB_PORT: "5432"
+      RITIM_DB_NAME: ${RITIM_DB_NAME:-ritim}
+      RITIM_DB_USER: ritim_app
+      RITIM_DB_PASSWORD: ${RITIM_DB_APP_PASSWORD}
+      RITIM_REDIS_HOST: redis
+      RITIM_REDIS_PORT: "6379"
+      RITIM_REDIS_PASSWORD: ${RITIM_REDIS_PASSWORD}
+      RITIM_AUTH_REQUIRED: ${RITIM_AUTH_REQUIRED:-false}
+      RITIM_AUTH_JWT_SECRET: ${RITIM_AUTH_JWT_SECRET:-}
+      RITIM_GOOGLE_CLIENT_IDS: ${RITIM_GOOGLE_CLIENT_IDS:-}
+      RITIM_GOOGLE_CLIENT_SECRET: ${RITIM_GOOGLE_CLIENT_SECRET:-}
+    ports:
+      - "127.0.0.1:${RITIM_SOCIAL_BIND_PORT:-8790}:8790"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8790/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - ritim_backend
+      - ritim_edge
+
+networks:
+  ritim_backend:
+    internal: true
+  ritim_edge:
+
+volumes:
+  ritim_postgres_data:
+  ritim_redis_data:

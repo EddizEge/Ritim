@@ -26,6 +26,11 @@ export type YouTubeStatus = {
   channelTitle?: string
 }
 
+export type RitimAccountProfile = {
+  displayName: string
+  avatarUrl?: string
+}
+
 export type MusicBrowseItem = {
   id: string
   title: string
@@ -144,6 +149,7 @@ export type PlayerState = {
   related?: RelatedState
   playlistPicker?: MusicPlaylistPickerState
   actionFeedback?: PlayerActionFeedback
+  accountProfile?: RitimAccountProfile
   syncRevision?: number
   syncedAt?: number
   lastCommandAck?: SyncCommandAck

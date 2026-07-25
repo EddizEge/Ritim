@@ -1,0 +1,12 @@
+[Unit]
+Description=Ritim Alpha.2 encrypted weekly PostgreSQL backup and restore smoke test
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/DATA/AppData/ritim-alpha2/source/deploy/pi/backup/ritim-backup.sh /media/mercan/2tb/RitimBackups/weekly 180
+ExecStartPost=/DATA/AppData/ritim-alpha2/source/deploy/pi/backup/ritim-restore-smoke.sh /media/mercan/2tb/RitimBackups/weekly
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

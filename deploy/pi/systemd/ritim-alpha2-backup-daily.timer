@@ -1,0 +1,11 @@
+[Unit]
+Description=Ritim Alpha.2 daily backup timer
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=ritim-alpha2-backup-daily.service
+
+[Install]
+WantedBy=timers.target
