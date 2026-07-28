@@ -49,6 +49,15 @@ function notificationTitle(notification: SocialNotification, actorName: string) 
   return `${actorName} sana yazdı`
 }
 
+function socialErrorText(code?: string) {
+  if (code === 'rate_limited') return 'Çok hızlı işlem yaptın. Biraz bekleyip tekrar dene.'
+  if (code === 'message_request_pending') return 'Bu mesaj isteği henüz yanıt bekliyor.'
+  if (code === 'message_request_rejected') return 'Bu kullanıcı mesaj isteğini reddetti.'
+  if (code === 'message_too_long') return 'Mesaj en fazla 500 karakter olabilir.'
+  if (code === 'message_blocked') return 'Bu kullanıcıyla mesajlaşma kullanılamıyor.'
+  return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
+}
+
 async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
   const title = notificationTitle(notification, actorName)
   if (Capacitor.isNativePlatform()) {
@@ -240,6 +249,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       setConnectionStatus('offline')
       setSnapshot((previous) => ({
         ...previous,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: 'info',
+          text: 'Sosyal bağlantı kesildi. Müzik ve telefon kumandası çalışmaya devam ediyor.',
+        },
         users: previous.users.map((user) => ({ ...user, presence: 'offline' })),
       }))
     }
@@ -258,15 +272,42 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
         const selectedStillExists = next.users.some((user) => user.id === selected)
         return {
           ...next,
+          feedback: previous.feedback,
           selectedUserId: selectedStillExists ? selected : next.selectedUserId,
         }
       })
+    }
+    const onSocialError = (error: { code?: string; event?: string }) => {
+      // Profil yenileme arka planda gerçekleşir; kullanıcı eylemi değildir.
+      // Mesaj hataları da acknowledgement callback'i üzerinden daha doğru
+      // biçimde ele alınır ve burada ikinci kez başarı/hata bildirimini ezmez.
+      if (error?.event === 'profile' || error?.event === 'message') return
+      setSnapshot((previous) => ({
+        ...previous,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: 'error',
+          text: socialErrorText(error?.code),
+        },
+      }))
+    }
+    const onReportSaved = () => {
+      setSnapshot((previous) => ({
+        ...previous,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: 'success',
+          text: 'Şikâyet güvenli şekilde kaydedildi.',
+        },
+      }))
     }
 
     socialSocket.on('connect', onConnect)
     socialSocket.on('disconnect', onDisconnect)
     socialSocket.on('connect_error', onConnectError)
     socialSocket.on('social:state', onSocialState)
+    socialSocket.on('social:error', onSocialError)
+    socialSocket.on('social:report-saved', onReportSaved)
     socialSocket.io.on('reconnect_attempt', onReconnectAttempt)
     void connectSocial()
 
@@ -277,6 +318,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       socialSocket.off('disconnect', onDisconnect)
       socialSocket.off('connect_error', onConnectError)
       socialSocket.off('social:state', onSocialState)
+      socialSocket.off('social:error', onSocialError)
+      socialSocket.off('social:report-saved', onReportSaved)
       socialSocket.io.off('reconnect_attempt', onReconnectAttempt)
       socialSocket.disconnect()
     }
@@ -312,10 +355,57 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     socialSocket.emit('social:reaction', { targetUserId: userId, reaction })
   }, [])
 
-  const sendMessage = useCallback((userId: string, text: string) => {
+  const sendMessage = useCallback((userId: string, text: string): Promise<boolean> => {
     const cleanText = text.trim().slice(0, 500)
-    if (!cleanText) return
-    socialSocket.emit('social:message', { targetUserId: userId, text: cleanText })
+    if (!cleanText) return Promise.resolve(false)
+    if (!socialSocket.connected) {
+      setSnapshot((current) => ({
+        ...current,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: 'error',
+          text: 'Mesaj gönderilemedi; Sosyal bağlantısı çevrimdışı.',
+        },
+      }))
+      return Promise.resolve(false)
+    }
+    const clientMessageId = crypto.randomUUID()
+    return new Promise((resolve) => {
+      let acknowledged = false
+      const timeout = window.setTimeout(() => {
+        if (acknowledged) return
+        acknowledged = true
+        setSnapshot((current) => ({
+          ...current,
+          feedback: {
+            id: crypto.randomUUID(),
+            tone: 'error',
+            text: 'Sunucu mesajı zamanında onaylamadı. Mesajın taslakta tutuldu.',
+          },
+        }))
+        resolve(false)
+      }, 5_000)
+      socialSocket.emit('social:message', {
+        targetUserId: userId,
+        text: cleanText,
+        clientMessageId,
+      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
+        if (acknowledged) return
+        acknowledged = true
+        window.clearTimeout(timeout)
+        setSnapshot((current) => ({
+          ...current,
+          feedback: {
+            id: crypto.randomUUID(),
+            tone: result.ok ? 'success' : 'error',
+            text: result.ok
+              ? (result.duplicate ? 'Mesaj daha önce güvenli şekilde gönderilmiş.' : 'Mesaj sunucuya ulaştı.')
+              : socialErrorText(result.code),
+          },
+        }))
+        resolve(Boolean(result.ok))
+      })
+    })
   }, [])
 
   const markConversationRead = useCallback((userId: string) => {
@@ -367,6 +457,14 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
         deviceEnabled: granted,
       }
       setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
+      setSnapshot((current) => ({
+        ...current,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: granted ? 'success' : 'info',
+          text: granted ? 'Sistem bildirimleri açıldı.' : 'Sistem bildirimi izni verilmedi.',
+        },
+      }))
       if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
     })()
   }, [])
@@ -384,6 +482,10 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       detail: detail.trim().slice(0, 2000),
       messageId,
     })
+  }, [])
+
+  const clearFeedback = useCallback(() => {
+    setSnapshot((current) => ({ ...current, feedback: undefined }))
   }, [])
 
   const toggleListeningWith = useCallback((userId: string) => {
@@ -429,6 +531,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       requestDeviceNotifications,
       toggleMute,
       reportUser,
+      clearFeedback,
       toggleListeningWith,
       createRoom,
       updatePrivacy,

@@ -75,6 +75,28 @@ function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps 
   )
 }
 
+function SocialFeedbackNotice({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
+  const feedback = state.feedback
+
+  useEffect(() => {
+    if (!feedback) return
+    const timeout = window.setTimeout(actions.clearFeedback, 5_000)
+    return () => window.clearTimeout(timeout)
+  }, [actions.clearFeedback, feedback])
+
+  if (!feedback) return null
+  return (
+    <div
+      className={`social-feedback-notice is-${feedback.tone} ${mobile ? 'is-mobile' : ''}`}
+      role={feedback.tone === 'error' ? 'alert' : 'status'}
+    >
+      {feedback.tone === 'success' ? <Check /> : <MessageCircle />}
+      <span>{feedback.text}</span>
+      <button onClick={actions.clearFeedback} aria-label="Bildirimi kapat"><X /></button>
+    </div>
+  )
+}
+
 function matchesSocialQuery(user: SocialUser, query: string) {
   if (!query) return true
   const track = user.currentTrack
@@ -232,6 +254,7 @@ function BlockedUsersPanel({ state, actions, mobile = false }: SocialProps & { m
 
 function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & { mobile?: boolean; onClose?: () => void }) {
   const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const [reportReason, setReportReason] = useState('Spam')
   const [reportDetail, setReportDetail] = useState('')
@@ -254,10 +277,13 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
   const muted = state.mutedUserIds.includes(selectedUser.id)
   const reportMessageId = [...conversation].reverse().find((item) => item.senderId === selectedUser.id)?.id
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault()
-    actions.sendMessage(selectedUser.id, message)
-    setMessage('')
+    if (sending || state.connectionStatus !== 'online') return
+    setSending(true)
+    const sent = await actions.sendMessage(selectedUser.id, message)
+    if (sent) setMessage('')
+    setSending(false)
   }
 
   return (
@@ -358,8 +384,16 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
       ) : (
         <form className="social-chat-composer" onSubmit={submit}>
           <SmilePlus />
-          <input value={message} onChange={(event) => setMessage(event.target.value)} maxLength={500} placeholder="Mesaj yaz…" aria-label="Mesaj" />
-          <button disabled={!message.trim()} aria-label="Mesajı gönder"><Send /></button>
+          <input
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            maxLength={500}
+            placeholder={state.connectionStatus === 'online' ? 'Mesaj yaz…' : 'Bağlantı gelince gönderebilirsin'}
+            aria-label="Mesaj"
+          />
+          <button disabled={!message.trim() || sending || state.connectionStatus !== 'online'} aria-label="Mesajı gönder">
+            {sending ? <RefreshCw className="is-spinning" /> : <Send />}
+          </button>
         </form>
       )}
     </aside>
@@ -405,6 +439,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
         </button>
       </header>
       <SocialConnectionNotice state={state} actions={actions} />
+      <SocialFeedbackNotice state={state} actions={actions} />
       <div className="social-desktop-layout">
         <div className="social-directory">
           <MessageRequestList state={state} actions={actions} />
@@ -473,6 +508,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
           <button className={state.activeRoomId ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{state.activeRoomId ? 'Odan hazır' : 'Oda oluştur'}</button>
         </div>
         <SocialConnectionNotice state={state} actions={actions} mobile />
+        <SocialFeedbackNotice state={state} actions={actions} mobile />
         <NotificationCenter state={state} actions={actions} mobile />
         <label className="mobile-social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kullanıcı veya şarkı ara" /></label>
         <MessageRequestList state={state} actions={actions} mobile onOpen={() => setChatOpen(true)} />
