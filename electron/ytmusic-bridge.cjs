@@ -43,6 +43,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   let commandQueue = Promise.resolve()
   const appliedCommandIds = new Set()
   const inFlightCommandIds = new Set()
+  const coalescedCommandTasks = new Map()
   const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
@@ -1142,6 +1143,30 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
   }
 
+  function commandCoalescingKey(incoming) {
+    const type = String(incoming?.type || '')
+    if (!['loadMoreBrowse', 'requestLyrics', 'requestRelated'].includes(type) && !type.startsWith('navigate:')) return ''
+    return `${type}\u0000${String(incoming?.value || '')}`
+  }
+
+  function acknowledgeApplied(commandId, commandType) {
+    if (!commandId) return
+    appliedCommandIds.add(commandId)
+    if (appliedCommandIds.size > 200) appliedCommandIds.delete(appliedCommandIds.values().next().value)
+    socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
+  }
+
+  function acknowledgeFailed(commandId, commandType, error) {
+    console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message)
+    if (commandId) socket.emit('player:command:ack', {
+      id: commandId,
+      type: commandType,
+      status: 'failed',
+      message: error.message,
+      appliedAt: Date.now(),
+    })
+  }
+
   socket.on('player:command', (incoming) => {
     const commandId = String(incoming?.id || '')
     const commandType = String(incoming?.type || '')
@@ -1151,18 +1176,24 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
     if (commandId && inFlightCommandIds.has(commandId)) return
     if (commandId) inFlightCommandIds.add(commandId)
+    const coalescingKey = commandCoalescingKey(incoming)
+    const existingTask = coalescingKey ? coalescedCommandTasks.get(coalescingKey) : null
+    if (existingTask) {
+      void existingTask.then(() => acknowledgeApplied(commandId, commandType))
+        .catch((error) => acknowledgeFailed(commandId, commandType, error))
+        .finally(() => {
+          if (commandId) inFlightCommandIds.delete(commandId)
+        })
+      return
+    }
     const task = commandQueue.catch(() => {}).then(() => command(incoming))
     commandQueue = task
-    void task.then(() => {
-      if (!commandId) return
-      appliedCommandIds.add(commandId)
-      if (appliedCommandIds.size > 200) appliedCommandIds.delete(appliedCommandIds.values().next().value)
-      socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
-    }).catch((error) => {
-      console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message)
-      if (commandId) socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'failed', message: error.message, appliedAt: Date.now() })
-    }).finally(() => {
+    if (coalescingKey) coalescedCommandTasks.set(coalescingKey, task)
+    void task.then(() => acknowledgeApplied(commandId, commandType))
+      .catch((error) => acknowledgeFailed(commandId, commandType, error))
+      .finally(() => {
       if (commandId) inFlightCommandIds.delete(commandId)
+      if (coalescingKey && coalescedCommandTasks.get(coalescingKey) === task) coalescedCommandTasks.delete(coalescingKey)
     })
   })
 
