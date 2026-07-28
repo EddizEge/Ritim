@@ -252,6 +252,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-preview-note button, .mobile-social-preview button { display: flex; align-items: center; gap: 5px; margin-left: auto; padding: 4px 7px; border: 1px solid #55343a; border-radius: 6px; color: #ff8e9e; background: #211317; font-size: 8px; font-weight: 750; }
 .social-preview-note button svg, .mobile-social-preview button svg { width: 11px; height: 11px; }
 .social-preview-note.is-offline, .mobile-social-preview.is-offline { color: #c899a1; background: #160f11; }
+.social-feedback-notice { position: fixed; z-index: 120; top: 92px; right: 24px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 24px; align-items: center; gap: 8px; width: min(340px, calc(100vw - 32px)); min-height: 48px; padding: 8px 9px 8px 12px; border: 1px solid #3f4243; border-radius: 10px; color: #e5e7e7; background: #1a1c1c; box-shadow: 0 16px 45px rgba(0, 0, 0, .48); font-size: 9px; }
+.social-feedback-notice.is-success { color: #d4f7dd; border-color: #2d6740; background: #183021; }
+.social-feedback-notice.is-info { border-color: #405264; background: #19232d; }
+.social-feedback-notice.is-error { color: #ffd7da; border-color: #71404a; background: #351c21; }
+.social-feedback-notice > svg { width: 17px; }
+.social-feedback-notice > span { line-height: 1.4; }
+.social-feedback-notice > button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: currentColor; background: transparent; opacity: .75; }
+.social-feedback-notice > button svg { width: 14px; }
+.social-feedback-notice.is-mobile { top: calc(env(safe-area-inset-top) + 72px); right: 16px; left: 16px; width: auto; }
 .social-privacy-controls { display: flex; align-items: center; gap: 7px; margin-left: auto; color: #96999a; }
 .social-privacy-controls > svg { width: 12px; height: 12px; color: #ff7a84; }
 .social-privacy-controls label { display: flex; align-items: center; gap: 4px; font-size: 7px; }
@@ -380,6 +389,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-chat-composer button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 6px; color: #fff; background: var(--accent); }
 .social-chat-composer button:disabled { color: #777; background: transparent; }
 .social-chat-composer button svg { width: 15px; }
+.social-chat-composer .is-spinning { animation: social-spin .8s linear infinite; }
+@keyframes social-spin { to { transform: rotate(360deg); } }
 .social-chat-request-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 7px 9px; }
 .social-chat-request-pending { display: flex; align-items: center; gap: 9px; margin: 6px 9px; padding: 7px 9px; border: 1px solid #3a3032; border-radius: 8px; color: #ff7884; background: #1c1416; }
 .social-chat-request-pending > svg { flex: 0 0 auto; width: 17px; }

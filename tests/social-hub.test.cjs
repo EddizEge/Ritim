@@ -68,7 +68,33 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   assert.equal(stateAWithB.users[0].id, 'account-b')
   assert.equal(stateBWithA.users[0].id, 'account-a')
 
-  desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Selam Deniz' })
+  const tooLongError = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Uzun mesaj reddedilmedi')), 2_000)
+    desktopA.once('social:error', (error) => {
+      clearTimeout(timer)
+      resolve(error)
+    })
+  })
+  const tooLongAck = await new Promise((resolve) => {
+    desktopA.emit('social:message', {
+      targetUserId: 'account-b',
+      text: 'x'.repeat(501),
+      clientMessageId: '40000000-0000-4000-8000-000000000000',
+    }, resolve)
+  })
+  assert.equal(tooLongAck.code, 'message_too_long')
+  assert.equal((await tooLongError).code, 'message_too_long')
+
+  const firstClientMessageId = '40000000-0000-4000-8000-000000000001'
+  const firstAck = await new Promise((resolve) => {
+    desktopA.emit('social:message', {
+      targetUserId: 'account-b',
+      text: 'Selam Deniz',
+      clientMessageId: firstClientMessageId,
+    }, resolve)
+  })
+  assert.equal(firstAck.ok, true)
+  assert.equal(firstAck.duplicate, false)
   const requestedState = await waitForState('Deniz PC', (state) => (
     state.conversations['account-a']?.length === 1
     && state.messageRequests[0]?.userId === 'account-a'
@@ -80,6 +106,18 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   assert.equal(requestedState.notifications[0].kind, 'message_request')
   await waitForState('Deniz Telefon', (state) => state.messageRequests[0]?.direction === 'incoming')
   await waitForState('Ediz PC', (state) => state.messageRequests[0]?.direction === 'outgoing')
+
+  const duplicateAck = await new Promise((resolve) => {
+    desktopA.emit('social:message', {
+      targetUserId: 'account-b',
+      text: 'Selam Deniz',
+      clientMessageId: firstClientMessageId,
+    }, resolve)
+  })
+  assert.deepEqual(duplicateAck, { ok: true, duplicate: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(latestStates.get('Deniz PC').conversations['account-a'].length, 1)
+  assert.equal(latestStates.get('Deniz PC').notifications.length, 1)
 
   desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Beklerken ikinci mesaj' })
   await new Promise((resolve) => setTimeout(resolve, 30))
@@ -193,6 +231,7 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     desktopA.disconnect()
     phoneA.disconnect()
     phoneB.disconnect()
+    hub.close()
     await io.close()
     await new Promise((resolve) => httpServer.close(resolve))
   })
@@ -351,6 +390,25 @@ test('socket olay hız sınırı tepki spamini keser ve istemciyi bilgilendirir'
     deviceRole: 'desktop',
     profile: profile('rate-b', 'Rate B', 'desktop'),
   })
+
+  const messageLimited = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Mesaj hız sınırı çalışmadı')), 2_000)
+    sender.on('social:error', (error) => {
+      if (error.code !== 'rate_limited' || error.event !== 'message') return
+      clearTimeout(timer)
+      resolve(error)
+    })
+  })
+  for (let index = 0; index < 21; index += 1) {
+    sender.emit('social:message', {
+      targetUserId: 'rate-b',
+      text: `Hız sınırı ${index}`,
+      clientMessageId: `50000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    })
+  }
+  const messageError = await messageLimited
+  assert.equal(messageError.retryAfter > 0, true)
+  assert.equal(abuseEvents.some((event) => event.category === 'socket_event:message'), true)
 
   const limited = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Tepki hız sınırı çalışmadı')), 2_000)

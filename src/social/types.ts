@@ -76,6 +76,12 @@ export type SocialNotificationPreferences = {
   deviceEnabled: boolean
 }
 
+export type SocialFeedback = {
+  id: string
+  tone: 'success' | 'info' | 'error'
+  text: string
+}
+
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
   currentUser: SocialUser
@@ -91,6 +97,7 @@ export type SocialState = {
   notificationPreferences: SocialNotificationPreferences
   mutedUserIds: string[]
   blockedUsers: SocialUser[]
+  feedback?: SocialFeedback
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
@@ -99,7 +106,7 @@ export type SocialState = {
 export type SocialActions = {
   selectUser: (userId: string) => void
   reactToUser: (userId: string, reaction?: string) => void
-  sendMessage: (userId: string, text: string) => void
+  sendMessage: (userId: string, text: string) => Promise<boolean>
   markConversationRead: (userId: string) => void
   respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => void
   reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => void
@@ -108,6 +115,7 @@ export type SocialActions = {
   requestDeviceNotifications: () => void
   toggleMute: (userId: string) => void
   reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => void
+  clearFeedback: () => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void

@@ -279,10 +279,16 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
   }
 
   async function saveMessage(message: StoredMessage) {
-    await inTransaction(pool, async (client) => {
+    return inTransaction(pool, async (client) => {
       const senderId = await findUserId(client, message.senderId)
       const targetId = await findUserId(client, message.targetId)
       if (!senderId || !targetId || senderId === targetId) throw new Error('Mesaj kullanıcıları bulunamadı.')
+      const duplicate = await client.query(
+        `select 1 from ritim.messages
+         where sender_id = $1 and client_message_id = $2`,
+        [senderId, message.id],
+      )
+      if (duplicate.rowCount) return { duplicate: true }
       if (!await usersCanInteract(client, senderId, targetId)) throw new Error('Mesajlaşma engellendi.')
 
       const orderedUserIds = [BigInt(senderId), BigInt(targetId)].sort((left, right) => left < right ? -1 : 1)
@@ -371,6 +377,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
           [targetId, senderId, notificationKind, messageId, message.text, conversationId],
         )
       }
+      return { duplicate: !messageId }
     })
   }
 

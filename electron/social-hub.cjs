@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
@@ -451,32 +452,74 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:message', safely('Mesaj kaydedilemedi', async ({ targetUserId, text } = {}) => {
-      if (!eventAllowed(socket, 'message', 20, 60_000)) return
+    socket.on('social:message', safely('Mesaj kaydedilemedi', async ({
+      targetUserId,
+      text,
+      clientMessageId,
+    } = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'message', 20, 60_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
       const senderId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      const cleanMessage = cleanText(text, 500)
+      const rawMessage = String(text || '').trim()
+      if (rawMessage.length > 500) {
+        socket.emit('social:error', { code: 'message_too_long', event: 'message' })
+        reply({ ok: false, code: 'message_too_long' })
+        return
+      }
+      const cleanMessage = cleanText(rawMessage, 500)
       const profiles = accountProfiles()
-      if (!senderId || !targetId || targetId === senderId || !cleanMessage || !profiles.has(targetId)) return
+      if (!senderId || !targetId || targetId === senderId || !cleanMessage || !profiles.has(targetId)) {
+        reply({ ok: false, code: 'message_blocked' })
+        return
+      }
       const message = {
-        id: crypto.randomUUID(),
+        id: UUID_PATTERN.test(clientMessageId) ? clientMessageId : crypto.randomUUID(),
         senderId,
         targetId,
         text: cleanMessage,
         sentAt: Date.now(),
         reactions: [],
       }
-      if (store) await store.saveMessage(message)
-      else {
+      if (store) {
+        try {
+          const result = await store.saveMessage(message)
+          if (result?.duplicate) {
+            reply({ ok: true, duplicate: true })
+            return
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          const code = /yanıt bekliyor/i.test(errorMessage)
+            ? 'message_request_pending'
+            : /reddedildi/i.test(errorMessage)
+              ? 'message_request_rejected'
+              : 'message_blocked'
+          socket.emit('social:error', { code, event: 'message' })
+          reply({ ok: false, code })
+          return
+        }
+      } else {
+        if (messages.some((candidate) => candidate.id === message.id && candidate.senderId === senderId)) {
+          reply({ ok: true, duplicate: true })
+          return
+        }
         const key = conversationKey(senderId, targetId)
         const request = messageRequests.get(key)
         if (request?.status === 'pending') {
           socket.emit('social:error', { code: 'message_request_pending', event: 'message' })
+          reply({ ok: false, code: 'message_request_pending' })
           return
         }
         if (request?.status === 'rejected') {
           if (request.recipientId !== senderId) {
             socket.emit('social:error', { code: 'message_request_rejected', event: 'message' })
+            reply({ ok: false, code: 'message_request_rejected' })
             return
           }
           messageRequests.set(key, {
@@ -503,6 +546,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         })
         if (messages.length > 200) messages.splice(0, messages.length - 200)
       }
+      reply({ ok: true, duplicate: false })
       await scheduleEmit()
     }))
 
