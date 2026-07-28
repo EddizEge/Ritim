@@ -62,14 +62,21 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   assert.equal(stateA.currentUser.avatarUrl, 'https://example.test/account-a.png')
 
   const desktopB = await connect('Deniz PC', 'account-b', 'desktop')
+  const phoneB = await connect('Deniz Telefon', 'account-b', 'companion')
   const stateAWithB = await waitForState('Ediz PC', (state) => state.users.length === 1)
   const stateBWithA = await waitForState('Deniz PC', (state) => state.users.length === 1)
   assert.equal(stateAWithB.users[0].id, 'account-b')
   assert.equal(stateBWithA.users[0].id, 'account-a')
 
   desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Selam Deniz' })
-  const messagedState = await waitForState('Deniz PC', (state) => state.conversations['account-a']?.length === 1)
+  const messagedState = await waitForState('Deniz PC', (state) => (
+    state.conversations['account-a']?.length === 1 && state.unreadCounts['account-a'] === 1
+  ))
   assert.equal(messagedState.conversations['account-a'][0].text, 'Selam Deniz')
+  await waitForState('Deniz Telefon', (state) => state.unreadCounts['account-a'] === 1)
+  phoneB.emit('social:read', { targetUserId: 'account-a' })
+  await waitForState('Deniz PC', (state) => state.unreadCounts['account-a'] === 0)
+  await waitForState('Deniz Telefon', (state) => state.unreadCounts['account-a'] === 0)
 
   desktopA.emit('social:reaction', { targetUserId: 'account-b', reaction: '🔥' })
   const reactedState = await waitForState('Ediz PC', (state) => state.users[0]?.reactionCount === 1)
@@ -113,6 +120,7 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   context.after(async () => {
     desktopA.disconnect()
     phoneA.disconnect()
+    phoneB.disconnect()
     await io.close()
     await new Promise((resolve) => httpServer.close(resolve))
   })

@@ -28,15 +28,16 @@ type Props = {
 
 type DesktopView = 'home' | 'music' | 'social'
 
-function Sidebar({ connected, peerCount, youtube, activeView, onViewChange }: Pick<Props, 'connected' | 'peerCount' | 'youtube'> & { activeView: DesktopView; onViewChange: (view: DesktopView) => void }) {
+function Sidebar({ connected, peerCount, youtube, socialState, activeView, onViewChange }: Pick<Props, 'connected' | 'peerCount' | 'youtube' | 'socialState'> & { activeView: DesktopView; onViewChange: (view: DesktopView) => void }) {
   const livePlaylists = youtube.status.authenticated ? youtube.playlists : []
+  const unreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
   return (
     <aside className="sidebar">
       <div className="wordmark"><span>R</span>Ritim</div>
       <nav className="primary-nav" aria-label="Ana menü">
         <button className={`nav-item ${activeView === 'home' ? 'is-selected' : ''}`} onClick={() => onViewChange('home')}><Home fill={activeView === 'home' ? 'currentColor' : 'none'} />Ritim Ana Sayfa</button>
         <button className={`nav-item music-nav-item ${activeView === 'music' ? 'is-selected' : ''}`} onClick={() => onViewChange('music')}><Music2 />YouTube Music</button>
-        <button className={`nav-item social-nav-item ${activeView === 'social' ? 'is-selected' : ''}`} onClick={() => onViewChange('social')}><UsersRound fill={activeView === 'social' ? 'currentColor' : 'none'} />Sosyal<span className="nav-badge">2</span></button>
+        <button className={`nav-item social-nav-item ${activeView === 'social' ? 'is-selected' : ''}`} onClick={() => onViewChange('social')}><UsersRound fill={activeView === 'social' ? 'currentColor' : 'none'} />Sosyal{unreadCount ? <span className="nav-badge">{Math.min(99, unreadCount)}</span> : null}</button>
         <button className="nav-item"><Compass />Keşfet</button>
         <button className="nav-item"><Library />Kitaplık</button>
       </nav>
@@ -223,7 +224,7 @@ export function DesktopApp(props: Props) {
 
   return (
     <div className="desktop-shell">
-      <Sidebar connected={props.connected} peerCount={props.peerCount} youtube={props.youtube} activeView={activeView} onViewChange={setActiveView} />
+      <Sidebar connected={props.connected} peerCount={props.peerCount} youtube={props.youtube} socialState={props.socialState} activeView={activeView} onViewChange={setActiveView} />
       <main className={`desktop-content ${activeView === 'social' ? 'is-social' : ''}`}>
         {activeView === 'social' ? (
           <DesktopSocialHub state={props.socialState} actions={props.socialActions} />

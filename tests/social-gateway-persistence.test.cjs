@@ -86,4 +86,8 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
     1,
   )
   assert.equal(persistedState.rooms.find((room) => room.title === roomTitle).cover, 4)
+  const recipientState = await waitForState(states, 'Alpha İki', (state) => (
+    state.unreadCounts[accountA] >= 1
+  ))
+  assert.equal(recipientState.unreadCounts[accountA] >= 1, true)
 })

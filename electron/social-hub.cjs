@@ -26,6 +26,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const rooms = new Map()
   const privacy = new Map()
   const blocks = new Set()
+  const readMarkers = new Map()
   let emitChain = Promise.resolve()
 
   function socialSockets() {
@@ -96,6 +97,31 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return access
   }
 
+  function memoryUnread(accountIds) {
+    const unread = new Map()
+    for (const accountId of accountIds) {
+      const byPeer = new Map()
+      for (const peerId of accountIds) {
+        if (peerId === accountId) continue
+        const conversation = messages.filter((message) => (
+          (message.senderId === accountId && message.targetId === peerId)
+          || (message.senderId === peerId && message.targetId === accountId)
+        ))
+        const lastReadId = readMarkers.get(`${accountId}:${peerId}`)
+        const lastReadIndex = lastReadId
+          ? conversation.findIndex((message) => message.id === lastReadId)
+          : -1
+        const count = conversation
+          .slice(lastReadIndex + 1)
+          .filter((message) => message.senderId === peerId && message.targetId === accountId)
+          .length
+        byPeer.set(peerId, count)
+      }
+      unread.set(accountId, byPeer)
+    }
+    return unread
+  }
+
   function cleanOrphanedMemoryState(profiles) {
     for (const [listenerId, targetId] of listening.entries()) {
       if (!profiles.has(listenerId) || !profiles.has(targetId)) listening.delete(listenerId)
@@ -110,7 +136,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     const accountIds = [...profiles.keys()]
     if (!store) cleanOrphanedMemoryState(profiles)
 
-    const [selectedMessages, selectedRooms, selectedListening, selectedReactions, access, privacyEntries] = store
+    const [selectedMessages, selectedRooms, selectedListening, selectedReactions, access, privacyEntries, unread] = store
       ? await Promise.all([
           store.loadMessages(accountIds),
           store.loadRooms(accountIds),
@@ -118,6 +144,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           store.loadReactions(accountIds),
           store.loadAccess(accountIds),
           Promise.all(accountIds.map(async (accountId) => [accountId, await store.loadPrivacy(accountId)])),
+          store.loadUnreadCounts(accountIds),
         ])
       : [
           messages,
@@ -129,6 +156,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             profileVisibility: 'everyone',
             listeningVisibility: 'everyone',
           }]),
+          memoryUnread(accountIds),
         ]
     const privacyByAccount = new Map(privacyEntries)
 
@@ -145,11 +173,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           accountAccess.get(profile.id)?.listening !== false,
         ))
       const conversations = {}
+      const unreadCounts = {}
       for (const user of users) {
         conversations[user.id] = selectedMessages.filter((message) => (
           (message.senderId === accountId && message.targetId === user.id)
           || (message.senderId === user.id && message.targetId === accountId)
         )).map(({ targetId: _targetId, ...message }) => message)
+        unreadCounts[user.id] = Math.max(0, Number(unread.get(accountId)?.get(user.id)) || 0)
       }
       const visibleRooms = selectedRooms.filter((socialRoom) => (
         socialRoom.ownerId === accountId
@@ -195,6 +225,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         users,
         rooms: publicRooms,
         conversations,
+        unreadCounts,
         selectedUserId: users[0]?.id || '',
         listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
           ? undefined
@@ -350,6 +381,23 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           count: Math.min(999, current.count + 1),
           lastReaction: cleanReaction,
         })
+      }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:read', safely('Okundu bilgisi kaydedilemedi', async ({ targetUserId } = {}) => {
+      if (!eventAllowed(socket, 'read', 120, 60_000)) return
+      const accountId = socket.data.socialAccountId
+      const targetId = cleanText(targetUserId, 80)
+      if (!accountId || !targetId || accountId === targetId || !accountProfiles().has(targetId)) return
+      if (store) {
+        await store.markConversationRead(accountId, targetId)
+      } else {
+        const lastMessage = messages.findLast((message) => (
+          (message.senderId === accountId && message.targetId === targetId)
+          || (message.senderId === targetId && message.targetId === accountId)
+        ))
+        if (lastMessage) readMarkers.set(`${accountId}:${targetId}`, lastMessage.id)
       }
       await scheduleEmit()
     }))
