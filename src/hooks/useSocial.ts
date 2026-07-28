@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { io } from 'socket.io-client'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
 import type {
@@ -50,7 +51,7 @@ function notificationTitle(notification: SocialNotification, actorName: string) 
 
 async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
   const title = notificationTitle(notification, actorName)
-  if ((await import('@capacitor/core')).Capacitor.isNativePlatform()) {
+  if (Capacitor.isNativePlatform()) {
     const { LocalNotifications } = await import('@capacitor/local-notifications')
     const permission = await LocalNotifications.checkPermissions()
     if (permission.display !== 'granted') return false
@@ -190,6 +191,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       reactionsEnabled: true,
       deviceEnabled: false,
     },
+    mutedUserIds: [],
+    blockedUsers: [],
     selectedUserId: '',
   }))
   const selectedUserIdRef = useRef('')
@@ -347,7 +350,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   const requestDeviceNotifications = useCallback(() => {
     void (async () => {
       let granted = false
-      if ((await import('@capacitor/core')).Capacitor.isNativePlatform()) {
+      if (Capacitor.isNativePlatform()) {
         const { LocalNotifications } = await import('@capacitor/local-notifications')
         const current = await LocalNotifications.checkPermissions()
         const permission = current.display === 'prompt'
@@ -366,6 +369,21 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
       if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
     })()
+  }, [])
+
+  const toggleMute = useCallback((userId: string) => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:mute', { targetUserId: userId })
+  }, [])
+
+  const reportUser = useCallback((userId: string, reason: string, detail = '', messageId = '') => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:report', {
+      targetUserId: userId,
+      reason: reason.trim().slice(0, 120),
+      detail: detail.trim().slice(0, 2000),
+      messageId,
+    })
   }, [])
 
   const toggleListeningWith = useCallback((userId: string) => {
@@ -409,6 +427,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       markNotificationsRead,
       updateNotificationPreferences,
       requestDeviceNotifications,
+      toggleMute,
+      reportUser,
       toggleListeningWith,
       createRoom,
       updatePrivacy,

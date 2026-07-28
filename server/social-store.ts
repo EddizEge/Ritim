@@ -477,6 +477,11 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
           and request.status = 'accepted'
          where message.public_id = $1
            and message.deleted_at is null
+           and not exists (
+             select 1 from ritim.blocks block
+             where (block.blocker_id = $2 and block.blocked_id = $3)
+                or (block.blocker_id = $3 and block.blocked_id = $2)
+           )
            and exists (
              select 1
              from ritim.conversation_members actor_member
@@ -661,6 +666,122 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
           preferences.reactionsEnabled,
           preferences.deviceEnabled,
         ],
+      )
+    })
+  }
+
+  async function loadModerationState(accountIds: string[]) {
+    const muted = new Map<string, Set<string>>()
+    const blocked = new Map<string, Set<string>>()
+    for (const accountId of accountIds) {
+      muted.set(accountId, new Set())
+      blocked.set(accountId, new Set())
+    }
+    if (accountIds.length < 2) return { muted, blocked }
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const keys = [...accountByKey.keys()]
+    const result = await pool.query<{
+      viewer_key: string
+      target_key: string
+      kind: 'mute' | 'block'
+    }>(
+      `select
+         coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) as viewer_key,
+         coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text) as target_key,
+         'mute'::text as kind
+       from ritim.conversation_members viewer_member
+       join ritim.users viewer on viewer.id = viewer_member.user_id
+       join ritim.conversation_members target_member
+         on target_member.conversation_id = viewer_member.conversation_id
+        and target_member.user_id <> viewer_member.user_id
+       join ritim.users target on target.id = target_member.user_id
+       join ritim.message_requests request
+         on request.conversation_id = viewer_member.conversation_id
+        and request.status = 'accepted'
+       where viewer_member.muted_until > now()
+         and coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) = any($1::text[])
+         and coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text) = any($1::text[])
+       union all
+       select
+         coalesce(encode(blocker.legacy_account_id_hash, 'hex'), blocker.public_id::text) as viewer_key,
+         coalesce(encode(blocked_user.legacy_account_id_hash, 'hex'), blocked_user.public_id::text) as target_key,
+         'block'::text as kind
+       from ritim.blocks block
+       join ritim.users blocker on blocker.id = block.blocker_id
+       join ritim.users blocked_user on blocked_user.id = block.blocked_id
+       where coalesce(encode(blocker.legacy_account_id_hash, 'hex'), blocker.public_id::text) = any($1::text[])
+         and coalesce(encode(blocked_user.legacy_account_id_hash, 'hex'), blocked_user.public_id::text) = any($1::text[])`,
+      [keys],
+    )
+    for (const row of result.rows) {
+      const viewerId = accountByKey.get(row.viewer_key)
+      const targetId = accountByKey.get(row.target_key)
+      if (!viewerId || !targetId) continue
+      if (row.kind === 'mute') muted.get(viewerId)?.add(targetId)
+      else blocked.get(viewerId)?.add(targetId)
+    }
+    return { muted, blocked }
+  }
+
+  async function toggleMute(accountId: string, peerAccountId: string) {
+    await inTransaction(pool, async (client) => {
+      const viewerId = await findUserId(client, accountId)
+      const peerId = await findUserId(client, peerAccountId)
+      if (!viewerId || !peerId || viewerId === peerId) throw new Error('Sessize alma kullanıcıları bulunamadı.')
+      const updated = await client.query(
+        `update ritim.conversation_members viewer_member
+         set muted_until = case
+           when viewer_member.muted_until > now() then null
+           else now() + interval '100 years'
+         end
+         where viewer_member.user_id = $1
+           and exists (
+             select 1
+             from ritim.conversation_members peer_member
+             join ritim.message_requests request
+               on request.conversation_id = peer_member.conversation_id
+              and request.status = 'accepted'
+             where peer_member.conversation_id = viewer_member.conversation_id
+               and peer_member.user_id = $2
+           )`,
+        [viewerId, peerId],
+      )
+      if (!updated.rowCount) throw new Error('Sessize alınacak kabul edilmiş konuşma bulunamadı.')
+    })
+  }
+
+  async function saveReport(
+    reporterAccountId: string,
+    targetAccountId: string,
+    reason: string,
+    detail?: string,
+    messagePublicId?: string,
+  ) {
+    await inTransaction(pool, async (client) => {
+      const reporterId = await findUserId(client, reporterAccountId)
+      const targetId = await findUserId(client, targetAccountId)
+      if (!reporterId || !targetId || reporterId === targetId) throw new Error('Şikâyet kullanıcıları bulunamadı.')
+      let messageId
+      if (messagePublicId) {
+        const message = await client.query<{ id: string }>(
+          `select message.id
+           from ritim.messages message
+           where message.public_id = $1
+             and message.sender_id = $2
+             and exists (
+               select 1 from ritim.conversation_members reporter_member
+               where reporter_member.conversation_id = message.conversation_id
+                 and reporter_member.user_id = $3
+             )`,
+          [messagePublicId, targetId, reporterId],
+        )
+        messageId = message.rows[0]?.id
+      }
+      await client.query(
+        `insert into ritim.reports (
+           reporter_id, reported_user_id, message_id, reason, detail
+         ) values ($1, $2, $3, $4, $5)`,
+        [reporterId, targetId, messageId || null, reason, detail || null],
       )
     })
   }
@@ -1225,6 +1346,9 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     markNotificationsRead,
     loadNotificationPreferences,
     updateNotificationPreferences,
+    loadModerationState,
+    toggleMute,
+    saveReport,
     loadMessageRequests,
     respondToMessageRequest,
     loadUnreadCounts,

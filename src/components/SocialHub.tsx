@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  Bell, BellRing, Check, Eye, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio,
-  RefreshCw, Search, Send, ShieldBan, SmilePlus, Trash2, UsersRound, X,
+  Bell, BellRing, Check, Eye, Flag, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio,
+  RefreshCw, Search, Send, ShieldBan, SmilePlus, Trash2, UsersRound, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
 import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
@@ -210,8 +210,32 @@ function MessageRequestList({
   )
 }
 
+function BlockedUsersPanel({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
+  if (!state.blockedUsers.length) return null
+  return (
+    <section className={mobile ? 'mobile-social-blocked' : 'social-blocked-panel'}>
+      <div className="social-request-heading">
+        <span><ShieldBan /><b>Engellenenler</b></span>
+        <small>{state.blockedUsers.length} kişi</small>
+      </div>
+      <div className="social-blocked-list">
+        {state.blockedUsers.map((user) => (
+          <article key={user.id}>
+            <span><SocialAvatar user={user} small /><b>{user.displayName}</b></span>
+            <button onClick={() => actions.blockUser(user.id)}>Engeli kaldır</button>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & { mobile?: boolean; onClose?: () => void }) {
   const [message, setMessage] = useState('')
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportReason, setReportReason] = useState('Spam')
+  const [reportDetail, setReportDetail] = useState('')
+  const [reportSaved, setReportSaved] = useState(false)
   const selectedUserId = state.selectedUserId
   const selectedUser = state.users.find((user) => user.id === selectedUserId)
   const conversation = selectedUserId ? state.conversations[selectedUserId] || [] : []
@@ -227,6 +251,8 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
 
   if (!selectedUser) return null
   const listeningTogether = state.listeningWithUserId === selectedUser.id
+  const muted = state.mutedUserIds.includes(selectedUser.id)
+  const reportMessageId = [...conversation].reverse().find((item) => item.senderId === selectedUser.id)?.id
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -243,19 +269,48 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
           <b>{selectedUser.displayName}</b>
           <small>{incomingRequest ? 'Mesaj isteği gönderdi' : outgoingRequest ? 'İsteğin yanıtını bekliyor' : listeningTogether ? 'Birlikte dinliyorsunuz' : 'Çevrimiçi'}</small>
         </span>
-        <button
-          aria-label={`${selectedUser.displayName} kullanıcısını engelle`}
-          title="Kullanıcıyı engelle"
-          onClick={() => {
-            if (window.confirm(`${selectedUser.displayName} kullanıcısını engellemek istiyor musun?`)) {
-              actions.blockUser(selectedUser.id)
-              onClose?.()
-            }
+        <div className="social-chat-security-actions">
+          <button
+            className={muted ? 'is-active' : ''}
+            aria-label={muted ? 'Konuşmanın sesini aç' : 'Konuşmayı sessize al'}
+            title={muted ? 'Sesi aç' : 'Sessize al'}
+            onClick={() => actions.toggleMute(selectedUser.id)}
+          >{muted ? <VolumeX /> : <Volume2 />}</button>
+          <button aria-label={`${selectedUser.displayName} kullanıcısını şikâyet et`} title="Şikâyet et" onClick={() => setReportOpen(true)}><Flag /></button>
+          <button
+            aria-label={`${selectedUser.displayName} kullanıcısını engelle`}
+            title="Kullanıcıyı engelle"
+            onClick={() => {
+              if (window.confirm(`${selectedUser.displayName} kullanıcısını engellemek istiyor musun?`)) {
+                actions.blockUser(selectedUser.id)
+                onClose?.()
+              }
+            }}
+          >
+            <ShieldBan />
+          </button>
+        </div>
+      </header>
+      {reportOpen ? (
+        <form
+          className="social-report-panel"
+          onSubmit={(event) => {
+            event.preventDefault()
+            actions.reportUser(selectedUser.id, reportReason, reportDetail, reportMessageId)
+            setReportSaved(true)
+            setReportDetail('')
           }}
         >
-          <ShieldBan />
-        </button>
-      </header>
+          <header><b>{selectedUser.displayName} için şikâyet</b><button type="button" onClick={() => { setReportOpen(false); setReportSaved(false) }} aria-label="Şikâyeti kapat"><X /></button></header>
+          {reportSaved ? <div className="social-report-saved"><Check />Şikâyet güvenli şekilde kaydedildi.</div> : (
+            <>
+              <label>Neden<select value={reportReason} onChange={(event) => setReportReason(event.target.value)}><option>Spam</option><option>Taciz</option><option>Uygunsuz içerik</option><option>Diğer</option></select></label>
+              <label>Açıklama<textarea value={reportDetail} onChange={(event) => setReportDetail(event.target.value)} maxLength={2000} placeholder="İsteğe bağlı ayrıntı" /></label>
+              <button className="social-report-submit" type="submit"><Flag />Şikâyeti gönder</button>
+            </>
+          )}
+        </form>
+      ) : null}
       <div className="social-chat-messages" aria-live="polite">
         {conversation.length ? conversation.map((item) => (
           <div className={item.senderId === state.currentUser.id ? 'social-message is-own' : 'social-message'} key={item.id}>
@@ -311,12 +366,12 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
   )
 }
 
-function DesktopUserRow({ user, selected, listening, unread, actions }: { user: SocialUser; selected: boolean; listening: boolean; unread: number; actions: SocialActions }) {
+function DesktopUserRow({ user, selected, listening, muted, unread, actions }: { user: SocialUser; selected: boolean; listening: boolean; muted: boolean; unread: number; actions: SocialActions }) {
   return (
     <article className={`social-user-row ${selected ? 'is-selected' : ''} ${listening ? 'is-listening' : ''}`}>
       <button className="social-user-identity" onClick={() => actions.selectUser(user.id)}>
         <SocialAvatar user={user} />
-        <span><b>{user.displayName}{unread ? <em className="social-unread-badge">{Math.min(99, unread)}</em> : null}</b><small>{user.handle}</small></span>
+        <span><b>{user.displayName}{muted ? <VolumeX className="social-muted-icon" /> : null}{unread ? <em className="social-unread-badge">{Math.min(99, unread)}</em> : null}</b><small>{user.handle}</small></span>
       </button>
       <SocialTrackSummary track={user.currentTrack} />
       <div className="social-user-actions">
@@ -353,6 +408,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
       <div className="social-desktop-layout">
         <div className="social-directory">
           <MessageRequestList state={state} actions={actions} />
+          <BlockedUsersPanel state={state} actions={actions} />
           <div className="social-section-heading">
             <h2>Şu an dinleyenler</h2>
             <small>{visibleUsers.length} kullanıcı gösteriliyor</small>
@@ -364,6 +420,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
                 user={user}
                 selected={state.selectedUserId === user.id}
                 listening={state.listeningWithUserId === user.id}
+                muted={state.mutedUserIds.includes(user.id)}
                 unread={state.unreadCounts[user.id] || 0}
                 actions={actions}
               />
@@ -384,7 +441,7 @@ function MobileSocialUserRow({ user, state, actions, onMessage }: { user: Social
     <article className={`mobile-social-user ${listening ? 'is-listening' : ''}`}>
       <button className="mobile-social-person" onClick={() => actions.selectUser(user.id)}>
         <SocialAvatar user={user} />
-        <span><b>{user.displayName}{state.unreadCounts[user.id] ? <em className="social-unread-badge">{Math.min(99, state.unreadCounts[user.id])}</em> : null}</b><small>{user.handle}</small></span>
+        <span><b>{user.displayName}{state.mutedUserIds.includes(user.id) ? <VolumeX className="social-muted-icon" /> : null}{state.unreadCounts[user.id] ? <em className="social-unread-badge">{Math.min(99, state.unreadCounts[user.id])}</em> : null}</b><small>{user.handle}</small></span>
       </button>
       <SocialTrackSummary track={user.currentTrack} compact />
       <div className="mobile-social-actions">
@@ -419,6 +476,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
         <NotificationCenter state={state} actions={actions} mobile />
         <label className="mobile-social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kullanıcı veya şarkı ara" /></label>
         <MessageRequestList state={state} actions={actions} mobile onOpen={() => setChatOpen(true)} />
+        <BlockedUsersPanel state={state} actions={actions} mobile />
         <section className="mobile-social-rooms">
           <div className="mobile-social-section-title"><h2>Dinleme odaları</h2><Radio /></div>
           <div className="mobile-room-rail">
