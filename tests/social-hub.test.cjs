@@ -69,10 +69,30 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   assert.equal(stateBWithA.users[0].id, 'account-a')
 
   desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Selam Deniz' })
-  const messagedState = await waitForState('Deniz PC', (state) => (
-    state.conversations['account-a']?.length === 1 && state.unreadCounts['account-a'] === 1
+  const requestedState = await waitForState('Deniz PC', (state) => (
+    state.conversations['account-a']?.length === 1
+    && state.messageRequests[0]?.userId === 'account-a'
+    && state.messageRequests[0]?.direction === 'incoming'
   ))
-  assert.equal(messagedState.conversations['account-a'][0].text, 'Selam Deniz')
+  assert.equal(requestedState.conversations['account-a'][0].text, 'Selam Deniz')
+  assert.equal(requestedState.unreadCounts['account-a'], 0)
+  await waitForState('Deniz Telefon', (state) => state.messageRequests[0]?.direction === 'incoming')
+  await waitForState('Ediz PC', (state) => state.messageRequests[0]?.direction === 'outgoing')
+
+  desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Beklerken ikinci mesaj' })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(latestStates.get('Deniz PC').conversations['account-a'].length, 1)
+
+  phoneB.emit('social:request-response', { requesterUserId: 'account-a', action: 'accept' })
+  await waitForState('Deniz PC', (state) => state.messageRequests.length === 0)
+  await waitForState('Deniz Telefon', (state) => state.messageRequests.length === 0)
+  await waitForState('Ediz PC', (state) => state.messageRequests.length === 0)
+
+  desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Nasılsın?' })
+  const messagedState = await waitForState('Deniz PC', (state) => (
+    state.conversations['account-a']?.length === 2 && state.unreadCounts['account-a'] === 1
+  ))
+  assert.equal(messagedState.conversations['account-a'][1].text, 'Nasılsın?')
   await waitForState('Deniz Telefon', (state) => state.unreadCounts['account-a'] === 1)
   phoneB.emit('social:read', { targetUserId: 'account-a' })
   await waitForState('Deniz PC', (state) => state.unreadCounts['account-a'] === 0)
@@ -124,6 +144,68 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     await io.close()
     await new Promise((resolve) => httpServer.close(resolve))
   })
+})
+
+test('reddedilen mesaj isteği silinir ve yalnızca alıcı yeni istek başlatabilir', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${httpServer.address().port}`
+  const states = new Map()
+  const connect = async (name, accountId) => {
+    const client = createClient(url, { transports: ['websocket'] })
+    client.on('social:state', (state) => states.set(name, state))
+    await new Promise((resolve) => client.once('connect', resolve))
+    client.emit('social:join', {
+      accountId,
+      deviceId: `${accountId}-desktop`,
+      deviceRole: 'desktop',
+      profile: profile(accountId, name, 'desktop'),
+    })
+    return client
+  }
+  const waitFor = async (name, predicate) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 2_000) {
+      const state = states.get(name)
+      if (state && predicate(state)) return state
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`${name} için mesaj isteği durumu gelmedi`)
+  }
+  const sender = await connect('Gönderen', 'request-sender')
+  const recipient = await connect('Alıcı', 'request-recipient')
+  context.after(async () => {
+    sender.disconnect()
+    recipient.disconnect()
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+  await waitFor('Gönderen', (state) => state.users.length === 1)
+
+  sender.emit('social:message', { targetUserId: 'request-recipient', text: 'Tanışalım mı?' })
+  await waitFor('Alıcı', (state) => state.messageRequests[0]?.direction === 'incoming')
+  recipient.emit('social:request-response', { requesterUserId: 'request-sender', action: 'reject' })
+  await waitFor('Alıcı', (state) => (
+    state.messageRequests.length === 0 && state.conversations['request-sender']?.length === 0
+  ))
+
+  const rejectedError = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Reddedilen istek yeniden gönderilebildi')), 2_000)
+    sender.once('social:error', (error) => {
+      clearTimeout(timer)
+      resolve(error)
+    })
+  })
+  sender.emit('social:message', { targetUserId: 'request-recipient', text: 'Tekrar deneme' })
+  assert.equal((await rejectedError).code, 'message_request_rejected')
+
+  recipient.emit('social:message', { targetUserId: 'request-sender', text: 'Ben yazmak istedim.' })
+  const reversed = await waitFor('Gönderen', (state) => state.messageRequests[0]?.direction === 'incoming')
+  assert.equal(reversed.messageRequests[0].userId, 'request-recipient')
 })
 
 test('doğrulanmış socket kimliği istemcinin account ve profil iddiasını ezer', async (context) => {

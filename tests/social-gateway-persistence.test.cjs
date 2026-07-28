@@ -73,6 +73,12 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
   await waitForState(states, 'Alpha İki', (state) => state.users.length === 1)
 
   if (phase === 'seed') {
+    clientA.emit('social:message', { targetUserId: accountB, text: 'Alpha3 kalıcı mesaj isteği' })
+    await waitForState(states, 'Alpha İki', (state) => (
+      state.messageRequests.some((request) => request.userId === accountA && request.direction === 'incoming')
+    ))
+    clientB.emit('social:request-response', { requesterUserId: accountA, action: 'accept' })
+    await waitForState(states, 'Alpha İki', (state) => state.messageRequests.length === 0)
     clientA.emit('social:message', { targetUserId: accountB, text: messageText })
     clientB.emit('social:create-room', { title: roomTitle, cover: 4 })
   }

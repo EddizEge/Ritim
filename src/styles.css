@@ -231,11 +231,28 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-privacy-controls label { display: flex; align-items: center; gap: 4px; font-size: 7px; }
 .social-privacy-controls select { height: 22px; padding: 0 18px 0 6px; border: 1px solid #343738; border-radius: 5px; color: #d6d8d9; background: #171919; font: inherit; }
 .social-desktop-layout { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(290px, 350px); min-height: 0; }
-.social-directory { min-width: 0; min-height: 0; padding: 18px 20px 20px 24px; overflow: hidden; }
+.social-directory { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 20px 24px; overflow: hidden; }
+.social-request-panel { flex: 0 0 auto; margin-bottom: 14px; padding: 11px; border: 1px solid #3a3032; border-radius: 9px; background: #171214; }
+.social-request-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.social-request-heading > span { display: flex; align-items: center; gap: 7px; color: #f3f3f3; font-size: 10px; }
+.social-request-heading svg { width: 15px; color: #ff6573; }
+.social-request-heading small { color: #b08b90; font-size: 8px; }
+.social-request-list { display: grid; gap: 7px; max-height: 150px; overflow-y: auto; scrollbar-width: thin; }
+.social-request-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px; border: 1px solid #332d2f; border-radius: 8px; background: #1d191a; }
+.social-request-person { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; color: #fff; background: transparent; text-align: left; }
+.social-request-person span { min-width: 0; }
+.social-request-person b, .social-request-person small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.social-request-person b { font-size: 9px; }
+.social-request-person small { margin-top: 4px; color: #aaa; font-size: 8px; }
+.social-request-actions { display: flex; gap: 6px; }
+.social-request-actions button, .social-chat-request-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; padding: 0 9px; border-radius: 6px; font-size: 8px; font-weight: 800; }
+.social-request-actions svg, .social-chat-request-actions svg { width: 13px; }
+.social-request-actions .is-accept, .social-chat-request-actions .is-accept { color: #d2f8dd; background: #1d5730; }
+.social-request-actions .is-reject, .social-chat-request-actions .is-reject { color: #ffc2c7; background: #4b2026; }
 .social-section-heading { display: flex; align-items: center; justify-content: space-between; height: 33px; margin-bottom: 8px; }
 .social-section-heading h2 { margin: 0; font-size: 15px; letter-spacing: -.35px; }
 .social-section-heading small { color: #747778; font-size: 8px; }
-.social-user-list { display: grid; gap: 8px; height: calc(100% - 41px); overflow-y: auto; padding-right: 4px; scrollbar-color: #3b3e3f transparent; scrollbar-width: thin; }
+.social-user-list { display: grid; min-height: 0; flex: 1; gap: 8px; overflow-y: auto; padding-right: 4px; scrollbar-color: #3b3e3f transparent; scrollbar-width: thin; }
 .social-user-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(210px, 1.2fr) 174px 24px; align-items: center; gap: 13px; min-height: 98px; padding: 10px 10px 10px 13px; border: 1px solid #292b2c; border-radius: 9px; background: #131515; transition: border-color .18s ease, background .18s ease; }
 .social-user-row:hover, .social-user-row.is-selected { border-color: #3a3d3e; background: #171919; }
 .social-user-row.is-listening { border-color: rgba(255, 77, 90, .62); box-shadow: inset 3px 0 0 var(--accent); }
@@ -307,6 +324,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-chat-composer button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 6px; color: #fff; background: var(--accent); }
 .social-chat-composer button:disabled { color: #777; background: transparent; }
 .social-chat-composer button svg { width: 15px; }
+.social-chat-request-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 7px 9px; }
+.social-chat-request-pending { display: flex; align-items: center; gap: 9px; margin: 6px 9px; padding: 7px 9px; border: 1px solid #3a3032; border-radius: 8px; color: #ff7884; background: #1c1416; }
+.social-chat-request-pending > svg { flex: 0 0 auto; width: 17px; }
+.social-chat-request-pending span { min-width: 0; }
+.social-chat-request-pending b, .social-chat-request-pending small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.social-chat-request-pending b { color: #f1d9dc; font-size: 8px; }
+.social-chat-request-pending small { margin-top: 3px; color: #a68b8f; font-size: 7px; }
 
 .ytm-mobile-shell { position: relative; isolation: isolate; width: min(100%, 460px); min-height: 100dvh; margin: 0 auto; overflow: hidden; color: #fff; background: #050505; font-family: Roboto, Arial, sans-serif; }
 .ytm-ambient { position: absolute; z-index: -2; inset: -60px -80px auto; height: 62vh; background: radial-gradient(circle at 50% 30%, #333 0, #111 48%, #030303 76%); filter: blur(44px) saturate(1.25); opacity: .42; transform: scale(1.08); }
@@ -566,6 +590,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-social-search { display: flex; align-items: center; gap: 8px; margin: 0 18px 20px; padding: 0 11px; border: 1px solid #282b2e; border-radius: 9px; background: #111314; }
 .mobile-social-search svg { width: 14px; color: #727679; }
 .mobile-social-search input { width: 100%; height: 38px; border: 0; outline: 0; color: #f4f4f4; background: transparent; font-size: 10px; }
+.mobile-social-requests { margin: -7px 18px 19px; padding: 11px; border: 1px solid #3a3032; border-radius: 10px; background: #171214; }
+.mobile-social-requests .social-request-list { max-height: 220px; }
+.mobile-social-requests .social-request-card { grid-template-columns: minmax(0, 1fr); }
+.mobile-social-requests .social-request-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .mobile-social-section-title { display: flex; align-items: center; justify-content: space-between; padding: 0 18px 11px; }
 .mobile-social-section-title h2 { margin: 0; font-size: 20px; letter-spacing: -.5px; }
 .mobile-social-section-title > svg { width: 19px; color: #ff5b6a; }

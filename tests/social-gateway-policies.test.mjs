@@ -131,9 +131,13 @@ try {
   clientA.emit('social:message', { targetUserId: tokensB.user.id, text: 'Canlı politika testi' })
   await waitFor(
     'b',
-    (state) => state.conversations[tokensA.user.id]?.some((message) => message.text === 'Canlı politika testi'),
-    'Kalıcı mesaj',
+    (state) => state.messageRequests.some((request) => (
+      request.userId === tokensA.user.id && request.direction === 'incoming'
+    )),
+    'Kalıcı mesaj isteği',
   )
+  clientB.emit('social:request-response', { requesterUserId: tokensA.user.id, action: 'accept' })
+  await waitFor('b', (state) => state.messageRequests.length === 0, 'Mesaj isteğinin kabulü')
 
   clientB.emit('social:block', { targetUserId: tokensA.user.id })
   await waitFor('a', (state) => state.users.length === 0, 'Engellemenin karşı tarafa uygulanması')

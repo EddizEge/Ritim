@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  Eye, Heart, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send, ShieldBan, SmilePlus,
-  UsersRound, X,
+  Check, Eye, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send,
+  ShieldBan, SmilePlus, Trash2, UsersRound, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
 import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
@@ -108,6 +108,56 @@ function messageTime(sentAt: number) {
   return new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(sentAt)
 }
 
+function MessageRequestList({
+  state,
+  actions,
+  mobile = false,
+  onOpen,
+}: SocialProps & { mobile?: boolean; onOpen?: () => void }) {
+  const incomingRequests = state.messageRequests.filter((request) => request.direction === 'incoming')
+  if (!incomingRequests.length) return null
+
+  return (
+    <section className={mobile ? 'mobile-social-requests' : 'social-request-panel'} aria-label="Mesaj istekleri">
+      <div className="social-request-heading">
+        <span><MailQuestion /><b>Mesaj istekleri</b></span>
+        <small>{incomingRequests.length} bekleyen</small>
+      </div>
+      <div className="social-request-list">
+        {incomingRequests.map((request) => {
+          const user = state.users.find((candidate) => candidate.id === request.userId)
+          if (!user) return null
+          return (
+            <article className="social-request-card" key={request.userId}>
+              <button
+                className="social-request-person"
+                onClick={() => {
+                  actions.selectUser(user.id)
+                  onOpen?.()
+                }}
+              >
+                <SocialAvatar user={user} small />
+                <span><b>{user.displayName}</b><small>{request.preview}</small></span>
+              </button>
+              <div className="social-request-actions">
+                <button
+                  className="is-accept"
+                  onClick={() => actions.respondToMessageRequest(user.id, 'accept')}
+                ><Check />Kabul et</button>
+                <button
+                  className="is-reject"
+                  aria-label={`${user.displayName} mesaj isteğini reddet`}
+                  onClick={() => actions.respondToMessageRequest(user.id, 'reject')}
+                ><Trash2 />Reddet</button>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & { mobile?: boolean; onClose?: () => void }) {
   const [message, setMessage] = useState('')
   const selectedUserId = state.selectedUserId
@@ -115,6 +165,9 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
   const conversation = selectedUserId ? state.conversations[selectedUserId] || [] : []
   const unreadCount = selectedUserId ? state.unreadCounts[selectedUserId] || 0 : 0
   const newestMessageId = conversation.at(-1)?.id || ''
+  const messageRequest = state.messageRequests.find((request) => request.userId === selectedUserId)
+  const incomingRequest = messageRequest?.direction === 'incoming'
+  const outgoingRequest = messageRequest?.direction === 'outgoing'
 
   useEffect(() => {
     if (selectedUserId && unreadCount && newestMessageId) actions.markConversationRead(selectedUserId)
@@ -136,7 +189,7 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
         <SocialAvatar user={selectedUser} small />
         <span>
           <b>{selectedUser.displayName}</b>
-          <small>{listeningTogether ? 'Birlikte dinliyorsunuz' : 'Çevrimiçi'}</small>
+          <small>{incomingRequest ? 'Mesaj isteği gönderdi' : outgoingRequest ? 'İsteğin yanıtını bekliyor' : listeningTogether ? 'Birlikte dinliyorsunuz' : 'Çevrimiçi'}</small>
         </span>
         <button
           aria-label={`${selectedUser.displayName} kullanıcısını engelle`}
@@ -171,11 +224,20 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
           </div>
         ) : null}
       </div>
-      <form className="social-chat-composer" onSubmit={submit}>
-        <SmilePlus />
-        <input value={message} onChange={(event) => setMessage(event.target.value)} maxLength={500} placeholder="Mesaj yaz…" aria-label="Mesaj" />
-        <button disabled={!message.trim()} aria-label="Mesajı gönder"><Send /></button>
-      </form>
+      {incomingRequest ? (
+        <div className="social-chat-request-actions">
+          <button className="is-reject" onClick={() => { actions.respondToMessageRequest(selectedUser.id, 'reject'); onClose?.() }}><Trash2 />Reddet</button>
+          <button className="is-accept" onClick={() => actions.respondToMessageRequest(selectedUser.id, 'accept')}><Check />Kabul et</button>
+        </div>
+      ) : outgoingRequest ? (
+        <div className="social-chat-request-pending"><MailQuestion /><span><b>Mesaj isteği gönderildi</b><small>{selectedUser.displayName} kabul ettiğinde konuşmaya devam edebilirsin.</small></span></div>
+      ) : (
+        <form className="social-chat-composer" onSubmit={submit}>
+          <SmilePlus />
+          <input value={message} onChange={(event) => setMessage(event.target.value)} maxLength={500} placeholder="Mesaj yaz…" aria-label="Mesaj" />
+          <button disabled={!message.trim()} aria-label="Mesajı gönder"><Send /></button>
+        </form>
+      )}
     </aside>
   )
 }
@@ -220,6 +282,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
       <SocialConnectionNotice state={state} actions={actions} />
       <div className="social-desktop-layout">
         <div className="social-directory">
+          <MessageRequestList state={state} actions={actions} />
           <div className="social-section-heading">
             <h2>Şu an dinleyenler</h2>
             <small>{visibleUsers.length} kullanıcı gösteriliyor</small>
@@ -284,6 +347,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
         </div>
         <SocialConnectionNotice state={state} actions={actions} mobile />
         <label className="mobile-social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kullanıcı veya şarkı ara" /></label>
+        <MessageRequestList state={state} actions={actions} mobile onOpen={() => setChatOpen(true)} />
         <section className="mobile-social-rooms">
           <div className="mobile-social-section-title"><h2>Dinleme odaları</h2><Radio /></div>
           <div className="mobile-room-rail">

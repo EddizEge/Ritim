@@ -37,6 +37,13 @@ type StoredMessage = {
   sentAt: number
 }
 
+type StoredMessageRequest = {
+  userId: string
+  direction: 'incoming' | 'outgoing'
+  preview: string
+  sentAt: number
+}
+
 type StoredRoom = {
   id: string
   ownerId: string
@@ -136,11 +143,12 @@ async function usersCanInteract(client: PoolClient, leftId: string, rightId: str
                target.profile_visibility = 'contacts'
                and exists (
                  select 1
-                 from ritim.conversation_members left_member
-                 join ritim.conversation_members right_member
-                   on right_member.conversation_id = left_member.conversation_id
-                  and right_member.user_id = $2
-                 where left_member.user_id = $1
+                 from ritim.message_requests request
+                 where request.status = 'accepted'
+                   and (
+                     (request.requester_id = $1 and request.recipient_id = $2)
+                     or (request.requester_id = $2 and request.recipient_id = $1)
+                   )
                )
              )
            )
@@ -273,6 +281,42 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
          on conflict (conversation_id, user_id) do nothing`,
         [conversationId, orderedUserIds[0].toString(), orderedUserIds[1].toString()],
       )
+      const requestResult = await client.query<{
+        requester_id: string
+        recipient_id: string
+        status: 'pending' | 'accepted' | 'rejected'
+      }>(
+        `select requester_id, recipient_id, status
+         from ritim.message_requests
+         where conversation_id = $1
+         for update`,
+        [conversationId],
+      )
+      const request = requestResult.rows[0]
+      if (!request) {
+        await client.query(
+          `insert into ritim.message_requests (
+             conversation_id, requester_id, recipient_id, status
+           ) values ($1, $2, $3, 'pending')`,
+          [conversationId, senderId, targetId],
+        )
+      } else if (request.status === 'pending') {
+        throw new Error('Mesaj isteği yanıt bekliyor.')
+      } else if (request.status === 'rejected') {
+        if (String(request.recipient_id) !== String(senderId)) {
+          throw new Error('Mesaj isteği reddedildi.')
+        }
+        await client.query(
+          `update ritim.message_requests
+           set requester_id = $2,
+               recipient_id = $3,
+               status = 'pending',
+               created_at = now(),
+               responded_at = null
+           where conversation_id = $1`,
+          [conversationId, senderId, targetId],
+        )
+      }
       await client.query(
         `insert into ritim.messages (
           public_id, conversation_id, sender_id, client_message_id, body, sent_at
@@ -313,6 +357,9 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            on target_member.conversation_id = m.conversation_id
           and target_member.user_id <> m.sender_id
          join ritim.users target on target.id = target_member.user_id
+         join ritim.message_requests request
+           on request.conversation_id = m.conversation_id
+          and request.status <> 'rejected'
          where coalesce(encode(sender.legacy_account_id_hash, 'hex'), sender.public_id::text)
                  in (${placeholders})
            and coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text)
@@ -365,6 +412,9 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
          on peer_member.conversation_id = viewer_member.conversation_id
         and peer_member.user_id <> viewer_member.user_id
        join ritim.users peer on peer.id = peer_member.user_id
+       join ritim.message_requests request
+         on request.conversation_id = viewer_member.conversation_id
+        and request.status = 'accepted'
        join ritim.messages message
          on message.conversation_id = viewer_member.conversation_id
         and message.sender_id = peer_member.user_id
@@ -410,6 +460,111 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            )`,
         [viewerId, peerId],
       )
+    })
+  }
+
+  async function loadMessageRequests(accountIds: string[]) {
+    const requests = new Map<string, StoredMessageRequest[]>()
+    for (const accountId of accountIds) requests.set(accountId, [])
+    if (accountIds.length < 2) return requests
+
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const keys = [...accountByKey.keys()]
+    const result = await pool.query<{
+      requester_key: string
+      recipient_key: string
+      preview: string
+      sent_at: Date
+    }>(
+      `select
+         coalesce(encode(requester.legacy_account_id_hash, 'hex'), requester.public_id::text) as requester_key,
+         coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) as recipient_key,
+         first_message.body as preview,
+         first_message.sent_at
+       from ritim.message_requests request
+       join ritim.users requester on requester.id = request.requester_id
+       join ritim.users recipient on recipient.id = request.recipient_id
+       join lateral (
+         select message.body, message.sent_at
+         from ritim.messages message
+         where message.conversation_id = request.conversation_id
+           and message.deleted_at is null
+         order by message.sent_at asc, message.id asc
+         limit 1
+       ) first_message on true
+       where request.status = 'pending'
+         and coalesce(encode(requester.legacy_account_id_hash, 'hex'), requester.public_id::text) = any($1::text[])
+         and coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) = any($1::text[])
+         and not exists (
+           select 1 from ritim.blocks block
+           where (block.blocker_id = requester.id and block.blocked_id = recipient.id)
+              or (block.blocker_id = recipient.id and block.blocked_id = requester.id)
+         )
+       order by request.created_at asc`,
+      [keys],
+    )
+    for (const row of result.rows) {
+      const requesterId = accountByKey.get(row.requester_key)
+      const recipientId = accountByKey.get(row.recipient_key)
+      if (!requesterId || !recipientId) continue
+      requests.get(requesterId)?.push({
+        userId: recipientId,
+        direction: 'outgoing',
+        preview: row.preview,
+        sentAt: row.sent_at.getTime(),
+      })
+      requests.get(recipientId)?.push({
+        userId: requesterId,
+        direction: 'incoming',
+        preview: row.preview,
+        sentAt: row.sent_at.getTime(),
+      })
+    }
+    return requests
+  }
+
+  async function respondToMessageRequest(
+    recipientAccountId: string,
+    requesterAccountId: string,
+    action: 'accept' | 'reject',
+  ) {
+    await inTransaction(pool, async (client) => {
+      const recipientId = await findUserId(client, recipientAccountId)
+      const requesterId = await findUserId(client, requesterAccountId)
+      if (!recipientId || !requesterId || recipientId === requesterId) {
+        throw new Error('Mesaj isteği kullanıcıları bulunamadı.')
+      }
+      const updated = await client.query<{ conversation_id: string }>(
+        `update ritim.message_requests
+         set status = $3, responded_at = now()
+         where requester_id = $1
+           and recipient_id = $2
+           and status = 'pending'
+         returning conversation_id`,
+        [requesterId, recipientId, action === 'accept' ? 'accepted' : 'rejected'],
+      )
+      const conversationId = updated.rows[0]?.conversation_id
+      if (!conversationId) throw new Error('Bekleyen mesaj isteği bulunamadı.')
+      if (action === 'accept') {
+        await client.query(
+          `update ritim.conversation_members
+           set last_read_message_id = (
+             select max(message.id)
+             from ritim.messages message
+             where message.conversation_id = $1
+               and message.deleted_at is null
+           )
+           where conversation_id = $1 and user_id = $2`,
+          [conversationId, recipientId],
+        )
+      } else {
+        await client.query(
+          `update ritim.messages
+           set deleted_at = now()
+           where conversation_id = $1 and deleted_at is null`,
+          [conversationId],
+        )
+      }
     })
   }
 
@@ -500,12 +655,11 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
        from ritim.blocks
        where blocker_id = any($1::bigint[]) and blocked_id = any($1::bigint[])
        union all
-       select left_member.user_id as left_id, right_member.user_id as right_id, 'contact'::text as kind
-       from ritim.conversation_members left_member
-       join ritim.conversation_members right_member
-         on right_member.conversation_id = left_member.conversation_id
-        and right_member.user_id <> left_member.user_id
-       where left_member.user_id = any($1::bigint[]) and right_member.user_id = any($1::bigint[])`,
+       select request.requester_id as left_id, request.recipient_id as right_id, 'contact'::text as kind
+       from ritim.message_requests request
+       where request.status = 'accepted'
+         and request.requester_id = any($1::bigint[])
+         and request.recipient_id = any($1::bigint[])`,
       [databaseIds],
     )
     const blocked = new Set<string>()
@@ -715,11 +869,12 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         `select target.listening_visibility,
                 exists (
                   select 1
-                  from ritim.conversation_members listener_member
-                  join ritim.conversation_members target_member
-                    on target_member.conversation_id = listener_member.conversation_id
-                   and target_member.user_id = $2
-                  where listener_member.user_id = $1
+                  from ritim.message_requests request
+                  where request.status = 'accepted'
+                    and (
+                      (request.requester_id = $1 and request.recipient_id = $2)
+                      or (request.requester_id = $2 and request.recipient_id = $1)
+                    )
                 ) as is_contact
          from ritim.users target
          where target.id = $2`,
@@ -790,6 +945,8 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     removePresence,
     saveMessage,
     loadMessages,
+    loadMessageRequests,
+    respondToMessageRequest,
     loadUnreadCounts,
     markConversationRead,
     saveReaction,

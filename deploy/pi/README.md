@@ -36,6 +36,21 @@ Bu klasör Alpha.2'nin Raspberry Pi üzerindeki kalıcı sosyal altyapısıdır.
    curl --fail http://127.0.0.1:8790/ready
    ```
 
+## Alpha.3 mesaj istekleri geçişi
+
+Mevcut Alpha.2 PostgreSQL volume'u ilk kurulum betiklerini tekrar çalıştırmaz.
+Alpha.3 gateway imajına geçmeden önce `030_alpha3_message_requests.sql`
+dosyasını bir kez yönetici hesabıyla uygula:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/030_alpha3_message_requests.sql
+```
+
+Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları
+silmez veya yeniden yazmaz. Betik tekrar çalıştırılabilir.
+
 `RITIM_AUTH_REQUIRED=true` yalnızca PC ve Android istemcileri Ritim access
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.
