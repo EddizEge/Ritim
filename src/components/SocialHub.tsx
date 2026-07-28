@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  Check, Eye, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send,
-  ShieldBan, SmilePlus, Trash2, UsersRound, X,
+  Bell, BellRing, Check, Eye, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio,
+  RefreshCw, Search, Send, ShieldBan, SmilePlus, Trash2, UsersRound, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
 import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
@@ -11,6 +11,8 @@ type SocialProps = {
   state: SocialState
   actions: SocialActions
 }
+
+const QUICK_MESSAGE_REACTIONS = ['♥', '🔥', '😂', '👍'] as const
 
 function SocialAvatar({ user, small = false }: { user: SocialUser; small?: boolean }) {
   return (
@@ -106,6 +108,56 @@ function SocialTrackSummary({ track, compact = false }: { track?: SocialTrack; c
 
 function messageTime(sentAt: number) {
   return new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(sentAt)
+}
+
+function NotificationCenter({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const unreadCount = state.notifications.filter((notification) => !notification.read).length
+  const preferences = state.notificationPreferences
+
+  return (
+    <div className={`social-notification-center ${mobile ? 'is-mobile' : ''}`}>
+      <button
+        className={unreadCount ? 'social-notification-trigger has-unread' : 'social-notification-trigger'}
+        aria-label={`Bildirimler${unreadCount ? `, ${unreadCount} okunmamış` : ''}`}
+        onClick={() => {
+          setOpen((current) => !current)
+          if (unreadCount) actions.markNotificationsRead()
+        }}
+      >
+        {unreadCount ? <BellRing /> : <Bell />}
+        {unreadCount ? <i>{Math.min(99, unreadCount)}</i> : null}
+      </button>
+      {open ? (
+        <section className="social-notification-popover">
+          <header><b>Bildirimler</b><small>{state.notifications.length ? `${state.notifications.length} olay` : 'Hepsi temiz'}</small></header>
+          <div className="social-notification-preferences">
+            <label><input type="checkbox" checked={preferences.messagesEnabled} onChange={(event) => actions.updateNotificationPreferences({ ...preferences, messagesEnabled: event.target.checked })} />Mesajlar</label>
+            <label><input type="checkbox" checked={preferences.reactionsEnabled} onChange={(event) => actions.updateNotificationPreferences({ ...preferences, reactionsEnabled: event.target.checked })} />Tepkiler</label>
+            <button className={preferences.deviceEnabled ? 'is-enabled' : ''} onClick={actions.requestDeviceNotifications}>
+              <Bell />{preferences.deviceEnabled ? 'Sistem bildirimleri açık' : 'Sistem bildirimlerini aç'}
+            </button>
+          </div>
+          <div className="social-notification-list">
+            {state.notifications.length ? state.notifications.slice(0, 20).map((notification) => {
+              const actor = state.users.find((user) => user.id === notification.actorId)
+              const title = notification.kind === 'reaction'
+                ? `${actor?.displayName || 'Bir kullanıcı'} mesajına ${notification.body} tepkisi verdi`
+                : notification.kind === 'message_request'
+                  ? `${actor?.displayName || 'Bir kullanıcı'} mesaj isteği gönderdi`
+                  : `${actor?.displayName || 'Bir kullanıcı'} sana yazdı`
+              return (
+                <article className={notification.read ? '' : 'is-unread'} key={notification.id}>
+                  <span><Bell /></span>
+                  <div><b>{title}</b>{notification.kind !== 'reaction' ? <p>{notification.body}</p> : null}<time>{messageTime(notification.createdAt)}</time></div>
+                </article>
+              )
+            }) : <div className="social-notification-empty"><Bell /><span>Yeni bildirimin yok.</span></div>}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
 }
 
 function MessageRequestList({
@@ -208,6 +260,23 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
         {conversation.length ? conversation.map((item) => (
           <div className={item.senderId === state.currentUser.id ? 'social-message is-own' : 'social-message'} key={item.id}>
             <p>{item.text}</p>
+            {item.reactions.length ? (
+              <div className="social-message-reaction-summary">
+                {item.reactions.map((itemReaction) => <span key={itemReaction.actorId}>{itemReaction.reaction}</span>)}
+              </div>
+            ) : null}
+            <div className="social-message-reaction-picker" aria-label="Hızlı tepkiler">
+              {QUICK_MESSAGE_REACTIONS.map((reaction) => (
+                <button
+                  className={item.reactions.some((itemReaction) => (
+                    itemReaction.actorId === state.currentUser.id && itemReaction.reaction === reaction
+                  )) ? 'is-selected' : ''}
+                  key={reaction}
+                  aria-label={`${reaction} tepkisi ver`}
+                  onClick={() => actions.reactToMessage(selectedUser.id, item.id, reaction)}
+                >{reaction}</button>
+              ))}
+            </div>
             <time dateTime={new Date(item.sentAt).toISOString()}>{messageTime(item.sentAt)}</time>
           </div>
         )) : (
@@ -274,6 +343,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
         <h1>Sosyal</h1>
         <label className="social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Aktif kullanıcı ara" /></label>
         <span className="social-online-count"><i />{onlineCount} kişi çevrimiçi</span>
+        <NotificationCenter state={state} actions={actions} />
         <button className={state.activeRoomId ? 'social-create-room is-created' : 'social-create-room'} onClick={actions.createRoom}>
           {state.activeRoomId ? <Radio /> : <Plus />}
           {state.activeRoomId ? 'Odan hazır' : 'Dinleme odası oluştur'}
@@ -346,6 +416,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
           <button className={state.activeRoomId ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{state.activeRoomId ? 'Odan hazır' : 'Oda oluştur'}</button>
         </div>
         <SocialConnectionNotice state={state} actions={actions} mobile />
+        <NotificationCenter state={state} actions={actions} mobile />
         <label className="mobile-social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kullanıcı veya şarkı ara" /></label>
         <MessageRequestList state={state} actions={actions} mobile onOpen={() => setChatOpen(true)} />
         <section className="mobile-social-rooms">

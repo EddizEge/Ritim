@@ -209,7 +209,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 .desktop-content.is-social { overflow: hidden; }
 .social-desktop-shell { display: grid; grid-template-rows: 84px 32px minmax(0, 1fr); height: 100%; overflow: hidden; background: #090a0a; }
-.social-desktop-header { display: grid; grid-template-columns: minmax(120px, .65fr) minmax(230px, 420px) auto auto; align-items: center; gap: 22px; padding: 0 24px; border-bottom: 1px solid #272929; }
+.social-desktop-header { display: grid; grid-template-columns: minmax(120px, .65fr) minmax(230px, 420px) auto 40px auto; align-items: center; gap: 18px; padding: 0 24px; border-bottom: 1px solid #272929; }
 .social-desktop-header h1 { margin: 0; font-size: 27px; letter-spacing: -.8px; }
 .social-search { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 13px; border: 1px solid #303233; border-radius: 7px; color: #aeb0b2; background: #181919; }
 .social-search svg { flex: 0 0 auto; width: 17px; }
@@ -220,6 +220,32 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-create-room { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 14px; border-radius: 7px; color: #fff; background: var(--accent); font-size: 9px; font-weight: 800; white-space: nowrap; }
 .social-create-room.is-created { color: #bff3ce; background: #173421; }
 .social-create-room svg { width: 16px; }
+.social-notification-center { position: relative; }
+.social-notification-trigger { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #303334; border-radius: 8px; color: #b7babb; background: #171919; }
+.social-notification-trigger.has-unread { color: #fff; border-color: #65353b; background: #321b1f; }
+.social-notification-trigger svg { width: 17px; }
+.social-notification-trigger > i { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border: 2px solid #090a0a; border-radius: 9px; color: #fff; background: var(--accent); font-size: 7px; font-style: normal; font-weight: 850; }
+.social-notification-popover { position: absolute; z-index: 30; top: 46px; right: 0; width: min(360px, 80vw); overflow: hidden; border: 1px solid #383132; border-radius: 11px; background: #121414; box-shadow: 0 22px 70px rgba(0, 0, 0, .62); }
+.social-notification-popover > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 13px; border-bottom: 1px solid #292b2c; }
+.social-notification-popover > header b { font-size: 11px; }
+.social-notification-popover > header small { color: #888; font-size: 8px; }
+.social-notification-preferences { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px 12px; border-bottom: 1px solid #292b2c; }
+.social-notification-preferences label { display: flex; align-items: center; gap: 6px; color: #bbb; font-size: 8px; }
+.social-notification-preferences input { accent-color: var(--accent); }
+.social-notification-preferences button { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 1px solid #3c3f40; border-radius: 6px; color: #aaa; background: #1d1f1f; font-size: 8px; }
+.social-notification-preferences button.is-enabled { color: #c9f6d6; border-color: #285c38; background: #183120; }
+.social-notification-preferences button svg { width: 13px; }
+.social-notification-list { max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+.social-notification-list article { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; padding: 10px 12px; border-bottom: 1px solid #242626; }
+.social-notification-list article.is-unread { background: #201517; }
+.social-notification-list article > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: #ff7a86; background: #351c20; }
+.social-notification-list article > span svg { width: 13px; }
+.social-notification-list article b, .social-notification-list article p, .social-notification-list article time { display: block; }
+.social-notification-list article b { font-size: 8px; }
+.social-notification-list article p { margin: 3px 0 0; overflow: hidden; color: #aaa; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.social-notification-list article time { margin-top: 4px; color: #6f7273; font-size: 7px; }
+.social-notification-empty { display: grid; place-items: center; gap: 7px; min-height: 100px; color: #777; font-size: 8px; }
+.social-notification-empty svg { width: 18px; }
 .social-preview-note { display: flex; align-items: center; gap: 8px; padding: 0 24px; border-bottom: 1px solid #212323; color: #7f8283; background: #0d0e0e; font-size: 8px; }
 .social-preview-note span, .mobile-social-preview span { color: #ff7a84; font-weight: 850; letter-spacing: .1em; }
 .social-preview-note p, .mobile-social-preview p { margin: 0; }
@@ -312,6 +338,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-message p { margin: 0; padding: 9px 11px; border: 1px solid #303334; border-radius: 10px 10px 10px 3px; color: #dfe0e0; background: #1b1d1e; font-size: 9px; line-height: 1.45; text-align: left; }
 .social-message.is-own p { border-color: #6b3338; border-radius: 10px 10px 3px 10px; background: #49272b; }
 .social-message time { display: block; margin-top: 3px; color: #6f7273; font-size: 7px; }
+.social-message-reaction-summary { display: flex; justify-content: flex-start; gap: 3px; margin-top: -5px; }
+.social-message.is-own .social-message-reaction-summary { justify-content: flex-end; }
+.social-message-reaction-summary span { display: grid; place-items: center; min-width: 22px; height: 19px; padding: 0 5px; border: 1px solid #4b4e4f; border-radius: 10px; background: #202223; font-size: 10px; }
+.social-message-reaction-picker { display: flex; gap: 3px; margin-top: 4px; opacity: .45; transition: opacity .16s ease; }
+.social-message:hover .social-message-reaction-picker, .social-message-reaction-picker:focus-within { opacity: 1; }
+.social-message.is-own .social-message-reaction-picker { justify-content: flex-end; }
+.social-message-reaction-picker button { display: grid; place-items: center; width: 23px; height: 21px; padding: 0; border: 1px solid transparent; border-radius: 11px; background: #1d1f20; font-size: 10px; }
+.social-message-reaction-picker button.is-selected { border-color: #a94a54; background: #4a2429; }
 .social-chat-track { margin-top: auto; padding: 10px; border: 1px solid #2f3233; border-radius: 9px; background: #171919; }
 .social-chat-track > small { display: block; margin-top: 9px; color: #8b8e8f; font-size: 7px; }
 .social-chat-empty { display: grid; place-items: center; margin: auto; color: #777a7b; text-align: center; }
@@ -587,6 +621,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-social-preview .social-privacy-controls { order: 2; width: 100%; margin-left: 0; padding-top: 5px; border-top: 1px solid #252728; }
 .mobile-social-preview .social-privacy-controls label { flex: 1; }
 .mobile-social-preview .social-privacy-controls select { flex: 1; min-width: 0; }
+.social-notification-center.is-mobile { display: flex; justify-content: flex-end; margin: -4px 18px 10px; }
+.social-notification-center.is-mobile .social-notification-popover { top: 44px; right: 0; width: calc(100vw - 36px); max-width: 424px; }
 .mobile-social-search { display: flex; align-items: center; gap: 8px; margin: 0 18px 20px; padding: 0 11px; border: 1px solid #282b2e; border-radius: 9px; background: #111314; }
 .mobile-social-search svg { width: 14px; color: #727679; }
 .mobile-social-search input { width: 100%; height: 38px; border: 0; outline: 0; color: #f4f4f4; background: transparent; font-size: 10px; }
@@ -700,7 +736,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .player-utilities .sync-pill { display: none; }
   .lower-media-row { grid-template-columns: 1fr; }
   .youtube-player-panel { width: min(100%, 480px); }
-  .social-desktop-header { grid-template-columns: 120px minmax(200px, 1fr) auto; gap: 12px; }
+  .social-desktop-header { grid-template-columns: 120px minmax(200px, 1fr) 38px auto; gap: 12px; }
   .social-online-count { display: none; }
   .social-desktop-layout { grid-template-columns: minmax(500px, 1fr) 300px; }
   .social-user-row { grid-template-columns: minmax(125px, .75fr) minmax(180px, 1fr) 152px 20px; gap: 9px; }

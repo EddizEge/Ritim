@@ -46,6 +46,10 @@ dosyasını bir kez yönetici hesabıyla uygula:
 docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
   sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < postgres/init/030_alpha3_message_requests.sql
+
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/040_alpha3_notifications.sql
 ```
 
 Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları

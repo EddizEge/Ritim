@@ -28,10 +28,36 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const blocks = new Set()
   const readMarkers = new Map()
   const messageRequests = new Map()
+  const notifications = new Map()
+  const notificationPreferences = new Map()
   let emitChain = Promise.resolve()
 
   function conversationKey(leftId, rightId) {
     return [leftId, rightId].sort().join(':')
+  }
+
+  function preferencesFor(accountId) {
+    return notificationPreferences.get(accountId) || {
+      messagesEnabled: true,
+      reactionsEnabled: true,
+      deviceEnabled: false,
+    }
+  }
+
+  function pushMemoryNotification(recipientId, notification) {
+    const preferences = preferencesFor(recipientId)
+    if (
+      (notification.kind === 'reaction' && !preferences.reactionsEnabled)
+      || (notification.kind !== 'reaction' && !preferences.messagesEnabled)
+    ) return
+    const selected = notifications.get(recipientId) || []
+    selected.unshift({
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      read: false,
+      ...notification,
+    })
+    notifications.set(recipientId, selected.slice(0, 50))
   }
 
   function socialSockets() {
@@ -167,7 +193,18 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     const accountIds = [...profiles.keys()]
     if (!store) cleanOrphanedMemoryState(profiles)
 
-    const [selectedMessages, selectedRooms, selectedListening, selectedReactions, access, privacyEntries, unread, selectedRequests] = store
+    const [
+      selectedMessages,
+      selectedRooms,
+      selectedListening,
+      selectedReactions,
+      access,
+      privacyEntries,
+      unread,
+      selectedRequests,
+      selectedNotifications,
+      selectedNotificationPreferences,
+    ] = store
       ? await Promise.all([
           store.loadMessages(accountIds),
           store.loadRooms(accountIds),
@@ -177,6 +214,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           Promise.all(accountIds.map(async (accountId) => [accountId, await store.loadPrivacy(accountId)])),
           store.loadUnreadCounts(accountIds),
           store.loadMessageRequests(accountIds),
+          store.loadNotifications(accountIds),
+          store.loadNotificationPreferences(accountIds),
         ])
       : [
           messages,
@@ -190,6 +229,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           }]),
           memoryUnread(accountIds),
           memoryMessageRequests(accountIds),
+          new Map(accountIds.map((accountId) => [accountId, notifications.get(accountId) || []])),
+          new Map(accountIds.map((accountId) => [accountId, preferencesFor(accountId)])),
         ]
     const privacyByAccount = new Map(privacyEntries)
 
@@ -260,6 +301,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         conversations,
         unreadCounts,
         messageRequests: selectedRequests.get(accountId) || [],
+        notifications: selectedNotifications.get(accountId) || [],
+        notificationPreferences: selectedNotificationPreferences.get(accountId) || preferencesFor(accountId),
         selectedUserId: users[0]?.id || '',
         listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
           ? undefined
@@ -393,6 +436,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         targetId,
         text: cleanMessage,
         sentAt: Date.now(),
+        reactions: [],
       }
       if (store) await store.saveMessage(message)
       else {
@@ -423,8 +467,93 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           })
         }
         messages.push(message)
+        pushMemoryNotification(targetId, {
+          actorId: senderId,
+          kind: request?.status === 'accepted' ? 'message' : 'message_request',
+          messageId: message.id,
+          body: message.text,
+        })
         if (messages.length > 200) messages.splice(0, messages.length - 200)
       }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:message-reaction', safely('Mesaj tepkisi kaydedilemedi', async ({
+      targetUserId,
+      messageId,
+      reaction,
+    } = {}) => {
+      if (!eventAllowed(socket, 'message-reaction', 40, 60_000)) return
+      const actorId = socket.data.socialAccountId
+      const targetId = cleanText(targetUserId, 80)
+      const selectedMessageId = cleanText(messageId, 80)
+      const allowedReactions = new Set(['♥', '🔥', '😂', '👍'])
+      if (
+        !actorId
+        || !targetId
+        || actorId === targetId
+        || !selectedMessageId
+        || !allowedReactions.has(reaction)
+      ) return
+      if (store) {
+        await store.saveMessageReaction(actorId, targetId, selectedMessageId, reaction)
+      } else {
+        if (messageRequests.get(conversationKey(actorId, targetId))?.status !== 'accepted') return
+        const message = messages.find((candidate) => candidate.id === selectedMessageId && (
+          (candidate.senderId === actorId && candidate.targetId === targetId)
+          || (candidate.senderId === targetId && candidate.targetId === actorId)
+        ))
+        if (!message) return
+        const current = message.reactions.find((item) => item.actorId === actorId)
+        if (current?.reaction === reaction) {
+          message.reactions = message.reactions.filter((item) => item.actorId !== actorId)
+        } else {
+          message.reactions = [
+            ...message.reactions.filter((item) => item.actorId !== actorId),
+            { actorId, reaction },
+          ]
+          if (message.senderId !== actorId) {
+            pushMemoryNotification(message.senderId, {
+              actorId,
+              kind: 'reaction',
+              messageId: message.id,
+              body: reaction,
+            })
+          }
+        }
+      }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:notifications-read', safely('Bildirimler okunamadı', async () => {
+      if (!eventAllowed(socket, 'notifications-read', 60, 60_000)) return
+      const accountId = socket.data.socialAccountId
+      if (!accountId) return
+      if (store) await store.markNotificationsRead(accountId)
+      else {
+        notifications.set(accountId, (notifications.get(accountId) || []).map((item) => ({
+          ...item,
+          read: true,
+        })))
+      }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:notification-preferences', safely('Bildirim ayarları kaydedilemedi', async ({
+      messagesEnabled,
+      reactionsEnabled,
+      deviceEnabled,
+    } = {}) => {
+      if (!eventAllowed(socket, 'notification-preferences', 20, 60_000)) return
+      const accountId = socket.data.socialAccountId
+      if (!accountId) return
+      const selected = {
+        messagesEnabled: messagesEnabled !== false,
+        reactionsEnabled: reactionsEnabled !== false,
+        deviceEnabled: Boolean(deviceEnabled),
+      }
+      if (store) await store.updateNotificationPreferences(accountId, selected)
+      else notificationPreferences.set(accountId, selected)
       await scheduleEmit()
     }))
 

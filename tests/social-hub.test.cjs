@@ -76,6 +76,8 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   ))
   assert.equal(requestedState.conversations['account-a'][0].text, 'Selam Deniz')
   assert.equal(requestedState.unreadCounts['account-a'], 0)
+  assert.equal(requestedState.notifications.length, 1)
+  assert.equal(requestedState.notifications[0].kind, 'message_request')
   await waitForState('Deniz Telefon', (state) => state.messageRequests[0]?.direction === 'incoming')
   await waitForState('Ediz PC', (state) => state.messageRequests[0]?.direction === 'outgoing')
 
@@ -93,10 +95,26 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     state.conversations['account-a']?.length === 2 && state.unreadCounts['account-a'] === 1
   ))
   assert.equal(messagedState.conversations['account-a'][1].text, 'Nasılsın?')
+  assert.equal(messagedState.notifications.filter((notification) => !notification.read).length, 2)
   await waitForState('Deniz Telefon', (state) => state.unreadCounts['account-a'] === 1)
   phoneB.emit('social:read', { targetUserId: 'account-a' })
   await waitForState('Deniz PC', (state) => state.unreadCounts['account-a'] === 0)
   await waitForState('Deniz Telefon', (state) => state.unreadCounts['account-a'] === 0)
+  phoneB.emit('social:notifications-read')
+  await waitForState('Deniz PC', (state) => state.notifications.every((notification) => notification.read))
+  await waitForState('Deniz Telefon', (state) => state.notifications.every((notification) => notification.read))
+
+  phoneB.emit('social:message-reaction', {
+    targetUserId: 'account-a',
+    messageId: messagedState.conversations['account-a'][1].id,
+    reaction: '🔥',
+  })
+  const messageReactionState = await waitForState('Ediz PC', (state) => (
+    state.conversations['account-b']?.[1]?.reactions?.[0]?.reaction === '🔥'
+    && state.notifications[0]?.kind === 'reaction'
+  ))
+  assert.equal(messageReactionState.notifications[0].body, '🔥')
+  await waitForState('Ediz Telefon', (state) => state.notifications[0]?.kind === 'reaction')
 
   desktopA.emit('social:reaction', { targetUserId: 'account-b', reaction: '🔥' })
   const reactedState = await waitForState('Ediz PC', (state) => state.users[0]?.reactionCount === 1)
