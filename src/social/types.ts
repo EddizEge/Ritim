@@ -45,6 +45,12 @@ export type SocialMessage = {
   senderId: string
   text: string
   sentAt: number
+  reactions: SocialMessageReaction[]
+}
+
+export type SocialMessageReaction = {
+  actorId: string
+  reaction: '♥' | '🔥' | '😂' | '👍'
 }
 
 export type SocialMessageRequest = {
@@ -52,6 +58,22 @@ export type SocialMessageRequest = {
   direction: 'incoming' | 'outgoing'
   preview: string
   sentAt: number
+}
+
+export type SocialNotification = {
+  id: string
+  kind: 'message_request' | 'message' | 'reaction'
+  actorId?: string
+  messageId?: string
+  body: string
+  createdAt: number
+  read: boolean
+}
+
+export type SocialNotificationPreferences = {
+  messagesEnabled: boolean
+  reactionsEnabled: boolean
+  deviceEnabled: boolean
 }
 
 export type SocialState = {
@@ -65,6 +87,8 @@ export type SocialState = {
   conversations: Record<string, SocialMessage[]>
   unreadCounts: Record<string, number>
   messageRequests: SocialMessageRequest[]
+  notifications: SocialNotification[]
+  notificationPreferences: SocialNotificationPreferences
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
@@ -76,6 +100,10 @@ export type SocialActions = {
   sendMessage: (userId: string, text: string) => void
   markConversationRead: (userId: string) => void
   respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => void
+  reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => void
+  markNotificationsRead: () => void
+  updateNotificationPreferences: (preferences: SocialNotificationPreferences) => void
+  requestDeviceNotifications: () => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void

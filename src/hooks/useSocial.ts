@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
-import type { SocialActions, SocialPrivacy, SocialState, SocialTrack, SocialUser } from '../social/types'
+import type {
+  SocialActions,
+  SocialMessageReaction,
+  SocialNotification,
+  SocialNotificationPreferences,
+  SocialPrivacy,
+  SocialState,
+  SocialTrack,
+  SocialUser,
+} from '../social/types'
 import { ritimPairingToken, ritimRoom, ritimSyncUrl } from './usePlayerSync'
 
 type Options = {
@@ -14,6 +23,61 @@ type Options = {
 type SocialSnapshot = Omit<SocialState, 'connectionStatus'>
 
 const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
+const DELIVERED_NOTIFICATION_IDS_KEY = 'ritim-social-delivered-notifications-v1'
+
+function deliveredNotificationIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELIVERED_NOTIFICATION_IDS_KEY) || '[]')
+    return new Set<string>(Array.isArray(parsed) ? parsed.slice(-100) : [])
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function notificationNumber(id: string) {
+  let value = 0
+  for (let index = 0; index < id.length; index += 1) {
+    value = (Math.imul(value, 31) + id.charCodeAt(index)) | 0
+  }
+  return Math.max(1, Math.abs(value))
+}
+
+function notificationTitle(notification: SocialNotification, actorName: string) {
+  if (notification.kind === 'reaction') return `${actorName} mesajına tepki verdi`
+  if (notification.kind === 'message_request') return `${actorName} mesaj isteği gönderdi`
+  return `${actorName} sana yazdı`
+}
+
+async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
+  const title = notificationTitle(notification, actorName)
+  if ((await import('@capacitor/core')).Capacitor.isNativePlatform()) {
+    const { LocalNotifications } = await import('@capacitor/local-notifications')
+    const permission = await LocalNotifications.checkPermissions()
+    if (permission.display !== 'granted') return false
+    await LocalNotifications.createChannel({
+      id: 'ritim-social',
+      name: 'Ritim Sosyal',
+      description: 'Mesajlar ve sosyal tepkiler',
+      importance: 4,
+    }).catch(() => {})
+    await LocalNotifications.schedule({
+      notifications: [{
+        id: notificationNumber(notification.id),
+        title,
+        body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+        channelId: 'ritim-social',
+        extra: { socialNotificationId: notification.id },
+      }],
+    })
+    return true
+  }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return false
+  new Notification(title, {
+    body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+    tag: `ritim-social-${notification.id}`,
+  })
+  return true
+}
 
 function profileInitials(displayName: string) {
   const initials = displayName
@@ -120,12 +184,23 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     conversations: {},
     unreadCounts: {},
     messageRequests: [],
+    notifications: [],
+    notificationPreferences: {
+      messagesEnabled: true,
+      reactionsEnabled: true,
+      deviceEnabled: false,
+    },
     selectedUserId: '',
   }))
   const selectedUserIdRef = useRef('')
   selectedUserIdRef.current = snapshot.selectedUserId
   const profileRef = useRef(localProfile)
   profileRef.current = localProfile
+  const notificationPreferencesRef = useRef(snapshot.notificationPreferences)
+  notificationPreferencesRef.current = snapshot.notificationPreferences
+  const deliveredNotificationsRef = useRef<Set<string> | null>(null)
+  if (!deliveredNotificationsRef.current) deliveredNotificationsRef.current = deliveredNotificationIds()
+  const deliveredNotificationSet = deliveredNotificationsRef.current
   const connectSocialRef = useRef<() => void>(() => {})
 
   const joinSocialAccount = useCallback(() => {
@@ -208,6 +283,24 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     if (socialSocket.connected) socialSocket.emit('social:profile', { profile: localProfile })
   }, [localProfile])
 
+  useEffect(() => {
+    if (!snapshot.notificationPreferences.deviceEnabled || !document.hidden) return
+    const pending = snapshot.notifications.filter((notification) => (
+      !notification.read && !deliveredNotificationSet.has(notification.id)
+    ))
+    if (!pending.length) return
+    void Promise.all(pending.map(async (notification) => {
+      const actorName = snapshot.users.find((user) => user.id === notification.actorId)?.displayName || 'Bir Ritim kullanıcısı'
+      const delivered = await deliverDeviceNotification(notification, actorName).catch(() => false)
+      if (delivered) deliveredNotificationSet.add(notification.id)
+    })).then(() => {
+      localStorage.setItem(
+        DELIVERED_NOTIFICATION_IDS_KEY,
+        JSON.stringify([...deliveredNotificationSet].slice(-100)),
+      )
+    })
+  }, [deliveredNotificationSet, snapshot.notificationPreferences.deviceEnabled, snapshot.notifications, snapshot.users])
+
   const selectUser = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
   }, [])
@@ -230,6 +323,49 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   const respondToMessageRequest = useCallback((userId: string, action: 'accept' | 'reject') => {
     if (!socialSocket.connected) return
     socialSocket.emit('social:request-response', { requesterUserId: userId, action })
+  }, [])
+
+  const reactToMessage = useCallback((
+    userId: string,
+    messageId: string,
+    reaction: SocialMessageReaction['reaction'],
+  ) => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:message-reaction', { targetUserId: userId, messageId, reaction })
+  }, [])
+
+  const markNotificationsRead = useCallback(() => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:notifications-read')
+  }, [])
+
+  const updateNotificationPreferences = useCallback((preferences: SocialNotificationPreferences) => {
+    setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
+    if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
+  }, [])
+
+  const requestDeviceNotifications = useCallback(() => {
+    void (async () => {
+      let granted = false
+      if ((await import('@capacitor/core')).Capacitor.isNativePlatform()) {
+        const { LocalNotifications } = await import('@capacitor/local-notifications')
+        const current = await LocalNotifications.checkPermissions()
+        const permission = current.display === 'prompt'
+          ? await LocalNotifications.requestPermissions()
+          : current
+        granted = permission.display === 'granted'
+      } else if ('Notification' in window) {
+        granted = (Notification.permission === 'granted'
+          ? Notification.permission
+          : await Notification.requestPermission()) === 'granted'
+      }
+      const preferences = {
+        ...notificationPreferencesRef.current,
+        deviceEnabled: granted,
+      }
+      setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
+      if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
+    })()
   }, [])
 
   const toggleListeningWith = useCallback((userId: string) => {
@@ -269,6 +405,10 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       sendMessage,
       markConversationRead,
       respondToMessageRequest,
+      reactToMessage,
+      markNotificationsRead,
+      updateNotificationPreferences,
+      requestDeviceNotifications,
       toggleListeningWith,
       createRoom,
       updatePrivacy,

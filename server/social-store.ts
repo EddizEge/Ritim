@@ -35,6 +35,10 @@ type StoredMessage = {
   targetId: string
   text: string
   sentAt: number
+  reactions: Array<{
+    actorId: string
+    reaction: '♥' | '🔥' | '😂' | '👍'
+  }>
 }
 
 type StoredMessageRequest = {
@@ -42,6 +46,22 @@ type StoredMessageRequest = {
   direction: 'incoming' | 'outgoing'
   preview: string
   sentAt: number
+}
+
+type StoredNotification = {
+  id: string
+  kind: 'message_request' | 'message' | 'reaction'
+  actorId?: string
+  messageId?: string
+  body: string
+  createdAt: number
+  read: boolean
+}
+
+type NotificationPreferences = {
+  messagesEnabled: boolean
+  reactionsEnabled: boolean
+  deviceEnabled: boolean
 }
 
 type StoredRoom = {
@@ -293,6 +313,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         [conversationId],
       )
       const request = requestResult.rows[0]
+      let notificationKind: 'message_request' | 'message' = 'message'
       if (!request) {
         await client.query(
           `insert into ritim.message_requests (
@@ -300,6 +321,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            ) values ($1, $2, $3, 'pending')`,
           [conversationId, senderId, targetId],
         )
+        notificationKind = 'message_request'
       } else if (request.status === 'pending') {
         throw new Error('Mesaj isteği yanıt bekliyor.')
       } else if (request.status === 'rejected') {
@@ -316,14 +338,39 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            where conversation_id = $1`,
           [conversationId, senderId, targetId],
         )
+        notificationKind = 'message_request'
       }
-      await client.query(
+      const inserted = await client.query<{ id: string }>(
         `insert into ritim.messages (
           public_id, conversation_id, sender_id, client_message_id, body, sent_at
         ) values ($1, $2, $3, $1, $4, $5)
-        on conflict (sender_id, client_message_id) do nothing`,
+        on conflict (sender_id, client_message_id) do nothing
+        returning id`,
         [message.id, conversationId, senderId, message.text, new Date(message.sentAt)],
       )
+      const messageId = inserted.rows[0]?.id
+      if (messageId) {
+        await client.query(
+          `insert into ritim.social_notifications (
+             recipient_id, actor_id, kind, message_id, body
+           )
+           select $1, $2, $3, $4, $5
+           where coalesce((
+             select preferences.messages_enabled
+             from ritim.notification_preferences preferences
+             where preferences.user_id = $1
+           ), true)
+             and not exists (
+               select 1
+               from ritim.conversation_members member
+               where member.conversation_id = $6
+                 and member.user_id = $1
+                 and member.muted_until > now()
+             )
+           on conflict do nothing`,
+          [targetId, senderId, notificationKind, messageId, message.text, conversationId],
+        )
+      }
     })
   }
 
@@ -338,8 +385,9 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       target_key: string
       body: string
       sent_at: Date
+      reactions: Array<{ actor_key: string; reaction: '♥' | '🔥' | '😂' | '👍' }>
     }>(
-      `select public_id, sender_key, target_key, body, sent_at
+      `select public_id, sender_key, target_key, body, sent_at, reactions
        from (
          select
            m.public_id,
@@ -348,6 +396,18 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            m.body,
            m.sent_at,
            m.id,
+           coalesce((
+             select jsonb_agg(
+               jsonb_build_object(
+                 'actor_key', coalesce(encode(actor.legacy_account_id_hash, 'hex'), actor.public_id::text),
+                 'reaction', message_reaction.reaction
+               )
+               order by message_reaction.created_at asc
+             )
+             from ritim.message_reactions message_reaction
+             join ritim.users actor on actor.id = message_reaction.actor_id
+             where message_reaction.message_id = m.id
+           ), '[]'::jsonb) as reactions,
            row_number() over (
              partition by m.conversation_id order by m.sent_at desc, m.id desc
            ) as message_rank
@@ -386,7 +446,222 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         targetId,
         text: row.body,
         sentAt: row.sent_at.getTime(),
+        reactions: row.reactions.flatMap((reaction) => {
+          const actorId = accountByKey.get(reaction.actor_key)
+          return actorId ? [{ actorId, reaction: reaction.reaction }] : []
+        }),
       }]
+    })
+  }
+
+  async function saveMessageReaction(
+    actorAccountId: string,
+    peerAccountId: string,
+    messagePublicId: string,
+    reaction: '♥' | '🔥' | '😂' | '👍',
+  ) {
+    await inTransaction(pool, async (client) => {
+      const actorId = await findUserId(client, actorAccountId)
+      const peerId = await findUserId(client, peerAccountId)
+      if (!actorId || !peerId || actorId === peerId) throw new Error('Tepki kullanıcıları bulunamadı.')
+      const message = await client.query<{
+        id: string
+        sender_id: string
+        body: string
+        conversation_id: string
+      }>(
+        `select message.id, message.sender_id, message.body, message.conversation_id
+         from ritim.messages message
+         join ritim.message_requests request
+           on request.conversation_id = message.conversation_id
+          and request.status = 'accepted'
+         where message.public_id = $1
+           and message.deleted_at is null
+           and exists (
+             select 1
+             from ritim.conversation_members actor_member
+             where actor_member.conversation_id = message.conversation_id
+               and actor_member.user_id = $2
+           )
+           and exists (
+             select 1
+             from ritim.conversation_members peer_member
+             where peer_member.conversation_id = message.conversation_id
+               and peer_member.user_id = $3
+           )
+         for update`,
+        [messagePublicId, actorId, peerId],
+      )
+      const selected = message.rows[0]
+      if (!selected) throw new Error('Tepki verilecek mesaj bulunamadı.')
+      const existing = await client.query<{ reaction: string }>(
+        `select reaction from ritim.message_reactions
+         where message_id = $1 and actor_id = $2`,
+        [selected.id, actorId],
+      )
+      if (existing.rows[0]?.reaction === reaction) {
+        await client.query(
+          'delete from ritim.message_reactions where message_id = $1 and actor_id = $2',
+          [selected.id, actorId],
+        )
+        return
+      }
+      await client.query(
+        `insert into ritim.message_reactions (message_id, actor_id, reaction)
+         values ($1, $2, $3)
+         on conflict (message_id, actor_id) do update set
+           reaction = excluded.reaction,
+           created_at = now()`,
+        [selected.id, actorId, reaction],
+      )
+      if (String(selected.sender_id) !== String(actorId)) {
+        await client.query(
+          `insert into ritim.social_notifications (
+             recipient_id, actor_id, kind, message_id, body
+           )
+           select $1, $2, 'reaction', $3, $4
+           where coalesce((
+             select preferences.reactions_enabled
+             from ritim.notification_preferences preferences
+             where preferences.user_id = $1
+           ), true)
+             and not exists (
+               select 1
+               from ritim.conversation_members member
+               where member.conversation_id = $5
+                 and member.user_id = $1
+                 and member.muted_until > now()
+             )
+           on conflict (recipient_id, actor_id, kind, message_id)
+             where message_id is not null
+           do update set body = excluded.body, created_at = now(), read_at = null`,
+          [selected.sender_id, actorId, selected.id, reaction, selected.conversation_id],
+        )
+      }
+    })
+  }
+
+  async function loadNotifications(accountIds: string[]) {
+    const notifications = new Map<string, StoredNotification[]>()
+    for (const accountId of accountIds) notifications.set(accountId, [])
+    if (!accountIds.length) return notifications
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const result = await pool.query<{
+      public_id: string
+      recipient_key: string
+      actor_key: string | null
+      kind: StoredNotification['kind']
+      message_public_id: string | null
+      body: string
+      created_at: Date
+      read_at: Date | null
+    }>(
+      `select
+         notification.public_id,
+         coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) as recipient_key,
+         coalesce(encode(actor.legacy_account_id_hash, 'hex'), actor.public_id::text) as actor_key,
+         notification.kind,
+         message.public_id as message_public_id,
+         notification.body,
+         notification.created_at,
+         notification.read_at
+       from ritim.social_notifications notification
+       join ritim.users recipient on recipient.id = notification.recipient_id
+       left join ritim.users actor on actor.id = notification.actor_id
+       left join ritim.messages message on message.id = notification.message_id
+       where coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) = any($1::text[])
+       order by notification.created_at desc, notification.id desc
+       limit 100`,
+      [[...accountByKey.keys()]],
+    )
+    for (const row of result.rows) {
+      const recipientId = accountByKey.get(row.recipient_key)
+      if (!recipientId) continue
+      notifications.get(recipientId)?.push({
+        id: row.public_id,
+        kind: row.kind,
+        actorId: row.actor_key ? accountByKey.get(row.actor_key) : undefined,
+        messageId: row.message_public_id || undefined,
+        body: row.body,
+        createdAt: row.created_at.getTime(),
+        read: Boolean(row.read_at),
+      })
+    }
+    return notifications
+  }
+
+  async function markNotificationsRead(accountId: string) {
+    const key = accountKey(accountId)
+    await pool.query(
+      `update ritim.social_notifications notification
+       set read_at = now()
+       from ritim.users recipient
+       where recipient.id = notification.recipient_id
+         and coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) = $1
+         and notification.read_at is null`,
+      [key],
+    )
+  }
+
+  async function loadNotificationPreferences(accountIds: string[]) {
+    const selected = new Map<string, NotificationPreferences>()
+    for (const accountId of accountIds) {
+      selected.set(accountId, {
+        messagesEnabled: true,
+        reactionsEnabled: true,
+        deviceEnabled: false,
+      })
+    }
+    if (!accountIds.length) return selected
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const result = await pool.query<{
+      account_key: string
+      messages_enabled: boolean
+      reactions_enabled: boolean
+      device_enabled: boolean
+    }>(
+      `select
+         coalesce(encode(app_user.legacy_account_id_hash, 'hex'), app_user.public_id::text) as account_key,
+         preferences.messages_enabled,
+         preferences.reactions_enabled,
+         preferences.device_enabled
+       from ritim.notification_preferences preferences
+       join ritim.users app_user on app_user.id = preferences.user_id
+       where coalesce(encode(app_user.legacy_account_id_hash, 'hex'), app_user.public_id::text) = any($1::text[])`,
+      [[...accountByKey.keys()]],
+    )
+    for (const row of result.rows) {
+      const accountId = accountByKey.get(row.account_key)
+      if (!accountId) continue
+      selected.set(accountId, {
+        messagesEnabled: row.messages_enabled,
+        reactionsEnabled: row.reactions_enabled,
+        deviceEnabled: row.device_enabled,
+      })
+    }
+    return selected
+  }
+
+  async function updateNotificationPreferences(accountId: string, preferences: NotificationPreferences) {
+    await inTransaction(pool, async (client) => {
+      const userId = await findUserId(client, accountId)
+      if (!userId) throw new Error('Bildirim ayarı için kullanıcı bulunamadı.')
+      await client.query(
+        `insert into ritim.notification_preferences (
+           user_id, messages_enabled, reactions_enabled, device_enabled
+         ) values ($1, $2, $3, $4)
+         on conflict (user_id) do update set
+           messages_enabled = excluded.messages_enabled,
+           reactions_enabled = excluded.reactions_enabled,
+           device_enabled = excluded.device_enabled,
+           updated_at = now()`,
+        [
+          userId,
+          preferences.messagesEnabled,
+          preferences.reactionsEnabled,
+          preferences.deviceEnabled,
+        ],
+      )
     })
   }
 
@@ -945,6 +1220,11 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     removePresence,
     saveMessage,
     loadMessages,
+    saveMessageReaction,
+    loadNotifications,
+    markNotificationsRead,
+    loadNotificationPreferences,
+    updateNotificationPreferences,
     loadMessageRequests,
     respondToMessageRequest,
     loadUnreadCounts,
