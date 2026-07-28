@@ -30,6 +30,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const messageRequests = new Map()
   const notifications = new Map()
   const notificationPreferences = new Map()
+  const mutedConversations = new Set()
+  const reports = []
   let emitChain = Promise.resolve()
 
   function conversationKey(leftId, rightId) {
@@ -49,6 +51,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     if (
       (notification.kind === 'reaction' && !preferences.reactionsEnabled)
       || (notification.kind !== 'reaction' && !preferences.messagesEnabled)
+      || (notification.actorId && mutedConversations.has(`${recipientId}:${notification.actorId}`))
     ) return
     const selected = notifications.get(recipientId) || []
     selected.unshift({
@@ -179,6 +182,20 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return selected
   }
 
+  function memoryModeration(accountIds) {
+    const muted = new Map(accountIds.map((accountId) => [accountId, new Set()]))
+    const blocked = new Map(accountIds.map((accountId) => [accountId, new Set()]))
+    for (const key of mutedConversations) {
+      const [viewerId, targetId] = key.split(':')
+      if (muted.has(viewerId) && muted.has(targetId)) muted.get(viewerId).add(targetId)
+    }
+    for (const key of blocks) {
+      const [viewerId, targetId] = key.split(':')
+      if (blocked.has(viewerId) && blocked.has(targetId)) blocked.get(viewerId).add(targetId)
+    }
+    return { muted, blocked }
+  }
+
   function cleanOrphanedMemoryState(profiles) {
     for (const [listenerId, targetId] of listening.entries()) {
       if (!profiles.has(listenerId) || !profiles.has(targetId)) listening.delete(listenerId)
@@ -204,6 +221,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       selectedRequests,
       selectedNotifications,
       selectedNotificationPreferences,
+      moderation,
     ] = store
       ? await Promise.all([
           store.loadMessages(accountIds),
@@ -216,6 +234,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           store.loadMessageRequests(accountIds),
           store.loadNotifications(accountIds),
           store.loadNotificationPreferences(accountIds),
+          store.loadModerationState(accountIds),
         ])
       : [
           messages,
@@ -231,6 +250,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           memoryMessageRequests(accountIds),
           new Map(accountIds.map((accountId) => [accountId, notifications.get(accountId) || []])),
           new Map(accountIds.map((accountId) => [accountId, preferencesFor(accountId)])),
+          memoryModeration(accountIds),
         ]
     const privacyByAccount = new Map(privacyEntries)
 
@@ -239,6 +259,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const currentProfile = profiles.get(accountId)
       if (!currentProfile) continue
       const accountAccess = access.get(accountId) || new Map()
+      const mutedUserIds = [...(moderation.muted.get(accountId) || new Set())]
+      const blockedUserIds = moderation.blocked.get(accountId) || new Set()
       const users = [...profiles.values()]
         .filter((profile) => profile.id !== accountId && accountAccess.get(profile.id)?.profile !== false)
         .map((profile) => publicUser(
@@ -246,6 +268,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           selectedReactions.get(profile.id),
           accountAccess.get(profile.id)?.listening !== false,
         ))
+      const blockedUsers = [...blockedUserIds]
+        .map((blockedId) => profiles.get(blockedId))
+        .filter(Boolean)
+        .map((profile) => publicUser(profile, selectedReactions.get(profile.id), false))
       const conversations = {}
       const unreadCounts = {}
       for (const user of users) {
@@ -303,6 +329,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         messageRequests: selectedRequests.get(accountId) || [],
         notifications: selectedNotifications.get(accountId) || [],
         notificationPreferences: selectedNotificationPreferences.get(accountId) || preferencesFor(accountId),
+        mutedUserIds,
+        blockedUsers,
         selectedUserId: users[0]?.id || '',
         listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
           ? undefined
@@ -499,6 +527,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         await store.saveMessageReaction(actorId, targetId, selectedMessageId, reaction)
       } else {
         if (messageRequests.get(conversationKey(actorId, targetId))?.status !== 'accepted') return
+        if (blocks.has(`${actorId}:${targetId}`) || blocks.has(`${targetId}:${actorId}`)) return
         const message = messages.find((candidate) => candidate.id === selectedMessageId && (
           (candidate.senderId === actorId && candidate.targetId === targetId)
           || (candidate.senderId === targetId && candidate.targetId === actorId)
@@ -555,6 +584,58 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       if (store) await store.updateNotificationPreferences(accountId, selected)
       else notificationPreferences.set(accountId, selected)
       await scheduleEmit()
+    }))
+
+    socket.on('social:mute', safely('Sessize alma ayarı kaydedilemedi', async ({ targetUserId } = {}) => {
+      if (!eventAllowed(socket, 'mute', 20, 60_000)) return
+      const accountId = socket.data.socialAccountId
+      const targetId = cleanText(targetUserId, 80)
+      if (!accountId || !targetId || accountId === targetId || !accountProfiles().has(targetId)) return
+      if (store) {
+        await store.toggleMute(accountId, targetId)
+      } else {
+        if (messageRequests.get(conversationKey(accountId, targetId))?.status !== 'accepted') return
+        const key = `${accountId}:${targetId}`
+        if (mutedConversations.has(key)) mutedConversations.delete(key)
+        else mutedConversations.add(key)
+      }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:report', safely('Şikâyet kaydedilemedi', async ({
+      targetUserId,
+      reason,
+      detail,
+      messageId,
+    } = {}) => {
+      if (!eventAllowed(socket, 'report', 6, 60 * 60_000)) return
+      const reporterId = socket.data.socialAccountId
+      const targetId = cleanText(targetUserId, 80)
+      const cleanReason = cleanText(reason, 120)
+      const cleanDetail = cleanText(detail, 2000)
+      const cleanMessageId = cleanText(messageId, 80)
+      if (
+        !reporterId
+        || !targetId
+        || reporterId === targetId
+        || cleanReason.length < 3
+        || !accountProfiles().has(targetId)
+      ) return
+      if (store) {
+        await store.saveReport(reporterId, targetId, cleanReason, cleanDetail, cleanMessageId)
+      } else {
+        reports.push({
+          id: crypto.randomUUID(),
+          reporterId,
+          targetId,
+          reason: cleanReason,
+          detail: cleanDetail,
+          messageId: cleanMessageId || undefined,
+          createdAt: Date.now(),
+        })
+        if (reports.length > 100) reports.splice(0, reports.length - 100)
+      }
+      socket.emit('social:report-saved', { targetUserId: targetId })
     }))
 
     socket.on('social:request-response', safely('Mesaj isteği yanıtlanamadı', async ({

@@ -89,6 +89,8 @@ export type SocialState = {
   messageRequests: SocialMessageRequest[]
   notifications: SocialNotification[]
   notificationPreferences: SocialNotificationPreferences
+  mutedUserIds: string[]
+  blockedUsers: SocialUser[]
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
@@ -104,6 +106,8 @@ export type SocialActions = {
   markNotificationsRead: () => void
   updateNotificationPreferences: (preferences: SocialNotificationPreferences) => void
   requestDeviceNotifications: () => void
+  toggleMute: (userId: string) => void
+  reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void

@@ -116,6 +116,32 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   assert.equal(messageReactionState.notifications[0].body, '🔥')
   await waitForState('Ediz Telefon', (state) => state.notifications[0]?.kind === 'reaction')
 
+  phoneB.emit('social:mute', { targetUserId: 'account-a' })
+  await waitForState('Deniz PC', (state) => state.mutedUserIds.includes('account-a'))
+  await waitForState('Deniz Telefon', (state) => state.mutedUserIds.includes('account-a'))
+  desktopA.emit('social:message', { targetUserId: 'account-b', text: 'Sessizde de kaydolur' })
+  const mutedMessageState = await waitForState('Deniz PC', (state) => (
+    state.conversations['account-a']?.length === 3
+  ))
+  assert.equal(mutedMessageState.notifications.every((notification) => notification.read), true)
+  phoneB.emit('social:mute', { targetUserId: 'account-a' })
+  await waitForState('Deniz PC', (state) => !state.mutedUserIds.includes('account-a'))
+
+  const reportSaved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Şikâyet kaydedilmedi')), 2_000)
+    phoneB.once('social:report-saved', (result) => {
+      clearTimeout(timer)
+      resolve(result)
+    })
+  })
+  phoneB.emit('social:report', {
+    targetUserId: 'account-a',
+    reason: 'Spam',
+    detail: 'Alpha 3 güvenlik testi',
+    messageId: messagedState.conversations['account-a'][1].id,
+  })
+  assert.equal((await reportSaved).targetUserId, 'account-a')
+
   desktopA.emit('social:reaction', { targetUserId: 'account-b', reaction: '🔥' })
   const reactedState = await waitForState('Ediz PC', (state) => state.users[0]?.reactionCount === 1)
   assert.equal(reactedState.users[0].lastReaction, '🔥')
@@ -149,7 +175,15 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
 
   desktopB.emit('social:block', { targetUserId: 'account-a' })
   await waitForState('Ediz PC', (state) => state.users.length === 0 && state.rooms.length === 0)
-  await waitForState('Deniz PC', (state) => state.users.length === 0)
+  await waitForState('Deniz PC', (state) => (
+    state.users.length === 0 && state.blockedUsers[0]?.id === 'account-a'
+  ))
+  desktopB.emit('social:block', { targetUserId: 'account-a' })
+  await waitForState('Deniz PC', (state) => state.users.length === 1 && state.blockedUsers.length === 0)
+  await waitForState('Ediz PC', (state) => state.users.length === 1)
+  desktopB.emit('social:block', { targetUserId: 'account-a' })
+  await waitForState('Ediz PC', (state) => state.users.length === 0)
+  await waitForState('Deniz PC', (state) => state.blockedUsers[0]?.id === 'account-a')
 
   desktopB.disconnect()
   const disconnectedState = await waitForState('Ediz PC', (state) => state.users.length === 0)
