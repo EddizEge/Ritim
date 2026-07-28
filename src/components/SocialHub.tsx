@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState, type FormEvent } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   Eye, Heart, MessageCircle, MoreVertical, Plus, Radio, RefreshCw, Search, Send, ShieldBan, SmilePlus,
   UsersRound, X,
@@ -31,7 +31,7 @@ function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps 
       : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
   return (
     <div className={mobile ? `mobile-social-preview is-${state.connectionStatus}` : `social-preview-note is-${state.connectionStatus}`}>
-      <span>ALPHA.2</span>
+      <span>ALPHA.3</span>
       <p>{text}</p>
       {online ? (
         <div className="social-privacy-controls">
@@ -110,9 +110,17 @@ function messageTime(sentAt: number) {
 
 function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & { mobile?: boolean; onClose?: () => void }) {
   const [message, setMessage] = useState('')
-  const selectedUser = state.users.find((user) => user.id === state.selectedUserId)
+  const selectedUserId = state.selectedUserId
+  const selectedUser = state.users.find((user) => user.id === selectedUserId)
+  const conversation = selectedUserId ? state.conversations[selectedUserId] || [] : []
+  const unreadCount = selectedUserId ? state.unreadCounts[selectedUserId] || 0 : 0
+  const newestMessageId = conversation.at(-1)?.id || ''
+
+  useEffect(() => {
+    if (selectedUserId && unreadCount && newestMessageId) actions.markConversationRead(selectedUserId)
+  }, [actions.markConversationRead, newestMessageId, selectedUserId, unreadCount])
+
   if (!selectedUser) return null
-  const conversation = state.conversations[selectedUser.id] || []
   const listeningTogether = state.listeningWithUserId === selectedUser.id
 
   const submit = (event: FormEvent) => {
@@ -172,12 +180,12 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
   )
 }
 
-function DesktopUserRow({ user, selected, listening, actions }: { user: SocialUser; selected: boolean; listening: boolean; actions: SocialActions }) {
+function DesktopUserRow({ user, selected, listening, unread, actions }: { user: SocialUser; selected: boolean; listening: boolean; unread: number; actions: SocialActions }) {
   return (
     <article className={`social-user-row ${selected ? 'is-selected' : ''} ${listening ? 'is-listening' : ''}`}>
       <button className="social-user-identity" onClick={() => actions.selectUser(user.id)}>
         <SocialAvatar user={user} />
-        <span><b>{user.displayName}</b><small>{user.handle}</small></span>
+        <span><b>{user.displayName}{unread ? <em className="social-unread-badge">{Math.min(99, unread)}</em> : null}</b><small>{user.handle}</small></span>
       </button>
       <SocialTrackSummary track={user.currentTrack} />
       <div className="social-user-actions">
@@ -223,6 +231,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
                 user={user}
                 selected={state.selectedUserId === user.id}
                 listening={state.listeningWithUserId === user.id}
+                unread={state.unreadCounts[user.id] || 0}
                 actions={actions}
               />
             )) : (
@@ -242,7 +251,7 @@ function MobileSocialUserRow({ user, state, actions, onMessage }: { user: Social
     <article className={`mobile-social-user ${listening ? 'is-listening' : ''}`}>
       <button className="mobile-social-person" onClick={() => actions.selectUser(user.id)}>
         <SocialAvatar user={user} />
-        <span><b>{user.displayName}</b><small>{user.handle}</small></span>
+        <span><b>{user.displayName}{state.unreadCounts[user.id] ? <em className="social-unread-badge">{Math.min(99, state.unreadCounts[user.id])}</em> : null}</b><small>{user.handle}</small></span>
       </button>
       <SocialTrackSummary track={user.currentTrack} compact />
       <div className="mobile-social-actions">

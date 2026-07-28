@@ -118,6 +118,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     users: [],
     rooms: [],
     conversations: {},
+    unreadCounts: {},
     selectedUserId: '',
   }))
   const selectedUserIdRef = useRef('')
@@ -220,6 +221,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     socialSocket.emit('social:message', { targetUserId: userId, text: cleanText })
   }, [])
 
+  const markConversationRead = useCallback((userId: string) => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:read', { targetUserId: userId })
+  }, [])
+
   const toggleListeningWith = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
     socialSocket.emit('social:listening', { targetUserId: userId })
@@ -255,6 +261,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       selectUser,
       reactToUser,
       sendMessage,
+      markConversationRead,
       toggleListeningWith,
       createRoom,
       updatePrivacy,

@@ -343,6 +343,76 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     })
   }
 
+  async function loadUnreadCounts(accountIds: string[]) {
+    const unread = new Map<string, Map<string, number>>()
+    for (const accountId of accountIds) unread.set(accountId, new Map())
+    if (accountIds.length < 2) return unread
+
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const keys = [...accountByKey.keys()]
+    const result = await pool.query<{
+      viewer_key: string
+      peer_key: string
+      unread_count: string
+    }>(
+      `select
+         coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) as viewer_key,
+         coalesce(encode(peer.legacy_account_id_hash, 'hex'), peer.public_id::text) as peer_key,
+         count(message.id) as unread_count
+       from ritim.conversation_members viewer_member
+       join ritim.users viewer on viewer.id = viewer_member.user_id
+       join ritim.conversation_members peer_member
+         on peer_member.conversation_id = viewer_member.conversation_id
+        and peer_member.user_id <> viewer_member.user_id
+       join ritim.users peer on peer.id = peer_member.user_id
+       join ritim.messages message
+         on message.conversation_id = viewer_member.conversation_id
+        and message.sender_id = peer_member.user_id
+        and message.id > coalesce(viewer_member.last_read_message_id, 0)
+        and message.deleted_at is null
+       where coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) = any($1::text[])
+         and coalesce(encode(peer.legacy_account_id_hash, 'hex'), peer.public_id::text) = any($1::text[])
+         and not exists (
+           select 1 from ritim.blocks block
+           where (block.blocker_id = viewer.id and block.blocked_id = peer.id)
+              or (block.blocker_id = peer.id and block.blocked_id = viewer.id)
+         )
+       group by viewer.id, peer.id`,
+      [keys],
+    )
+    for (const row of result.rows) {
+      const viewerId = accountByKey.get(row.viewer_key)
+      const peerId = accountByKey.get(row.peer_key)
+      if (viewerId && peerId) unread.get(viewerId)?.set(peerId, Number(row.unread_count) || 0)
+    }
+    return unread
+  }
+
+  async function markConversationRead(accountId: string, peerAccountId: string) {
+    await inTransaction(pool, async (client) => {
+      const viewerId = await findUserId(client, accountId)
+      const peerId = await findUserId(client, peerAccountId)
+      if (!viewerId || !peerId || viewerId === peerId) return
+      await client.query(
+        `update ritim.conversation_members viewer_member
+         set last_read_message_id = (
+           select max(message.id)
+           from ritim.messages message
+           where message.conversation_id = viewer_member.conversation_id
+             and message.deleted_at is null
+         )
+         where viewer_member.user_id = $1
+           and exists (
+             select 1
+             from ritim.conversation_members peer_member
+             where peer_member.conversation_id = viewer_member.conversation_id
+               and peer_member.user_id = $2
+           )`,
+        [viewerId, peerId],
+      )
+    })
+  }
+
   async function saveReaction(value: StoredReaction) {
     await inTransaction(pool, async (client) => {
       const actorId = await findUserId(client, value.actorId)
@@ -720,6 +790,8 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     removePresence,
     saveMessage,
     loadMessages,
+    loadUnreadCounts,
+    markConversationRead,
     saveReaction,
     loadReactions,
     loadAccess,

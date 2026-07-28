@@ -56,6 +56,7 @@ export type SocialState = {
   users: SocialUser[]
   rooms: SocialRoom[]
   conversations: Record<string, SocialMessage[]>
+  unreadCounts: Record<string, number>
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
@@ -65,6 +66,7 @@ export type SocialActions = {
   selectUser: (userId: string) => void
   reactToUser: (userId: string, reaction?: string) => void
   sendMessage: (userId: string, text: string) => void
+  markConversationRead: (userId: string) => void
   toggleListeningWith: (userId: string) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void
