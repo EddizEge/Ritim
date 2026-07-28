@@ -31,6 +31,7 @@ type DesktopView = 'home' | 'music' | 'social'
 function Sidebar({ connected, peerCount, youtube, socialState, activeView, onViewChange }: Pick<Props, 'connected' | 'peerCount' | 'youtube' | 'socialState'> & { activeView: DesktopView; onViewChange: (view: DesktopView) => void }) {
   const livePlaylists = youtube.status.authenticated ? youtube.playlists : []
   const unreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
+    + socialState.messageRequests.filter((request) => request.direction === 'incoming').length
   return (
     <aside className="sidebar">
       <div className="wordmark"><span>R</span>Ritim</div>

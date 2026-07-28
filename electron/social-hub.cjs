@@ -27,7 +27,12 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const privacy = new Map()
   const blocks = new Set()
   const readMarkers = new Map()
+  const messageRequests = new Map()
   let emitChain = Promise.resolve()
+
+  function conversationKey(leftId, rightId) {
+    return [leftId, rightId].sort().join(':')
+  }
 
   function socialSockets() {
     return [...io.sockets.sockets.values()].filter((socket) => socket.data.socialAccountId)
@@ -77,18 +82,15 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           listeningVisibility: 'everyone',
         }
         const blocked = blocks.has(`${viewerId}:${targetId}`) || blocks.has(`${targetId}:${viewerId}`)
-        const hasConversation = messages.some((message) => (
-          (message.senderId === viewerId && message.targetId === targetId)
-          || (message.senderId === targetId && message.targetId === viewerId)
-        ))
+        const isContact = messageRequests.get(conversationKey(viewerId, targetId))?.status === 'accepted'
         rules.set(targetId, {
           profile: viewerId === targetId || (!blocked && (
             targetPrivacy.profileVisibility === 'everyone'
-            || (targetPrivacy.profileVisibility === 'contacts' && hasConversation)
+            || (targetPrivacy.profileVisibility === 'contacts' && isContact)
           )),
           listening: viewerId === targetId || (!blocked && (
             targetPrivacy.listeningVisibility === 'everyone'
-            || (targetPrivacy.listeningVisibility === 'contacts' && hasConversation)
+            || (targetPrivacy.listeningVisibility === 'contacts' && isContact)
           )),
         })
       }
@@ -103,6 +105,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const byPeer = new Map()
       for (const peerId of accountIds) {
         if (peerId === accountId) continue
+        if (messageRequests.get(conversationKey(accountId, peerId))?.status !== 'accepted') {
+          byPeer.set(peerId, 0)
+          continue
+        }
         const conversation = messages.filter((message) => (
           (message.senderId === accountId && message.targetId === peerId)
           || (message.senderId === peerId && message.targetId === accountId)
@@ -122,6 +128,31 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return unread
   }
 
+  function memoryMessageRequests(accountIds) {
+    const selected = new Map(accountIds.map((accountId) => [accountId, []]))
+    for (const request of messageRequests.values()) {
+      if (request.status !== 'pending') continue
+      if (!selected.has(request.requesterId) || !selected.has(request.recipientId)) continue
+      const firstMessage = messages.find((message) => (
+        message.senderId === request.requesterId && message.targetId === request.recipientId
+      ))
+      if (!firstMessage) continue
+      selected.get(request.requesterId).push({
+        userId: request.recipientId,
+        direction: 'outgoing',
+        preview: firstMessage.text,
+        sentAt: firstMessage.sentAt,
+      })
+      selected.get(request.recipientId).push({
+        userId: request.requesterId,
+        direction: 'incoming',
+        preview: firstMessage.text,
+        sentAt: firstMessage.sentAt,
+      })
+    }
+    return selected
+  }
+
   function cleanOrphanedMemoryState(profiles) {
     for (const [listenerId, targetId] of listening.entries()) {
       if (!profiles.has(listenerId) || !profiles.has(targetId)) listening.delete(listenerId)
@@ -136,7 +167,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     const accountIds = [...profiles.keys()]
     if (!store) cleanOrphanedMemoryState(profiles)
 
-    const [selectedMessages, selectedRooms, selectedListening, selectedReactions, access, privacyEntries, unread] = store
+    const [selectedMessages, selectedRooms, selectedListening, selectedReactions, access, privacyEntries, unread, selectedRequests] = store
       ? await Promise.all([
           store.loadMessages(accountIds),
           store.loadRooms(accountIds),
@@ -145,6 +176,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           store.loadAccess(accountIds),
           Promise.all(accountIds.map(async (accountId) => [accountId, await store.loadPrivacy(accountId)])),
           store.loadUnreadCounts(accountIds),
+          store.loadMessageRequests(accountIds),
         ])
       : [
           messages,
@@ -157,6 +189,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             listeningVisibility: 'everyone',
           }]),
           memoryUnread(accountIds),
+          memoryMessageRequests(accountIds),
         ]
     const privacyByAccount = new Map(privacyEntries)
 
@@ -226,6 +259,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         rooms: publicRooms,
         conversations,
         unreadCounts,
+        messageRequests: selectedRequests.get(accountId) || [],
         selectedUserId: users[0]?.id || '',
         listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
           ? undefined
@@ -362,8 +396,77 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       }
       if (store) await store.saveMessage(message)
       else {
+        const key = conversationKey(senderId, targetId)
+        const request = messageRequests.get(key)
+        if (request?.status === 'pending') {
+          socket.emit('social:error', { code: 'message_request_pending', event: 'message' })
+          return
+        }
+        if (request?.status === 'rejected') {
+          if (request.recipientId !== senderId) {
+            socket.emit('social:error', { code: 'message_request_rejected', event: 'message' })
+            return
+          }
+          messageRequests.set(key, {
+            requesterId: senderId,
+            recipientId: targetId,
+            status: 'pending',
+            createdAt: message.sentAt,
+          })
+        }
+        if (!request) {
+          messageRequests.set(key, {
+            requesterId: senderId,
+            recipientId: targetId,
+            status: 'pending',
+            createdAt: message.sentAt,
+          })
+        }
         messages.push(message)
         if (messages.length > 200) messages.splice(0, messages.length - 200)
+      }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:request-response', safely('Mesaj isteği yanıtlanamadı', async ({
+      requesterUserId,
+      action,
+    } = {}) => {
+      if (!eventAllowed(socket, 'request-response', 30, 60_000)) return
+      const recipientId = socket.data.socialAccountId
+      const requesterId = cleanText(requesterUserId, 80)
+      if (
+        !recipientId
+        || !requesterId
+        || requesterId === recipientId
+        || !['accept', 'reject'].includes(action)
+      ) return
+      if (store) {
+        await store.respondToMessageRequest(recipientId, requesterId, action)
+      } else {
+        const key = conversationKey(recipientId, requesterId)
+        const request = messageRequests.get(key)
+        if (
+          !request
+          || request.status !== 'pending'
+          || request.requesterId !== requesterId
+          || request.recipientId !== recipientId
+        ) return
+        request.status = action === 'accept' ? 'accepted' : 'rejected'
+        if (action === 'accept') {
+          const lastMessage = messages.findLast((message) => (
+            message.senderId === requesterId && message.targetId === recipientId
+          ))
+          if (lastMessage) readMarkers.set(`${recipientId}:${requesterId}`, lastMessage.id)
+        } else {
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index]
+            if (
+              (message.senderId === requesterId && message.targetId === recipientId)
+              || (message.senderId === recipientId && message.targetId === requesterId)
+            ) messages.splice(index, 1)
+          }
+        }
       }
       await scheduleEmit()
     }))

@@ -272,6 +272,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [searchOpen, setSearchOpen] = useState(false)
   const [socialOpen, setSocialOpen] = useState(false)
   const socialUnreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
+    + socialState.messageRequests.filter((request) => request.direction === 'incoming').length
   const [searchQuery, setSearchQuery] = useState('')
   const [requestedSearchQuery, setRequestedSearchQuery] = useState('')
   const [navigationRetries, setNavigationRetries] = useState(0)
