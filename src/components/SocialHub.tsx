@@ -4,7 +4,7 @@ import {
   RefreshCw, Search, Send, ShieldBan, SmilePlus, Trash2, UsersRound, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
-import type { SocialActions, SocialState, SocialTrack, SocialUser } from '../social/types'
+import type { SocialActions, SocialRoom, SocialState, SocialTrack, SocialUser } from '../social/types'
 import { Cover } from './Cover'
 
 type SocialProps = {
@@ -33,7 +33,7 @@ function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps 
       : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
   return (
     <div className={mobile ? `mobile-social-preview is-${state.connectionStatus}` : `social-preview-note is-${state.connectionStatus}`}>
-      <span>ALPHA.3</span>
+      <span>ALPHA.4</span>
       <p>{text}</p>
       {online ? (
         <div className="social-privacy-controls">
@@ -125,6 +125,61 @@ function SocialTrackSummary({ track, compact = false }: { track?: SocialTrack; c
         <TrackProgress track={track} />
       </span>
     </div>
+  )
+}
+
+function SocialRoomCard({
+  room,
+  actions,
+  mobile = false,
+}: {
+  room: SocialRoom
+  actions: SocialActions
+  mobile?: boolean
+}) {
+  const full = room.memberCount >= room.maxMembers
+  const owner = room.viewerRole === 'owner'
+  const listening = room.viewerRole === 'listener'
+  const actionLabel = owner ? 'Senin odan' : listening ? 'Odadan ayrıl' : full ? 'Oda dolu' : 'Odaya katıl'
+
+  return (
+    <article className={`${mobile ? 'mobile-room-card' : 'social-room-card'} ${room.viewerRole ? 'is-active' : ''}`}>
+      <Cover index={room.cover} className={mobile ? 'mobile-room-cover' : 'social-room-cover'} label="" />
+      <span className={mobile ? 'mobile-room-live' : 'social-room-live'}><i />CANLI</span>
+      <b>{room.title}</b>
+      <small>{room.memberCount}/{room.maxMembers} kişi</small>
+      <span className={mobile ? 'mobile-room-members' : 'social-room-members'}>
+        {room.memberInitials.slice(0, 3).map((initials, index) => (
+          <i key={`${room.id}-${initials}-${index}`}>{initials}</i>
+        ))}
+        {room.memberCount > 3 ? <em>+{room.memberCount - 3}</em> : null}
+      </span>
+      <button
+        className={listening ? 'is-leave' : ''}
+        disabled={owner || (full && !listening)}
+        onClick={() => actions.joinRoom(room.id)}
+      >
+        {actionLabel}
+      </button>
+    </article>
+  )
+}
+
+function DesktopRoomShelf({ state, actions }: SocialProps) {
+  return (
+    <section className="social-room-shelf" aria-label="Dinleme odaları">
+      <div className="social-section-heading">
+        <h2>Dinleme odaları</h2>
+        <small>{state.rooms.length ? `${state.rooms.length} canlı oda` : 'Henüz oda yok'}</small>
+      </div>
+      {state.rooms.length ? (
+        <div className="social-room-list">
+          {state.rooms.map((room) => <SocialRoomCard key={room.id} room={room} actions={actions} />)}
+        </div>
+      ) : (
+        <div className="social-room-empty"><Radio /><span>İlk odayı yukarıdan oluştur.</span></div>
+      )}
+    </section>
   )
 }
 
@@ -425,6 +480,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
     return state.users.filter((user) => matchesSocialQuery(user, deferredQuery))
   }, [deferredQuery, state.users])
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
+  const ownedRoom = state.rooms.find((room) => room.viewerRole === 'owner')
 
   return (
     <section className="social-desktop-shell">
@@ -433,15 +489,16 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
         <label className="social-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Aktif kullanıcı ara" /></label>
         <span className="social-online-count"><i />{onlineCount} kişi çevrimiçi</span>
         <NotificationCenter state={state} actions={actions} />
-        <button className={state.activeRoomId ? 'social-create-room is-created' : 'social-create-room'} onClick={actions.createRoom}>
-          {state.activeRoomId ? <Radio /> : <Plus />}
-          {state.activeRoomId ? 'Odan hazır' : 'Dinleme odası oluştur'}
+        <button className={ownedRoom ? 'social-create-room is-created' : 'social-create-room'} onClick={actions.createRoom}>
+          {ownedRoom ? <Radio /> : <Plus />}
+          {ownedRoom ? 'Odayı kapat' : 'Dinleme odası oluştur'}
         </button>
       </header>
       <SocialConnectionNotice state={state} actions={actions} />
       <SocialFeedbackNotice state={state} actions={actions} />
       <div className="social-desktop-layout">
         <div className="social-directory">
+          <DesktopRoomShelf state={state} actions={actions} />
           <MessageRequestList state={state} actions={actions} />
           <BlockedUsersPanel state={state} actions={actions} />
           <div className="social-section-heading">
@@ -499,13 +556,14 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
     [deferredQuery, state.users],
   )
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
+  const ownedRoom = state.rooms.find((room) => room.viewerRole === 'owner')
 
   return (
     <>
       <section className="mobile-social-hub">
         <div className="mobile-social-heading">
           <div><h1>Sosyal</h1><span><i />{onlineCount} kişi çevrimiçi</span></div>
-          <button className={state.activeRoomId ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{state.activeRoomId ? 'Odan hazır' : 'Oda oluştur'}</button>
+          <button className={ownedRoom ? 'is-active' : ''} onClick={actions.createRoom}><Plus />{ownedRoom ? 'Odayı kapat' : 'Oda oluştur'}</button>
         </div>
         <SocialConnectionNotice state={state} actions={actions} mobile />
         <SocialFeedbackNotice state={state} actions={actions} mobile />
@@ -517,13 +575,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
           <div className="mobile-social-section-title"><h2>Dinleme odaları</h2><Radio /></div>
           <div className="mobile-room-rail">
             {state.rooms.length ? state.rooms.map((room) => (
-              <button className={state.activeRoomId === room.id ? 'mobile-room-card is-active' : 'mobile-room-card'} key={room.id}>
-                <Cover index={room.cover} className="mobile-room-cover" label="" />
-                <span className="mobile-room-live"><i />CANLI</span>
-                <b>{room.title}</b>
-                <small>{room.memberCount} kişi</small>
-                <span className="mobile-room-members">{room.memberInitials.slice(0, 3).map((initials, index) => <i key={`${room.id}-${initials}`}>{initials}</i>)}{room.memberCount > 3 ? <em>+{room.memberCount - 3}</em> : null}</span>
-              </button>
+              <SocialRoomCard key={room.id} room={room} actions={actions} mobile />
             )) : <div className="social-no-results"><Radio /><b>Henüz oda yok</b><p>İlk dinleme odasını yukarıdan oluştur.</p></div>}
           </div>
         </section>

@@ -1,5 +1,6 @@
 const crypto = require('node:crypto')
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const MAX_ROOM_MEMBERS = 8
 
 function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
@@ -292,11 +293,18 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const publicRooms = store
         ? visibleRooms.map((socialRoom) => ({
             id: socialRoom.id,
+            ownerId: socialRoom.ownerId,
             title: socialRoom.title,
             memberCount: socialRoom.memberCount,
+            maxMembers: MAX_ROOM_MEMBERS,
             cover: socialRoom.cover,
             isLive: true,
             memberInitials: socialRoom.memberInitials,
+            viewerRole: socialRoom.ownerId === accountId
+              ? 'owner'
+              : socialRoom.memberIds.includes(accountId)
+                ? 'listener'
+                : undefined,
           }))
         : visibleRooms.map((socialRoom) => {
             const memberIds = new Set([socialRoom.ownerId])
@@ -306,11 +314,18 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             const memberProfiles = [...memberIds].map((id) => profiles.get(id)).filter(Boolean)
             return {
               id: socialRoom.id,
+              ownerId: socialRoom.ownerId,
               title: socialRoom.title,
               memberCount: memberProfiles.length,
+              maxMembers: MAX_ROOM_MEMBERS,
               cover: socialRoom.cover,
               isLive: true,
               memberInitials: memberProfiles.map((profile) => profile.initials).slice(0, 4),
+              viewerRole: socialRoom.ownerId === accountId
+                ? 'owner'
+                : selectedListening.get(accountId) === socialRoom.ownerId
+                  ? 'listener'
+                  : undefined,
             }
           })
       const accountDevices = socketsForAccount(accountId)
@@ -336,7 +351,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
           ? undefined
           : selectedListening.get(accountId),
-        activeRoomId: selectedRooms.find((socialRoom) => socialRoom.ownerId === accountId)?.id,
+        activeRoomId: publicRooms.find((socialRoom) => socialRoom.viewerRole)?.id,
       })
     }
   }
@@ -765,13 +780,94 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const targetId = cleanText(targetUserId, 80)
       if (!senderId) return
       if (store) {
-        if (!targetId || targetId === senderId) await store.clearListening(senderId)
-        else if (accountProfiles().has(targetId)) await store.toggleListening(senderId, targetId)
+        try {
+          if (!targetId || targetId === senderId) await store.clearListening(senderId)
+          else if (accountProfiles().has(targetId)) await store.toggleListening(senderId, targetId)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          socket.emit('social:error', {
+            code: /dolu/i.test(message) ? 'room_full' : 'room_not_found',
+            event: 'listening',
+          })
+          return
+        }
       } else if (!targetId || targetId === senderId || listening.get(senderId) === targetId) {
         listening.delete(senderId)
       } else if (accountProfiles().has(targetId)) {
+        const targetRoom = [...rooms.values()].find((room) => room.ownerId === targetId)
+        const memberCount = targetRoom
+          ? 1 + [...listening.values()].filter((ownerId) => ownerId === targetId).length
+          : 0
+        if (!targetRoom) {
+          socket.emit('social:error', { code: 'room_not_found', event: 'listening' })
+          return
+        }
+        if (memberCount >= MAX_ROOM_MEMBERS) {
+          socket.emit('social:error', { code: 'room_full', event: 'listening' })
+          return
+        }
         listening.set(senderId, targetId)
       }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:room-membership', safely('Oda üyeliği güncellenemedi', async ({
+      roomId,
+    } = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'room-membership', 20, 60_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
+      const accountId = socket.data.socialAccountId
+      const selectedRoomId = cleanText(roomId, 80)
+      if (!accountId || !selectedRoomId) {
+        reply({ ok: false, code: 'room_not_found' })
+        return
+      }
+      let status
+      if (store) {
+        try {
+          status = await store.toggleRoomMembership(accountId, selectedRoomId)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const code = /dolu/i.test(message)
+            ? 'room_full'
+            : /sahibi/i.test(message)
+              ? 'room_owner'
+              : 'room_not_found'
+          socket.emit('social:error', { code, event: 'room-membership' })
+          reply({ ok: false, code })
+          return
+        }
+      } else {
+        const room = rooms.get(selectedRoomId)
+        if (!room) {
+          reply({ ok: false, code: 'room_not_found' })
+          return
+        }
+        if (room.ownerId === accountId) {
+          reply({ ok: false, code: 'room_owner' })
+          return
+        }
+        if (listening.get(accountId) === room.ownerId) {
+          listening.delete(accountId)
+          status = 'left'
+        } else {
+          const memberCount = 1 + [...listening.values()]
+            .filter((ownerId) => ownerId === room.ownerId).length
+          if (memberCount >= MAX_ROOM_MEMBERS) {
+            socket.emit('social:error', { code: 'room_full', event: 'room-membership' })
+            reply({ ok: false, code: 'room_full' })
+            return
+          }
+          listening.set(accountId, room.ownerId)
+          status = 'joined'
+        }
+      }
+      reply({ ok: true, status })
       await scheduleEmit()
     }))
 
@@ -786,8 +882,14 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         await store.toggleRoom(ownerId, cleanTitle, cleanCover)
       } else {
         const existing = [...rooms.values()].find((socialRoom) => socialRoom.ownerId === ownerId)
-        if (existing) rooms.delete(existing.id)
+        if (existing) {
+          rooms.delete(existing.id)
+          for (const [memberId, targetOwnerId] of listening.entries()) {
+            if (targetOwnerId === ownerId) listening.delete(memberId)
+          }
+        }
         else {
+          listening.delete(ownerId)
           const id = `room-${crypto.randomUUID()}`
           rooms.set(id, { id, ownerId, title: cleanTitle, cover: cleanCover })
         }
