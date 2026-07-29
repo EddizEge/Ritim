@@ -81,19 +81,35 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
     await waitForState(states, 'Alpha İki', (state) => state.messageRequests.length === 0)
     clientA.emit('social:message', { targetUserId: accountB, text: messageText })
     clientB.emit('social:create-room', { title: roomTitle, cover: 4 })
+    const ownerRoom = await waitForState(states, 'Alpha İki', (state) => (
+      state.rooms.some((room) => room.title === roomTitle && room.viewerRole === 'owner')
+    ))
+    const roomId = ownerRoom.rooms.find((room) => room.title === roomTitle).id
+    const joined = await new Promise((resolve) => {
+      clientA.emit('social:room-membership', { roomId }, resolve)
+    })
+    assert.deepEqual(joined, { ok: true, status: 'joined' })
   }
 
   const persistedState = await waitForState(states, 'Alpha Bir', (state) => (
     state.conversations[accountB]?.some((message) => message.text === messageText)
-    && state.rooms.some((room) => room.title === roomTitle)
+    && state.rooms.some((room) => (
+      room.title === roomTitle
+      && room.viewerRole === 'listener'
+      && room.memberCount === 2
+    ))
   ))
   assert.equal(
     persistedState.conversations[accountB].filter((message) => message.text === messageText).length,
     1,
   )
-  assert.equal(persistedState.rooms.find((room) => room.title === roomTitle).cover, 4)
+  const persistedRoom = persistedState.rooms.find((room) => room.title === roomTitle)
+  assert.equal(persistedRoom.cover, 4)
+  assert.equal(persistedRoom.ownerId, accountB)
+  assert.equal(persistedRoom.maxMembers, 8)
   const recipientState = await waitForState(states, 'Alpha İki', (state) => (
     state.unreadCounts[accountA] >= 1
+    && state.rooms.some((room) => room.viewerRole === 'owner' && room.memberCount === 2)
   ))
   assert.equal(recipientState.unreadCounts[accountA] >= 1, true)
 })

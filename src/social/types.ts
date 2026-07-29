@@ -33,11 +33,14 @@ export type SocialUser = {
 
 export type SocialRoom = {
   id: string
+  ownerId: string
   title: string
   memberCount: number
+  maxMembers: number
   cover: number
   isLive: boolean
   memberInitials: string[]
+  viewerRole?: 'owner' | 'listener'
 }
 
 export type SocialMessage = {
@@ -117,6 +120,7 @@ export type SocialActions = {
   reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => void
   clearFeedback: () => void
   toggleListeningWith: (userId: string) => void
+  joinRoom: (roomId: string) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void
   blockUser: (userId: string) => void

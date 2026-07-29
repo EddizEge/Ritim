@@ -71,6 +71,7 @@ type StoredRoom = {
   cover: number
   memberCount: number
   memberInitials: string[]
+  memberIds: string[]
 }
 
 type StoredReaction = {
@@ -94,6 +95,7 @@ type AccessRule = {
 const PRESENCE_TTL_SECONDS = 60
 const PRESENCE_SET_TTL_SECONDS = 120
 const LISTENING_TTL_SECONDS = 120
+const MAX_ROOM_MEMBERS = 8
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function sha256(value: string) {
@@ -106,6 +108,10 @@ function hashHex(value: string) {
 
 function accountKey(value: string) {
   return UUID_PATTERN.test(value) ? value : hashHex(value)
+}
+
+function redisKeyFromDatabaseAccountKey(value: string) {
+  return UUID_PATTERN.test(value) ? hashHex(value) : value
 }
 
 function databaseHandle(profileHandle: string, accountHash: Buffer) {
@@ -1171,10 +1177,23 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
   }
 
   async function toggleRoom(ownerAccountId: string, title: string, cover: number) {
-    return inTransaction(pool, async (client) => {
+    const result = await inTransaction(pool, async (client) => {
       const ownerId = await findUserId(client, ownerAccountId)
       if (!ownerId) throw new Error('Oda sahibi bulunamadı.')
       await client.query('select pg_advisory_xact_lock($1)', [ownerId])
+      const activeMemberKeys = await client.query<{ account_key: string }>(
+        `select coalesce(
+           encode(member_user.legacy_account_id_hash, 'hex'),
+           member_user.public_id::text
+         ) as account_key
+         from ritim.room_members member
+         join ritim.listening_rooms room on room.id = member.room_id
+         join ritim.users member_user on member_user.id = member.user_id
+         where room.owner_id = $1
+           and room.ended_at is null
+           and member.left_at is null`,
+        [ownerId],
+      )
       const ended = await client.query<{ id: string }>(
         `update ritim.listening_rooms
          set ended_at = now()
@@ -1189,9 +1208,20 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            where room_id = any($1::bigint[]) and left_at is null`,
           [ended.rows.map((row) => row.id)],
         )
-        return false
+        return {
+          created: false,
+          memberRedisKeys: activeMemberKeys.rows.map((row) => (
+            redisKeyFromDatabaseAccountKey(row.account_key)
+          )),
+        }
       }
 
+      await client.query(
+        `update ritim.room_members
+         set left_at = now()
+         where user_id = $1 and left_at is null`,
+        [ownerId],
+      )
       const roomResult = await client.query<{ id: string }>(
         `insert into ritim.listening_rooms (owner_id, title, cover)
          values ($1, $2, $3)
@@ -1203,8 +1233,17 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
          values ($1, $2, 'owner')`,
         [roomResult.rows[0].id, ownerId],
       )
-      return true
+      return {
+        created: true,
+        memberRedisKeys: [hashHex(ownerAccountId)],
+      }
     })
+    if (result.memberRedisKeys.length) {
+      await Promise.all(result.memberRedisKeys.map((memberKey) => (
+        redis.del(`ritim:listening:${memberKey}`)
+      )))
+    }
+    return result.created
   }
 
   async function loadRooms(accountIds: string[]): Promise<StoredRoom[]> {
@@ -1219,6 +1258,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       cover: number
       member_count: string
       member_initials: string[]
+      member_keys: string[]
     }>(
        `select
          room.public_id,
@@ -1230,7 +1270,17 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            array_agg(member_user.initials order by member.joined_at)
              filter (where member.left_at is null),
            '{}'
-         ) as member_initials
+         ) as member_initials,
+         coalesce(
+           array_agg(
+             coalesce(
+               encode(member_user.legacy_account_id_hash, 'hex'),
+               member_user.public_id::text
+             )
+             order by member.joined_at
+           ) filter (where member.left_at is null),
+           '{}'
+         ) as member_keys
        from ritim.listening_rooms room
        join ritim.users owner on owner.id = room.owner_id
        left join ritim.room_members member on member.room_id = room.id
@@ -1252,24 +1302,48 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         cover: Number(row.cover) || 0,
         memberCount: Number(row.member_count) || 0,
         memberInitials: row.member_initials.slice(0, 4),
+        memberIds: row.member_keys.flatMap((memberKey) => {
+          const memberId = accountByKey.get(memberKey)
+          return memberId ? [memberId] : []
+        }),
       }]
     })
   }
 
-  async function toggleListening(listenerAccountId: string, targetAccountId: string) {
-    const listenerHash = hashHex(listenerAccountId)
-    const targetHash = hashHex(targetAccountId)
-    const listeningKey = `ritim:listening:${listenerHash}`
-    const currentTarget = await redis.get(listeningKey)
-    const stopping = currentTarget === targetHash
-
-    await inTransaction(pool, async (client) => {
+  async function toggleRoomMembership(listenerAccountId: string, roomPublicId: string) {
+    const selectedRoomId = roomPublicId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(selectedRoomId)) throw new Error('Dinleme odası bulunamadı.')
+    const membership = await inTransaction(pool, async (client) => {
       const listenerId = await findUserId(client, listenerAccountId)
-      const targetId = await findUserId(client, targetAccountId)
-      if (!listenerId || !targetId || listenerId === targetId) return
-      if (!await usersCanInteract(client, listenerId, targetId)) return
+      if (!listenerId) throw new Error('Oda katılımcısı bulunamadı.')
+      const roomResult = await client.query<{
+        id: string
+        owner_id: string
+        owner_key: string
+        listening_visibility: Visibility
+      }>(
+        `select
+           room.id,
+           room.owner_id,
+           coalesce(
+             encode(owner.legacy_account_id_hash, 'hex'),
+             owner.public_id::text
+           ) as owner_key,
+           owner.listening_visibility
+         from ritim.listening_rooms room
+         join ritim.users owner on owner.id = room.owner_id
+         where room.public_id = $1 and room.ended_at is null
+         for update of room`,
+        [selectedRoomId],
+      )
+      const room = roomResult.rows[0]
+      if (!room) throw new Error('Dinleme odası bulunamadı.')
+      if (String(room.owner_id) === String(listenerId)) throw new Error('Oda sahibi odadan ayrılamaz.')
+      if (!await usersCanInteract(client, listenerId, room.owner_id)) {
+        throw new Error('Dinleme odasına erişim engellendi.')
+      }
       const visibility = await client.query<{ listening_visibility: Visibility; is_contact: boolean }>(
-        `select target.listening_visibility,
+        `select $3::text as listening_visibility,
                 exists (
                   select 1
                   from ritim.message_requests request
@@ -1279,35 +1353,50 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
                       or (request.requester_id = $2 and request.recipient_id = $1)
                     )
                 ) as is_contact
-         from ritim.users target
-         where target.id = $2`,
-        [listenerId, targetId],
+         from ritim.users
+         where id = $2`,
+        [listenerId, room.owner_id, room.listening_visibility],
       )
       const targetVisibility = visibility.rows[0]
       if (
         targetVisibility?.listening_visibility === 'hidden'
         || (targetVisibility?.listening_visibility === 'contacts' && !targetVisibility.is_contact)
-      ) return
+      ) throw new Error('Dinleme odasına erişim engellendi.')
 
-      await client.query(
-        `update ritim.room_members member
-         set left_at = now()
-         from ritim.listening_rooms room
-         where member.room_id = room.id
-           and member.user_id = $1
-           and member.role = 'listener'
-           and member.left_at is null`,
+      const currentMembership = await client.query<{ room_id: string; role: 'owner' | 'listener' }>(
+        `select room_id, role
+         from ritim.room_members
+         where user_id = $1 and left_at is null
+         for update`,
         [listenerId],
       )
-      if (stopping) return
+      if (currentMembership.rows[0]?.role === 'owner') {
+        throw new Error('Oda sahibi odadan ayrılamaz.')
+      }
+      const leaving = String(currentMembership.rows[0]?.room_id || '') === String(room.id)
 
-      const roomResult = await client.query<{ id: string }>(
-        `select id from ritim.listening_rooms
-         where owner_id = $1 and ended_at is null`,
-        [targetId],
+      await client.query(
+        `update ritim.room_members
+         set left_at = now()
+         where user_id = $1 and role = 'listener' and left_at is null`,
+        [listenerId],
       )
-      const roomId = roomResult.rows[0]?.id
-      if (!roomId) return
+      if (leaving) {
+        return {
+          status: 'left' as const,
+          ownerRedisKey: redisKeyFromDatabaseAccountKey(room.owner_key),
+        }
+      }
+
+      const countResult = await client.query<{ member_count: string }>(
+        `select count(*) as member_count
+         from ritim.room_members
+         where room_id = $1 and left_at is null`,
+        [room.id],
+      )
+      if (Number(countResult.rows[0]?.member_count || 0) >= MAX_ROOM_MEMBERS) {
+        throw new Error('Dinleme odası dolu.')
+      }
       await client.query(
         `insert into ritim.room_members (room_id, user_id, role)
          values ($1, $2, 'listener')
@@ -1315,12 +1404,35 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            role = 'listener',
            joined_at = now(),
            left_at = null`,
-        [roomId, listenerId],
+        [room.id, listenerId],
       )
+      return {
+        status: 'joined' as const,
+        ownerRedisKey: redisKeyFromDatabaseAccountKey(room.owner_key),
+      }
     })
 
-    if (stopping) await redis.del(listeningKey)
-    else await redis.set(listeningKey, targetHash, { EX: LISTENING_TTL_SECONDS })
+    const listeningKey = `ritim:listening:${hashHex(listenerAccountId)}`
+    if (membership.status === 'left') await redis.del(listeningKey)
+    else await redis.set(listeningKey, membership.ownerRedisKey, { EX: LISTENING_TTL_SECONDS })
+    return membership.status
+  }
+
+  async function toggleListening(listenerAccountId: string, targetAccountId: string) {
+    const targetId = await pool.query<{ room_public_id: string }>(
+      `select room.public_id as room_public_id
+       from ritim.listening_rooms room
+       join ritim.users owner on owner.id = room.owner_id
+       where room.ended_at is null
+         and coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text) = $1`,
+      [accountKey(targetAccountId)],
+    )
+    const roomPublicId = targetId.rows[0]?.room_public_id
+    if (!roomPublicId) {
+      await clearListening(listenerAccountId)
+      throw new Error('Dinleme odası bulunamadı.')
+    }
+    return toggleRoomMembership(listenerAccountId, `room-${roomPublicId}`)
   }
 
   async function loadListening(accountIds: string[]) {
@@ -1368,6 +1480,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     toggleBlock,
     toggleRoom,
     loadRooms,
+    toggleRoomMembership,
     toggleListening,
     loadListening,
     clearListening,

@@ -55,6 +55,9 @@ function socialErrorText(code?: string) {
   if (code === 'message_request_rejected') return 'Bu kullanıcı mesaj isteğini reddetti.'
   if (code === 'message_too_long') return 'Mesaj en fazla 500 karakter olabilir.'
   if (code === 'message_blocked') return 'Bu kullanıcıyla mesajlaşma kullanılamıyor.'
+  if (code === 'room_full') return 'Bu oda dolu; en fazla 8 kişi birlikte dinleyebilir.'
+  if (code === 'room_not_found') return 'Bu dinleme odası artık açık değil.'
+  if (code === 'room_owner') return 'Odanın sahibisin; ayrılmak için odayı kapatabilirsin.'
   return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
 }
 
@@ -281,7 +284,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       // Profil yenileme arka planda gerçekleşir; kullanıcı eylemi değildir.
       // Mesaj hataları da acknowledgement callback'i üzerinden daha doğru
       // biçimde ele alınır ve burada ikinci kez başarı/hata bildirimini ezmez.
-      if (error?.event === 'profile' || error?.event === 'message') return
+      if (
+        error?.event === 'profile'
+        || error?.event === 'message'
+        || error?.event === 'room-membership'
+      ) return
       setSnapshot((previous) => ({
         ...previous,
         feedback: {
@@ -493,6 +500,26 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     socialSocket.emit('social:listening', { targetUserId: userId })
   }, [])
 
+  const joinRoom = useCallback((roomId: string) => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:room-membership', { roomId }, (result: {
+      ok?: boolean
+      code?: string
+      status?: 'joined' | 'left'
+    } = {}) => {
+      setSnapshot((current) => ({
+        ...current,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: result.ok ? 'success' : 'error',
+          text: result.ok
+            ? (result.status === 'left' ? 'Dinleme odasından ayrıldın.' : 'Dinleme odasına katıldın.')
+            : socialErrorText(result.code),
+        },
+      }))
+    })
+  }, [])
+
   const createRoom = useCallback(() => {
     socialSocket.emit('social:create-room', {
       title: currentTrack.title || `${resolvedName} dinliyor`,
@@ -533,6 +560,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       reportUser,
       clearFeedback,
       toggleListeningWith,
+      joinRoom,
       createRoom,
       updatePrivacy,
       blockUser,

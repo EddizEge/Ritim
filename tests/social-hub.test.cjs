@@ -198,16 +198,33 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   desktopB.emit('social:create-room', { title: 'Gece sürüşü', cover: 2 })
   const roomState = await waitForState('Ediz PC', (state) => state.rooms.length === 1)
   assert.equal(roomState.rooms[0].title, 'Gece sürüşü')
+  assert.equal(roomState.rooms[0].ownerId, 'account-b')
+  assert.equal(roomState.rooms[0].maxMembers, 8)
+  const ownerRoomState = await waitForState('Deniz PC', (state) => (
+    state.rooms[0]?.viewerRole === 'owner' && state.activeRoomId === state.rooms[0].id
+  ))
 
-  desktopA.emit('social:listening', { targetUserId: 'account-b' })
+  const joinedRoom = await new Promise((resolve) => {
+    desktopA.emit('social:room-membership', { roomId: ownerRoomState.rooms[0].id }, resolve)
+  })
+  assert.deepEqual(joinedRoom, { ok: true, status: 'joined' })
   const listeningState = await waitForState('Ediz PC', (state) => (
-    state.listeningWithUserId === 'account-b' && state.rooms[0]?.memberCount === 2
+    state.listeningWithUserId === 'account-b'
+    && state.rooms[0]?.memberCount === 2
+    && state.rooms[0]?.viewerRole === 'listener'
+    && state.activeRoomId === state.rooms[0].id
   ))
   assert.equal(listeningState.rooms[0].memberCount, 2)
 
-  desktopA.emit('social:listening', { targetUserId: 'account-b' })
+  const leftRoom = await new Promise((resolve) => {
+    desktopA.emit('social:room-membership', { roomId: ownerRoomState.rooms[0].id }, resolve)
+  })
+  assert.deepEqual(leftRoom, { ok: true, status: 'left' })
   const stoppedListeningState = await waitForState('Ediz PC', (state) => (
-    !state.listeningWithUserId && state.rooms[0]?.memberCount === 1
+    !state.listeningWithUserId
+    && state.rooms[0]?.memberCount === 1
+    && !state.rooms[0]?.viewerRole
+    && !state.activeRoomId
   ))
   assert.equal(stoppedListeningState.rooms[0].memberCount, 1)
 
@@ -297,6 +314,80 @@ test('reddedilen mesaj isteği silinir ve yalnızca alıcı yeni istek başlatab
   recipient.emit('social:message', { targetUserId: 'request-sender', text: 'Ben yazmak istedim.' })
   const reversed = await waitFor('Gönderen', (state) => state.messageRequests[0]?.direction === 'incoming')
   assert.equal(reversed.messageRequests[0].userId, 'request-recipient')
+})
+
+test('Alpha.4 odası sahibi dahil sekiz hesapla sınırlıdır', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${httpServer.address().port}`
+  const states = new Map()
+  const clients = []
+  context.after(async () => {
+    clients.forEach((client) => client.disconnect())
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+
+  const connect = async (accountId, displayName) => {
+    const client = createClient(url, { transports: ['websocket'] })
+    client.on('social:state', (state) => states.set(accountId, state))
+    await new Promise((resolve) => client.once('connect', resolve))
+    client.emit('social:join', {
+      accountId,
+      deviceId: `${accountId}-desktop`,
+      deviceRole: 'desktop',
+      profile: profile(accountId, displayName, 'desktop'),
+    })
+    clients.push(client)
+    return client
+  }
+  const waitFor = async (accountId, predicate) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 2_000) {
+      const state = states.get(accountId)
+      if (state && predicate(state)) return state
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`${accountId} için oda kapasite durumu gelmedi`)
+  }
+
+  const owner = await connect('room-owner', 'Oda Sahibi')
+  const listeners = []
+  for (let index = 1; index <= 8; index += 1) {
+    listeners.push(await connect(`room-listener-${index}`, `Dinleyici ${index}`))
+  }
+  await waitFor('room-owner', (state) => state.users.length === 8)
+  owner.emit('social:create-room', { title: 'Sekiz kişilik oda', cover: 3 })
+  const ownerState = await waitFor('room-owner', (state) => state.rooms[0]?.viewerRole === 'owner')
+  const roomId = ownerState.rooms[0].id
+
+  for (const listener of listeners.slice(0, 7)) {
+    const result = await new Promise((resolve) => {
+      listener.emit('social:room-membership', { roomId }, resolve)
+    })
+    assert.deepEqual(result, { ok: true, status: 'joined' })
+  }
+  const fullState = await waitFor('room-owner', (state) => state.rooms[0]?.memberCount === 8)
+  assert.equal(fullState.rooms[0].maxMembers, 8)
+
+  const fullError = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Dokuzuncu hesap oda sınırında reddedilmedi')), 2_000)
+    listeners[7].once('social:error', (error) => {
+      clearTimeout(timer)
+      resolve(error)
+    })
+  })
+  const rejected = await new Promise((resolve) => {
+    listeners[7].emit('social:room-membership', { roomId }, resolve)
+  })
+  assert.deepEqual(rejected, { ok: false, code: 'room_full' })
+  assert.equal((await fullError).code, 'room_full')
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(states.get('room-owner').rooms[0].memberCount, 8)
 })
 
 test('doğrulanmış socket kimliği istemcinin account ve profil iddiasını ezer', async (context) => {
