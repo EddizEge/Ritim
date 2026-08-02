@@ -140,15 +140,30 @@ function SocialRoomCard({
   const full = room.memberCount >= room.maxMembers
   const owner = room.viewerRole === 'owner'
   const listening = room.viewerRole === 'listener'
-  const actionLabel = owner ? 'Senin odan' : listening ? 'Odadan ayrıl' : full ? 'Oda dolu' : 'Odaya katıl'
-  const playbackLabel = room.playback
+  const ownerOffline = room.lifecycle === 'owner_offline'
+  const unavailable = room.viewerPlaybackStatus === 'unavailable'
+  const actionLabel = owner
+    ? 'Senin odan'
+    : listening
+      ? 'Odadan ayrıl'
+      : ownerOffline
+        ? 'PC çevrimdışı'
+        : full ? 'Oda dolu' : 'Odaya katıl'
+  const playbackLabel = unavailable
+    ? 'Bu parça bu bilgisayarda açılamadı'
+    : room.playback
     ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
-    : 'Oynatma bekleniyor'
+    : ownerOffline ? 'Oda sahibi yeniden bağlanıyor' : 'Oynatma bekleniyor'
+  const statusLabel = unavailable
+    ? 'PARÇA AÇILAMADI'
+    : ownerOffline
+      ? 'PC ÇEVRİMDIŞI'
+      : room.lifecycle === 'waiting' ? 'HAZIRLANIYOR' : 'CANLI'
 
   return (
-    <article className={`${mobile ? 'mobile-room-card' : 'social-room-card'} ${room.viewerRole ? 'is-active' : ''}`}>
+    <article className={`${mobile ? 'mobile-room-card' : 'social-room-card'} ${room.viewerRole ? 'is-active' : ''} ${ownerOffline ? 'is-owner-offline' : ''} ${unavailable ? 'is-unavailable' : ''}`}>
       <Cover index={room.cover} className={mobile ? 'mobile-room-cover' : 'social-room-cover'} label="" />
-      <span className={mobile ? 'mobile-room-live' : 'social-room-live'}><i />CANLI</span>
+      <span className={mobile ? 'mobile-room-live' : 'social-room-live'}><i />{statusLabel}</span>
       <b>{room.title}</b>
       <small>{room.memberCount}/{room.maxMembers} kişi • {playbackLabel}</small>
       <span className={mobile ? 'mobile-room-members' : 'social-room-members'}>
@@ -159,7 +174,7 @@ function SocialRoomCard({
       </span>
       <button
         className={listening ? 'is-leave' : ''}
-        disabled={owner || (full && !listening)}
+        disabled={owner || (!listening && (full || ownerOffline))}
         onClick={() => actions.joinRoom(room.id)}
       >
         {actionLabel}
@@ -173,7 +188,7 @@ function DesktopRoomShelf({ state, actions }: SocialProps) {
     <section className="social-room-shelf" aria-label="Dinleme odaları">
       <div className="social-section-heading">
         <h2>Dinleme odaları</h2>
-        <small>{state.rooms.length ? `${state.rooms.length} canlı oda` : 'Henüz oda yok'}</small>
+        <small>{state.rooms.length ? `${state.rooms.length} oda` : 'Henüz oda yok'}</small>
       </div>
       {state.rooms.length ? (
         <div className="social-room-list">

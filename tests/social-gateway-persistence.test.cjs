@@ -166,3 +166,59 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
     assert.equal(stalePlayback.playback.videoId, playbackVideoId)
   }
 })
+
+test('kalıcı odada çevrimdışı sahip, gizlilik ve engelleme üyeliği güvenle günceller', {
+  skip: !gatewayUrl || phase !== 'access',
+}, async (context) => {
+  const states = new Map()
+  const policyAccountA = `${accountA}-policy`
+  const policyAccountB = `${accountB}-policy`
+  const policyAccountC = `${accountA}-outsider`
+  const listener = await connect('Politika Dinleyici', policyAccountA, states)
+  let owner = await connect('Politika Sahibi', policyAccountB, states)
+  const outsider = await connect('Politika Yeni Dinleyici', policyAccountC, states)
+  const clients = [listener, owner, outsider]
+  context.after(() => clients.forEach((client) => client.disconnect()))
+
+  await waitForState(states, 'Politika Dinleyici', (state) => state.users.length === 2)
+  owner.emit('social:create-room', { title: 'Alpha4 erişim odası', cover: 5 })
+  const ownerState = await waitForState(states, 'Politika Sahibi', (state) => (
+    state.rooms.some((room) => room.title === 'Alpha4 erişim odası' && room.viewerRole === 'owner')
+  ))
+  const roomId = ownerState.rooms.find((room) => room.title === 'Alpha4 erişim odası').id
+  const join = () => new Promise((resolve) => {
+    listener.emit('social:room-membership', { roomId }, resolve)
+  })
+  assert.deepEqual(await join(), { ok: true, status: 'joined' })
+  await waitForState(states, 'Politika Dinleyici', (state) => state.activeRoomId === roomId)
+
+  owner.disconnect()
+  const offlineState = await waitForState(states, 'Politika Dinleyici', (state) => (
+    state.activeRoomId === roomId
+    && state.rooms[0]?.lifecycle === 'owner_offline'
+    && state.rooms[0]?.ownerDesktopOnline === false
+  ))
+  assert.equal(offlineState.rooms[0].viewerRole, 'listener')
+  const offlineJoin = await new Promise((resolve) => {
+    outsider.emit('social:room-membership', { roomId }, resolve)
+  })
+  assert.deepEqual(offlineJoin, { ok: false, code: 'room_owner_offline' })
+
+  owner = await connect('Politika Sahibi 2', policyAccountB, states)
+  clients.push(owner)
+  await waitForState(states, 'Politika Dinleyici', (state) => state.rooms[0]?.lifecycle === 'waiting')
+  owner.emit('social:privacy', {
+    profileVisibility: 'everyone',
+    listeningVisibility: 'hidden',
+  })
+  await waitForState(states, 'Politika Dinleyici', (state) => !state.activeRoomId && state.rooms.length === 0)
+
+  owner.emit('social:privacy', {
+    profileVisibility: 'everyone',
+    listeningVisibility: 'everyone',
+  })
+  await waitForState(states, 'Politika Dinleyici', (state) => state.rooms.some((room) => room.id === roomId))
+  assert.deepEqual(await join(), { ok: true, status: 'joined' })
+  owner.emit('social:block', { targetUserId: policyAccountA })
+  await waitForState(states, 'Politika Dinleyici', (state) => !state.activeRoomId && state.rooms.length === 0)
+})

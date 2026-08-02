@@ -27,6 +27,7 @@ const listenButton = document.getElementById('listen-button')
 const blockButton = document.getElementById('block-button')
 const createRoomButton = document.getElementById('create-room-button')
 const roomsList = document.getElementById('rooms-list')
+const roomStatusNote = document.getElementById('room-status-note')
 
 let socialState = null
 let selectedUserId = ''
@@ -172,19 +173,27 @@ function renderRooms() {
   }
   for (const room of rooms) {
     const card = document.createElement('article')
-    card.className = 'room-card'
+    const unavailable = room.viewerPlaybackStatus === 'unavailable'
+    const ownerOffline = room.lifecycle === 'owner_offline'
+    card.className = `room-card${ownerOffline ? ' is-owner-offline' : ''}${unavailable ? ' is-unavailable' : ''}`
     const header = document.createElement('header')
     const live = document.createElement('span')
-    live.textContent = '● CANLI'
+    live.textContent = unavailable
+      ? '● PARÇA AÇILAMADI'
+      : ownerOffline
+        ? '● PC ÇEVRİMDIŞI'
+        : room.lifecycle === 'waiting' ? '● HAZIRLANIYOR' : '● CANLI'
     const members = document.createElement('small')
     members.textContent = `${room.memberCount} kişi`
     header.append(live, members)
     const title = document.createElement('b')
     title.textContent = room.title
     const playback = document.createElement('small')
-    playback.textContent = room.playback
+    playback.textContent = unavailable
+      ? 'Bu parça bu bilgisayarda açılamadı.'
+      : room.playback
       ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
-      : 'Oynatma bekleniyor'
+      : ownerOffline ? 'Oda sahibi yeniden bağlanıyor' : 'Oynatma bekleniyor'
     card.append(header, title, playback)
     roomsList.append(card)
   }
@@ -200,6 +209,8 @@ function render() {
   socialCount.hidden = online === 0
   socialCount.textContent = String(online)
   createRoomButton.classList.toggle('is-active', Boolean(socialState?.activeRoomId))
+  roomStatusNote.hidden = !socialState?.roomNotice
+  roomStatusNote.textContent = socialState?.roomNotice || ''
   const socialOnline = socialState?.connectionStatus === 'online'
   createRoomButton.disabled = !socialOnline
   listenButton.disabled = !socialOnline

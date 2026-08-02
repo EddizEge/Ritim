@@ -58,6 +58,8 @@ function socialErrorText(code?: string) {
   if (code === 'room_full') return 'Bu oda dolu; en fazla 8 kişi birlikte dinleyebilir.'
   if (code === 'room_not_found') return 'Bu dinleme odası artık açık değil.'
   if (code === 'room_owner') return 'Odanın sahibisin; ayrılmak için odayı kapatabilirsin.'
+  if (code === 'room_owner_offline') return 'Oda sahibinin bilgisayarı çevrimdışı. Bağlandığında tekrar deneyebilirsin.'
+  if (code === 'room_access_denied') return 'Bu dinleme odasına erişimin bulunmuyor.'
   return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
 }
 
@@ -218,6 +220,9 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   const deliveredNotificationSet = deliveredNotificationsRef.current
   const connectSocialRef = useRef<() => void>(() => {})
   const playbackPublishRef = useRef({ roomId: '', revision: 0, signature: '' })
+  const activeRoomIdRef = useRef(snapshot.activeRoomId)
+  activeRoomIdRef.current = snapshot.activeRoomId
+  const expectedRoomExitRef = useRef({ roomId: '', until: 0 })
 
   const joinSocialAccount = useCallback(() => {
     socialSocket.emit('social:join', {
@@ -274,9 +279,22 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       setSnapshot((previous) => {
         const selected = selectedUserIdRef.current
         const selectedStillExists = next.users.some((user) => user.id === selected)
+        const lostActiveRoom = Boolean(previous.activeRoomId && !next.activeRoomId)
+        const expectedExit = Boolean(
+          lostActiveRoom
+          && expectedRoomExitRef.current.roomId === previous.activeRoomId
+          && expectedRoomExitRef.current.until >= Date.now()
+        )
+        if (lostActiveRoom && !expectedExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
         return {
           ...next,
-          feedback: previous.feedback,
+          feedback: lostActiveRoom && !expectedExit
+            ? {
+                id: crypto.randomUUID(),
+                tone: 'info',
+                text: 'Dinleme odası kapatıldı veya erişimin kaldırıldı.',
+              }
+            : previous.feedback,
           selectedUserId: selectedStillExists ? selected : next.selectedUserId,
         }
       })
@@ -537,11 +555,15 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
 
   const joinRoom = useCallback((roomId: string) => {
     if (!socialSocket.connected) return
+    if (activeRoomIdRef.current === roomId) {
+      expectedRoomExitRef.current = { roomId, until: Date.now() + 5_000 }
+    }
     socialSocket.emit('social:room-membership', { roomId }, (result: {
       ok?: boolean
       code?: string
       status?: 'joined' | 'left'
     } = {}) => {
+      if (!result.ok) expectedRoomExitRef.current = { roomId: '', until: 0 }
       setSnapshot((current) => ({
         ...current,
         feedback: {

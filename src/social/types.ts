@@ -39,6 +39,10 @@ export type SocialRoom = {
   maxMembers: number
   cover: number
   isLive: boolean
+  ownerDesktopOnline: boolean
+  lifecycle: 'waiting' | 'live' | 'owner_offline'
+  viewerPlaybackStatus: 'idle' | 'ready' | 'unavailable'
+  viewerPlaybackError?: string
   memberInitials: string[]
   viewerRole?: 'owner' | 'listener'
   playback?: SocialRoomPlayback
