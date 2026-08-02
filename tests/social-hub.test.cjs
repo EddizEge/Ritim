@@ -364,6 +364,151 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   })
 })
 
+test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hataları güvenle yönetilir', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const address = httpServer.address()
+  const url = `http://127.0.0.1:${address.port}`
+  const latestStates = new Map()
+  const clients = []
+
+  context.after(async () => {
+    for (const client of clients) client.disconnect()
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+
+  const connect = async (name, accountId, deviceRole) => {
+    const client = createClient(url, { autoConnect: false, transports: ['websocket'] })
+    clients.push(client)
+    client.on('social:state', (state) => latestStates.set(name, state))
+    client.connect()
+    await new Promise((resolve) => client.once('connect', resolve))
+    client.emit('social:join', {
+      accountId,
+      deviceId: `${name}-device`,
+      deviceRole,
+      profile: profile(accountId, name, deviceRole),
+    })
+    return client
+  }
+  const waitForState = async (name, predicate, timeout = 2_000) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeout) {
+      const state = latestStates.get(name)
+      if (state && predicate(state)) return state
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`${name} için beklenen oda yaşam döngüsü durumu gelmedi`)
+  }
+  const roomMembership = (client, roomId) => new Promise((resolve) => {
+    client.emit('social:room-membership', { roomId }, resolve)
+  })
+
+  const listener = await connect('Dinleyici PC', 'listener-account', 'desktop')
+  const ownerDesktop = await connect('Oda Sahibi PC', 'owner-account', 'desktop')
+  let ownerPhone = await connect('Oda Sahibi Telefon', 'owner-account', 'companion')
+  const outsider = await connect('Yeni Dinleyici PC', 'outsider-account', 'desktop')
+
+  ownerDesktop.emit('social:create-room', { title: 'Dayanıklı oda', cover: 4 })
+  const initialRoom = await waitForState('Dinleyici PC', (state) => (
+    state.rooms[0]?.title === 'Dayanıklı oda'
+    && state.rooms[0]?.lifecycle === 'waiting'
+    && state.rooms[0]?.ownerDesktopOnline === true
+  ))
+  const roomId = initialRoom.rooms[0].id
+  assert.deepEqual(await roomMembership(listener, roomId), { ok: true, status: 'joined' })
+
+  const playbackAck = await new Promise((resolve) => {
+    ownerDesktop.emit('social:room-playback:update', {
+      roomId,
+      videoId: 'alpha4-lifecycle-video',
+      playbackPositionMs: 18_000,
+      playbackState: 'playing',
+      playbackRevision: 1,
+    }, resolve)
+  })
+  assert.equal(playbackAck.ok, true)
+  await waitForState('Dinleyici PC', (state) => state.rooms[0]?.lifecycle === 'live')
+
+  const failedResult = await new Promise((resolve) => {
+    listener.emit('social:room-playback:result', {
+      roomId,
+      playbackRevision: 1,
+      status: 'failed',
+      reason: 'track_unavailable',
+      error: 'Video is not available for this account',
+    }, resolve)
+  })
+  assert.deepEqual(failedResult, { ok: true })
+  const unavailableState = await waitForState('Dinleyici PC', (state) => (
+    state.rooms[0]?.viewerPlaybackStatus === 'unavailable'
+  ))
+  assert.equal(unavailableState.rooms[0].viewerPlaybackError, 'Video is not available for this account')
+
+  listener.emit('social:room-playback:result', {
+    roomId,
+    playbackRevision: 1,
+    status: 'applied',
+  })
+  await waitForState('Dinleyici PC', (state) => state.rooms[0]?.viewerPlaybackStatus === 'ready')
+
+  ownerDesktop.disconnect()
+  const offlineState = await waitForState('Dinleyici PC', (state) => (
+    state.rooms[0]?.id === roomId
+    && state.rooms[0]?.lifecycle === 'owner_offline'
+    && state.rooms[0]?.ownerDesktopOnline === false
+    && state.rooms[0]?.playback?.playbackRevision === 1
+  ))
+  assert.equal(offlineState.activeRoomId, roomId)
+
+  ownerPhone.disconnect()
+  const fullyOfflineState = await waitForState('Dinleyici PC', (state) => (
+    state.rooms[0]?.id === roomId
+    && state.rooms[0]?.lifecycle === 'owner_offline'
+    && state.rooms[0]?.memberCount === 2
+    && !state.users.some((user) => user.id === 'owner-account')
+  ))
+  assert.equal(fullyOfflineState.rooms[0].memberInitials.includes('OD'), true)
+
+  const offlineJoin = await roomMembership(outsider, roomId)
+  assert.deepEqual(offlineJoin, { ok: false, code: 'room_owner_offline' })
+  assert.deepEqual(await roomMembership(listener, roomId), { ok: true, status: 'left' })
+
+  ownerPhone = await connect('Oda Sahibi Telefon 2', 'owner-account', 'companion')
+  const ownerDesktopAgain = await connect('Oda Sahibi PC 2', 'owner-account', 'desktop')
+  await waitForState('Yeni Dinleyici PC', (state) => (
+    state.rooms[0]?.id === roomId
+    && state.rooms[0]?.lifecycle === 'live'
+    && state.rooms[0]?.playback?.playbackRevision === 1
+  ))
+  assert.deepEqual(await roomMembership(listener, roomId), { ok: true, status: 'joined' })
+
+  ownerPhone.emit('social:privacy', {
+    profileVisibility: 'everyone',
+    listeningVisibility: 'hidden',
+  })
+  await waitForState('Dinleyici PC', (state) => !state.activeRoomId && state.rooms.length === 0)
+
+  ownerPhone.emit('social:privacy', {
+    profileVisibility: 'everyone',
+    listeningVisibility: 'everyone',
+  })
+  await waitForState('Dinleyici PC', (state) => state.rooms[0]?.id === roomId)
+  assert.deepEqual(await roomMembership(listener, roomId), { ok: true, status: 'joined' })
+  ownerPhone.emit('social:block', { targetUserId: 'listener-account' })
+  await waitForState('Dinleyici PC', (state) => !state.activeRoomId && state.rooms.length === 0)
+
+  ownerPhone.emit('social:block', { targetUserId: 'listener-account' })
+  await waitForState('Dinleyici PC', (state) => state.rooms[0]?.id === roomId)
+  ownerDesktopAgain.emit('social:create-room', {})
+  await waitForState('Dinleyici PC', (state) => state.rooms.length === 0)
+})
+
 test('reddedilen mesaj isteği silinir ve yalnızca alıcı yeni istek başlatabilir', async (context) => {
   const httpServer = createServer()
   const io = new Server(httpServer, { cors: { origin: true } })

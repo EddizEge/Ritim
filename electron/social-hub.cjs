@@ -3,6 +3,12 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const MAX_ROOM_MEMBERS = 8
 const MAX_PLAYBACK_POSITION_MS = 24 * 60 * 60 * 1000
 
+function accountLookupKey(value) {
+  return UUID_PATTERN.test(value)
+    ? value
+    : crypto.createHash('sha256').update(value).digest('hex')
+}
+
 function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
 }
@@ -97,6 +103,14 @@ function createSocialHub(io, { store, onAbuse } = {}) {
 
   function socketsForAccount(accountId) {
     return socialSockets().filter((socket) => socket.data.socialAccountId === accountId)
+  }
+
+  function desktopAccountKeysForCurrentSockets() {
+    return new Set(
+      socialSockets()
+        .filter((socket) => socket.data.socialDeviceRole === 'desktop')
+        .map((socket) => accountLookupKey(socket.data.socialAccountId)),
+    )
   }
 
   function accountProfiles() {
@@ -225,11 +239,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   }
 
   function cleanOrphanedMemoryState(profiles) {
-    for (const [listenerId, targetId] of listening.entries()) {
-      if (!profiles.has(listenerId) || !profiles.has(targetId)) listening.delete(listenerId)
-    }
-    for (const socialRoom of rooms.values()) {
-      if (!profiles.has(socialRoom.ownerId)) rooms.delete(socialRoom.id)
+    for (const listenerId of listening.keys()) {
+      if (!profiles.has(listenerId)) listening.delete(listenerId)
     }
   }
 
@@ -284,6 +295,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     const playbackByRoom = store?.loadRoomPlaybacks
       ? await store.loadRoomPlaybacks(selectedRooms.map((room) => room.id))
       : roomPlayback
+    const desktopAccountKeys = desktopAccountKeysForCurrentSockets()
 
     for (const socket of socialSockets()) {
       const accountId = socket.data.socialAccountId
@@ -321,13 +333,37 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       ))
       const publicRooms = store
         ? visibleRooms.map((socialRoom) => ({
+            ...(() => {
+              const playback = playbackByRoom.get(socialRoom.id)
+              const ownerDesktopOnline = desktopAccountKeys.has(accountLookupKey(socialRoom.ownerId))
+              const latestResult = socketsForAccount(accountId)
+                .filter((peer) => (
+                  socialRoom.memberIds.includes(accountId)
+                  && socialRoom.ownerId !== accountId
+                  && peer.data.socialDeviceRole === 'desktop'
+                  && peer.data.socialRoomPlaybackResult?.roomId === socialRoom.id
+                  && peer.data.socialRoomPlaybackResult?.playbackRevision === playback?.playbackRevision
+                ))
+                .map((peer) => peer.data.socialRoomPlaybackResult)
+                .sort((left, right) => right.reportedAtMs - left.reportedAtMs)[0]
+              return {
+                ownerDesktopOnline,
+                lifecycle: ownerDesktopOnline ? (playback ? 'live' : 'waiting') : 'owner_offline',
+                viewerPlaybackStatus: latestResult?.status === 'failed'
+                  ? 'unavailable'
+                  : latestResult?.status === 'applied'
+                    ? 'ready'
+                    : 'idle',
+                viewerPlaybackError: latestResult?.status === 'failed' ? latestResult.error : undefined,
+              }
+            })(),
             id: socialRoom.id,
             ownerId: socialRoom.ownerId,
             title: socialRoom.title,
             memberCount: socialRoom.memberCount,
             maxMembers: MAX_ROOM_MEMBERS,
             cover: socialRoom.cover,
-            isLive: true,
+            isLive: desktopAccountKeys.has(accountLookupKey(socialRoom.ownerId)),
             memberInitials: socialRoom.memberInitials,
             playback: playbackByRoom.get(socialRoom.id),
             viewerRole: socialRoom.ownerId === accountId
@@ -342,15 +378,39 @@ function createSocialHub(io, { store, onAbuse } = {}) {
               if (targetId === socialRoom.ownerId) memberIds.add(memberId)
             }
             const memberProfiles = [...memberIds].map((id) => profiles.get(id)).filter(Boolean)
+            const memberInitials = memberProfiles.map((profile) => profile.initials)
+            if (!profiles.has(socialRoom.ownerId) && socialRoom.ownerInitials) {
+              memberInitials.unshift(socialRoom.ownerInitials)
+            }
+            const playback = playbackByRoom.get(socialRoom.id)
+            const ownerDesktopOnline = desktopAccountKeys.has(accountLookupKey(socialRoom.ownerId))
+            const latestResult = socketsForAccount(accountId)
+              .filter((peer) => (
+                selectedListening.get(accountId) === socialRoom.ownerId
+                && socialRoom.ownerId !== accountId
+                && peer.data.socialDeviceRole === 'desktop'
+                && peer.data.socialRoomPlaybackResult?.roomId === socialRoom.id
+                && peer.data.socialRoomPlaybackResult?.playbackRevision === playback?.playbackRevision
+              ))
+              .map((peer) => peer.data.socialRoomPlaybackResult)
+              .sort((left, right) => right.reportedAtMs - left.reportedAtMs)[0]
             return {
               id: socialRoom.id,
               ownerId: socialRoom.ownerId,
               title: socialRoom.title,
-              memberCount: memberProfiles.length,
+              memberCount: memberIds.size,
               maxMembers: MAX_ROOM_MEMBERS,
               cover: socialRoom.cover,
-              isLive: true,
-              memberInitials: memberProfiles.map((profile) => profile.initials).slice(0, 4),
+              isLive: ownerDesktopOnline,
+              ownerDesktopOnline,
+              lifecycle: ownerDesktopOnline ? (playback ? 'live' : 'waiting') : 'owner_offline',
+              viewerPlaybackStatus: latestResult?.status === 'failed'
+                ? 'unavailable'
+                : latestResult?.status === 'applied'
+                  ? 'ready'
+                  : 'idle',
+              viewerPlaybackError: latestResult?.status === 'failed' ? latestResult.error : undefined,
+              memberInitials: memberInitials.slice(0, 4),
               playback: playbackByRoom.get(socialRoom.id),
               viewerRole: socialRoom.ownerId === accountId
                 ? 'owner'
@@ -813,11 +873,20 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       if (store) {
         try {
           if (!targetId || targetId === senderId) await store.clearListening(senderId)
-          else if (accountProfiles().has(targetId)) await store.toggleListening(senderId, targetId)
+          else if (accountProfiles().has(targetId)) {
+            const ownerDesktopOnline = socketsForAccount(targetId)
+              .some((peer) => peer.data.socialDeviceRole === 'desktop')
+            if (!ownerDesktopOnline) throw new Error('Oda sahibi bilgisayarı çevrimdışı.')
+            await store.toggleListening(senderId, targetId)
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           socket.emit('social:error', {
-            code: /dolu/i.test(message) ? 'room_full' : 'room_not_found',
+            code: /çevrimdışı/i.test(message)
+              ? 'room_owner_offline'
+              : /erişim/i.test(message)
+                ? 'room_access_denied'
+                : /dolu/i.test(message) ? 'room_full' : 'room_not_found',
             event: 'listening',
           })
           return
@@ -831,6 +900,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           : 0
         if (!targetRoom) {
           socket.emit('social:error', { code: 'room_not_found', event: 'listening' })
+          return
+        }
+        if (!socketsForAccount(targetId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
+          socket.emit('social:error', { code: 'room_owner_offline', event: 'listening' })
           return
         }
         if (memberCount >= MAX_ROOM_MEMBERS) {
@@ -861,10 +934,22 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       let status
       if (store) {
         try {
+          const leaving = await store.isRoomListener(accountId, selectedRoomId)
+          if (!leaving) {
+            const ownerKey = await store.loadRoomOwnerKey(selectedRoomId)
+            if (!ownerKey) throw new Error('Dinleme odası bulunamadı.')
+            if (!desktopAccountKeysForCurrentSockets().has(ownerKey)) {
+              throw new Error('Oda sahibi bilgisayarı çevrimdışı.')
+            }
+          }
           status = await store.toggleRoomMembership(accountId, selectedRoomId)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          const code = /dolu/i.test(message)
+          const code = /çevrimdışı/i.test(message)
+            ? 'room_owner_offline'
+            : /erişim/i.test(message)
+              ? 'room_access_denied'
+              : /dolu/i.test(message)
             ? 'room_full'
             : /sahibi/i.test(message)
               ? 'room_owner'
@@ -887,6 +972,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           listening.delete(accountId)
           status = 'left'
         } else {
+          if (!socketsForAccount(room.ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
+            socket.emit('social:error', { code: 'room_owner_offline', event: 'room-membership' })
+            reply({ ok: false, code: 'room_owner_offline' })
+            return
+          }
           const memberCount = 1 + [...listening.values()]
             .filter((ownerId) => ownerId === room.ownerId).length
           if (memberCount >= MAX_ROOM_MEMBERS) {
@@ -897,6 +987,9 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           listening.set(accountId, room.ownerId)
           status = 'joined'
         }
+      }
+      for (const peer of socketsForAccount(accountId)) {
+        peer.data.socialRoomPlaybackResult = undefined
       }
       reply({ ok: true, status })
       await scheduleEmit()
@@ -910,6 +1003,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const cleanTitle = cleanText(title, 100) || `${owner.displayName} dinliyor`
       const cleanCover = Math.max(0, Math.min(11, Number(cover) || 0))
       if (store) {
+        const existing = (await store.loadRooms([ownerId])).some((room) => room.ownerId === ownerId)
+        if (!existing && !socketsForAccount(ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
+          socket.emit('social:error', { code: 'room_owner_offline', event: 'create-room' })
+          return
+        }
         await store.toggleRoom(ownerId, cleanTitle, cleanCover)
       } else {
         const existing = [...rooms.values()].find((socialRoom) => socialRoom.ownerId === ownerId)
@@ -921,9 +1019,19 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           }
         }
         else {
+          if (!socketsForAccount(ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
+            socket.emit('social:error', { code: 'room_owner_offline', event: 'create-room' })
+            return
+          }
           listening.delete(ownerId)
           const id = `room-${crypto.randomUUID()}`
-          rooms.set(id, { id, ownerId, title: cleanTitle, cover: cleanCover })
+          rooms.set(id, {
+            id,
+            ownerId,
+            ownerInitials: owner.initials,
+            title: cleanTitle,
+            cover: cleanCover,
+          })
         }
       }
       await scheduleEmit()
@@ -1028,6 +1136,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         reply({ ok: false, code: 'playback_result_forbidden' })
         return
       }
+      const previousResult = socket.data.socialRoomPlaybackResult
       socket.data.socialRoomPlaybackResult = {
         roomId,
         playbackRevision,
@@ -1041,6 +1150,12 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         reportedAtMs: Date.now(),
       }
       reply({ ok: true })
+      if (
+        previousResult?.roomId !== socket.data.socialRoomPlaybackResult.roomId
+        || previousResult?.playbackRevision !== socket.data.socialRoomPlaybackResult.playbackRevision
+        || previousResult?.status !== socket.data.socialRoomPlaybackResult.status
+        || previousResult?.error !== socket.data.socialRoomPlaybackResult.error
+      ) await scheduleEmit()
     }))
 
     socket.on('social:privacy', safely('Gizlilik ayarı güncellenemedi', async ({
@@ -1056,7 +1171,16 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         listeningVisibility: allowedValues.has(listeningVisibility) ? listeningVisibility : 'everyone',
       }
       if (store) await store.updatePrivacy(accountId, preferences)
-      else privacy.set(accountId, preferences)
+      else {
+        privacy.set(accountId, preferences)
+        if (preferences.listeningVisibility !== 'everyone') {
+          for (const [listenerId, ownerId] of listening.entries()) {
+            if (ownerId !== accountId) continue
+            const isContact = messageRequests.get(conversationKey(listenerId, accountId))?.status === 'accepted'
+            if (preferences.listeningVisibility === 'hidden' || !isContact) listening.delete(listenerId)
+          }
+        }
+      }
       await scheduleEmit()
     }))
 
@@ -1065,13 +1189,22 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const accountId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
       if (!accountId || !targetId || accountId === targetId || !accountProfiles().has(targetId)) return
-      if (store) await store.toggleBlock(accountId, targetId)
+      let blocked
+      if (store) blocked = await store.toggleBlock(accountId, targetId)
       else {
         const key = `${accountId}:${targetId}`
-        if (blocks.has(key)) blocks.delete(key)
-        else blocks.add(key)
+        if (blocks.has(key)) {
+          blocks.delete(key)
+          blocked = false
+        } else {
+          blocks.add(key)
+          blocked = true
+        }
       }
-      listening.delete(accountId)
+      if (blocked) {
+        if (listening.get(accountId) === targetId) listening.delete(accountId)
+        if (listening.get(targetId) === accountId) listening.delete(targetId)
+      }
       await scheduleEmit()
     }))
 

@@ -42,6 +42,7 @@ let roomPlaybackApplyChain = Promise.resolve()
 let socialClockEstimate = {}
 let socialClockPingInFlight = false
 let socialClockTimer
+let expectedSocialRoomExitUntil = 0
 let updateController
 let isShuttingDown = false
 let activeShellView = 'music'
@@ -331,7 +332,16 @@ function applyJoinedRoomPlayback(state) {
 
 function broadcastSocialState(status, incomingState) {
   socialConnectionStatus = status
-  const previous = incomingState || latestSocialState
+  const previousState = latestSocialState
+  const previous = incomingState || previousState
+  const lostActiveRoom = Boolean(
+    status === 'online'
+    && incomingState
+    && previousState?.activeRoomId
+    && !incomingState.activeRoomId
+  )
+  const expectedRoomExit = lostActiveRoom && expectedSocialRoomExitUntil >= Date.now()
+  if (lostActiveRoom) expectedSocialRoomExitUntil = 0
   latestSocialState = {
     currentUser: previous?.currentUser || desktopSocialProfile(),
     privacy: previous?.privacy || {
@@ -346,6 +356,9 @@ function broadcastSocialState(status, incomingState) {
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
     activeRoomId: previous?.activeRoomId,
+    roomNotice: lostActiveRoom && !expectedRoomExit
+      ? 'Dinleme odası kapatıldı veya erişimin kaldırıldı.'
+      : undefined,
     authentication: socialAuthStatus,
     connectionStatus: status,
   }
@@ -387,7 +400,12 @@ async function startSocialClient({ forceRefresh = false } = {}) {
     })
     measureSocialClock()
   })
-  socialSocket.on('disconnect', () => broadcastSocialState('offline'))
+  socialSocket.on('disconnect', () => {
+    appliedPlaybackRoomId = ''
+    scheduledPlaybackRevision = 0
+    pendingRoomPlayback = undefined
+    broadcastSocialState('offline')
+  })
   let authRetryUsed = false
   socialSocket.on('connect_error', (error) => {
     broadcastSocialState('offline')
@@ -608,8 +626,16 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
     if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
     if (action.type === 'block') socialSocket.emit('social:block', payload)
-    if (action.type === 'listening') socialSocket.emit('social:listening', payload)
+    if (action.type === 'listening') {
+      if (latestSocialState?.listeningWithUserId === payload.targetUserId) {
+        expectedSocialRoomExitUntil = Date.now() + 5_000
+      }
+      socialSocket.emit('social:listening', payload)
+    }
     if (action.type === 'create-room') {
+      if (latestSocialState?.rooms?.some((room) => room.viewerRole === 'owner')) {
+        expectedSocialRoomExitUntil = Date.now() + 5_000
+      }
       const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
       socialSocket.emit('social:create-room', {
         ...payload,

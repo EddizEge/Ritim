@@ -1140,18 +1140,49 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
   }
 
   async function updatePrivacy(accountId: string, preferences: PrivacyPreferences) {
-    const result = UUID_PATTERN.test(accountId)
-      ? await pool.query(
-          `update ritim.users set profile_visibility = $2, listening_visibility = $3
-           where public_id = $1`,
-          [accountId, preferences.profileVisibility, preferences.listeningVisibility],
-        )
-      : await pool.query(
-          `update ritim.users set profile_visibility = $2, listening_visibility = $3
-           where legacy_account_id_hash = $1`,
-          [sha256(accountId), preferences.profileVisibility, preferences.listeningVisibility],
-        )
-    if (!result.rowCount) throw new Error('Gizlilik ayarı için kullanıcı bulunamadı.')
+    const removedMemberKeys = await inTransaction(pool, async (client) => {
+      const ownerId = await findUserId(client, accountId)
+      if (!ownerId) throw new Error('Gizlilik ayarı için kullanıcı bulunamadı.')
+      await client.query(
+        `update ritim.users
+         set profile_visibility = $2, listening_visibility = $3
+         where id = $1`,
+        [ownerId, preferences.profileVisibility, preferences.listeningVisibility],
+      )
+      if (preferences.listeningVisibility === 'everyone') return []
+      const removed = await client.query<{ account_key: string }>(
+        `update ritim.room_members member
+         set left_at = now()
+         from ritim.listening_rooms room, ritim.users listener
+         where member.room_id = room.id
+           and listener.id = member.user_id
+           and room.owner_id = $1
+           and room.ended_at is null
+           and member.role = 'listener'
+           and member.left_at is null
+           and (
+             $2 = 'hidden'
+             or not exists (
+               select 1
+               from ritim.message_requests request
+               where request.status = 'accepted'
+                 and (
+                   (request.requester_id = $1 and request.recipient_id = member.user_id)
+                   or (request.requester_id = member.user_id and request.recipient_id = $1)
+                 )
+             )
+           )
+         returning coalesce(
+           encode(listener.legacy_account_id_hash, 'hex'),
+           listener.public_id::text
+         ) as account_key`,
+        [ownerId, preferences.listeningVisibility],
+      )
+      return removed.rows.map((row) => redisKeyFromDatabaseAccountKey(row.account_key))
+    })
+    await Promise.all(removedMemberKeys.map((memberKey) => (
+      redis.del(`ritim:listening:${memberKey}`)
+    )))
   }
 
   async function toggleBlock(blockerAccountId: string, blockedAccountId: string) {
@@ -1168,6 +1199,20 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         `insert into ritim.blocks (blocker_id, blocked_id)
          values ($1, $2)
          on conflict (blocker_id, blocked_id) do nothing`,
+        [blockerId, blockedId],
+      )
+      await client.query(
+        `update ritim.room_members member
+         set left_at = now()
+         from ritim.listening_rooms room
+         where member.room_id = room.id
+           and room.ended_at is null
+           and member.role = 'listener'
+           and member.left_at is null
+           and (
+             (room.owner_id = $1 and member.user_id = $2)
+             or (room.owner_id = $2 and member.user_id = $1)
+           )`,
         [blockerId, blockedId],
       )
       return true
@@ -1375,18 +1420,27 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
        left join ritim.room_members member on member.room_id = room.id
        left join ritim.users member_user on member_user.id = member.user_id
        where room.ended_at is null
-         and coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text)
-               in (${placeholders})
+          and (
+            coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text)
+              in (${placeholders})
+            or exists (
+              select 1
+              from ritim.room_members viewer_member
+              join ritim.users viewer on viewer.id = viewer_member.user_id
+              where viewer_member.room_id = room.id
+                and viewer_member.left_at is null
+                and coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text)
+                  in (${placeholders})
+            )
+          )
        group by room.id, owner.legacy_account_id_hash, owner.public_id
        order by room.started_at asc`,
       keys,
     )
     return result.rows.flatMap((row) => {
-      const ownerId = accountByKey.get(row.owner_key)
-      if (!ownerId) return []
       return [{
         id: `room-${row.public_id}`,
-        ownerId,
+        ownerId: accountByKey.get(row.owner_key) || row.owner_key,
         title: row.title,
         cover: Number(row.cover) || 0,
         memberCount: Number(row.member_count) || 0,
@@ -1397,6 +1451,22 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         }),
       }]
     })
+  }
+
+  async function loadRoomOwnerKey(roomPublicId: string) {
+    const selectedRoomId = roomPublicId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(selectedRoomId)) return undefined
+    const result = await pool.query<{ owner_key: string }>(
+      `select coalesce(
+         encode(owner.legacy_account_id_hash, 'hex'),
+         owner.public_id::text
+       ) as owner_key
+       from ritim.listening_rooms room
+       join ritim.users owner on owner.id = room.owner_id
+       where room.public_id = $1 and room.ended_at is null`,
+      [selectedRoomId],
+    )
+    return result.rows[0]?.owner_key
   }
 
   async function toggleRoomMembership(listenerAccountId: string, roomPublicId: string) {
@@ -1570,6 +1640,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     toggleRoom,
     loadRooms,
     loadRoomPlaybacks,
+    loadRoomOwnerKey,
     publishRoomPlayback,
     isRoomListener,
     toggleRoomMembership,
