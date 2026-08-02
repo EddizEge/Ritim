@@ -16,6 +16,7 @@ type RedisClient = {
   set: (key: string, value: string, options?: { EX: number }) => Promise<unknown>
   del: (key: string) => Promise<unknown>
   mGet: (keys: string[]) => Promise<(string | null)[]>
+  eval: (script: string, options: { keys: string[]; arguments: string[] }) => Promise<unknown>
 }
 
 type SocialProfile = {
@@ -72,6 +73,16 @@ type StoredRoom = {
   memberCount: number
   memberInitials: string[]
   memberIds: string[]
+}
+
+type RoomPlayback = {
+  roomId: string
+  ownerId: string
+  videoId: string
+  playbackPositionMs: number
+  playbackState: 'playing' | 'paused'
+  playbackRevision: number
+  serverTimeMs?: number
 }
 
 type StoredReaction = {
@@ -1194,11 +1205,11 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            and member.left_at is null`,
         [ownerId],
       )
-      const ended = await client.query<{ id: string }>(
+      const ended = await client.query<{ id: string; public_id: string }>(
         `update ritim.listening_rooms
          set ended_at = now()
          where owner_id = $1 and ended_at is null
-         returning id`,
+         returning id, public_id`,
         [ownerId],
       )
       if (ended.rowCount) {
@@ -1210,6 +1221,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         )
         return {
           created: false,
+          endedRoomPublicIds: ended.rows.map((row) => row.public_id),
           memberRedisKeys: activeMemberKeys.rows.map((row) => (
             redisKeyFromDatabaseAccountKey(row.account_key)
           )),
@@ -1235,6 +1247,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       )
       return {
         created: true,
+        endedRoomPublicIds: [],
         memberRedisKeys: [hashHex(ownerAccountId)],
       }
     })
@@ -1243,7 +1256,65 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         redis.del(`ritim:listening:${memberKey}`)
       )))
     }
+    if (result.endedRoomPublicIds.length) {
+      await Promise.all(result.endedRoomPublicIds.map((roomPublicId) => (
+        redis.del(`ritim:room-playback:${roomPublicId}`)
+      )))
+    }
     return result.created
+  }
+
+  async function loadRoomPlaybacks(roomIds: string[]) {
+    const publicIds = roomIds.map((roomId) => roomId.replace(/^room-/, ''))
+    if (!publicIds.length) return new Map<string, RoomPlayback>()
+    const values = await redis.mGet(publicIds.map((publicId) => `ritim:room-playback:${publicId}`))
+    const playbacks = new Map<string, RoomPlayback>()
+    values.forEach((value, index) => {
+      if (!value) return
+      try {
+        const playback = JSON.parse(value) as RoomPlayback
+        if (playback.roomId === `room-${publicIds[index]}` && playback.playbackRevision > 0) {
+          playbacks.set(playback.roomId, playback)
+        }
+      } catch {}
+    })
+    return playbacks
+  }
+
+  async function publishRoomPlayback(ownerAccountId: string, playback: RoomPlayback) {
+    const roomPublicId = playback.roomId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(roomPublicId)) throw new Error('Oda oynatma yetkisi bulunamadı.')
+    const ownerResult = await pool.query(
+      `select 1
+       from ritim.listening_rooms room
+       join ritim.users owner on owner.id = room.owner_id
+       where room.public_id = $1
+         and room.ended_at is null
+         and coalesce(encode(owner.legacy_account_id_hash, 'hex'), owner.public_id::text) = $2`,
+      [roomPublicId, accountKey(ownerAccountId)],
+    )
+    if (!ownerResult.rowCount) throw new Error('Oda oynatma yetkisi bulunamadı.')
+
+    const result = await redis.eval(
+      `local current = redis.call('GET', KEYS[1])
+       if current then
+         local decoded = cjson.decode(current)
+         if tonumber(decoded.playbackRevision or 0) >= tonumber(ARGV[1]) then
+           return cjson.encode({ accepted = false, playback = decoded })
+         end
+       end
+       local clock = redis.call('TIME')
+       local decoded = cjson.decode(ARGV[2])
+       decoded.serverTimeMs = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+       local encoded = cjson.encode(decoded)
+       redis.call('SET', KEYS[1], encoded, 'EX', 21600)
+       return cjson.encode({ accepted = true, playback = decoded })`,
+      {
+        keys: [`ritim:room-playback:${roomPublicId}`],
+        arguments: [String(playback.playbackRevision), JSON.stringify(playback)],
+      },
+    )
+    return JSON.parse(String(result)) as { accepted: boolean; playback: RoomPlayback }
   }
 
   async function loadRooms(accountIds: string[]): Promise<StoredRoom[]> {
@@ -1480,6 +1551,8 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     toggleBlock,
     toggleRoom,
     loadRooms,
+    loadRoomPlaybacks,
+    publishRoomPlayback,
     toggleRoomMembership,
     toggleListening,
     loadListening,

@@ -1143,6 +1143,48 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
   }
 
+  async function applyAuthoritativeRoomPlayback(playback) {
+    const videoId = String(playback?.videoId || '').trim()
+    const position = Math.max(0, Number(playback?.playbackPositionMs) || 0) / 1000
+    const shouldPlay = playback?.playbackState === 'playing'
+    if (!videoId || !['playing', 'paused'].includes(playback?.playbackState)) {
+      throw new Error('Oda oynatma durumu geçersiz')
+    }
+
+    const currentVideoId = state.catalog?.[state.trackId]?.youtubeVideoId || ''
+    if (currentVideoId !== videoId) {
+      expectedVideoId = videoId
+      expectedTrackTitle = ''
+      expectedVideoDeadline = Date.now() + 10_000
+      const queued = await clickQueueMusicItem({ videoId, title: '' })
+      if (!queued?.success) {
+        await queueNavigation(`https://music.youtube.com/watch?v=${encodeURIComponent(videoId)}`)
+      }
+      await waitForPlayerTrack(videoId, '', 9_000)
+    }
+
+    const applied = await webContents.executeJavaScript(`(() => {
+      const media = [...document.querySelectorAll('video, audio')]
+        .find((item) => Number.isFinite(item.duration) && item.duration > 0);
+      if (!media) return Promise.resolve({ applied: false, reason: 'media_missing' });
+      media.currentTime = Math.min(${JSON.stringify(position)}, media.duration || ${JSON.stringify(position)});
+      const shouldPlay = ${JSON.stringify(shouldPlay)};
+      if (!shouldPlay && !media.paused) media.pause();
+      if (shouldPlay && media.paused) {
+        return Promise.resolve(media.play())
+          .then(() => ({ applied: true, isPlaying: true, position: media.currentTime }))
+          .catch(() => ({ applied: false, reason: 'autoplay_blocked' }));
+      }
+      return Promise.resolve({ applied: true, isPlaying: !media.paused, position: media.currentTime });
+    })()`, true)
+    if (!applied?.applied && applied?.reason === 'autoplay_blocked') sendKey('MediaPlayPause')
+    if (!applied?.applied && applied?.reason !== 'autoplay_blocked') {
+      throw new Error('YouTube Music oynatıcısı oda durumunu uygulamaya hazır değil')
+    }
+    setTimeout(() => void capture(), 120)
+    return applied
+  }
+
   function commandCoalescingKey(incoming) {
     const type = String(incoming?.type || '')
     if (!['loadMoreBrowse', 'requestLyrics', 'requestRelated'].includes(type) && !type.startsWith('navigate:')) return ''
@@ -1685,6 +1727,11 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   return {
     capture,
     command,
+    applyRoomPlayback(playback) {
+      const task = commandQueue.catch(() => {}).then(() => applyAuthoritativeRoomPlayback(playback))
+      commandQueue = task
+      return task
+    },
     destroy() {
       destroyed = true
       pendingNavigation = null

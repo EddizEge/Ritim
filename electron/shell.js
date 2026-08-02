@@ -181,7 +181,11 @@ function renderRooms() {
     header.append(live, members)
     const title = document.createElement('b')
     title.textContent = room.title
-    card.append(header, title)
+    const playback = document.createElement('small')
+    playback.textContent = room.playback
+      ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
+      : 'Oynatma bekleniyor'
+    card.append(header, title, playback)
     roomsList.append(card)
   }
 }

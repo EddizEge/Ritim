@@ -217,6 +217,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   if (!deliveredNotificationsRef.current) deliveredNotificationsRef.current = deliveredNotificationIds()
   const deliveredNotificationSet = deliveredNotificationsRef.current
   const connectSocialRef = useRef<() => void>(() => {})
+  const playbackPublishRef = useRef({ roomId: '', revision: 0, signature: '' })
 
   const joinSocialAccount = useCallback(() => {
     socialSocket.emit('social:join', {
@@ -335,6 +336,40 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   useEffect(() => {
     if (socialSocket.connected) socialSocket.emit('social:profile', { profile: localProfile })
   }, [localProfile])
+
+  const ownedRoom = snapshot.rooms.find((room) => room.viewerRole === 'owner')
+  const ownedRoomId = ownedRoom?.id || ''
+  const ownedRoomRevision = Number(ownedRoom?.playback?.playbackRevision) || 0
+  useEffect(() => {
+    if (isCompanion || !socialSocket.connected || !ownedRoomId || !currentTrack.videoId) return
+    const publishState = playbackPublishRef.current
+    if (publishState.roomId !== ownedRoomId) {
+      publishState.roomId = ownedRoomId
+      publishState.revision = ownedRoomRevision
+      publishState.signature = ''
+    } else {
+      publishState.revision = Math.max(publishState.revision, ownedRoomRevision)
+    }
+    const playbackPositionMs = Math.max(0, Math.round((Number(currentTrack.position) || 0) * 1000))
+    const playbackState = currentTrack.isPlaying ? 'playing' : 'paused'
+    const signature = JSON.stringify([currentTrack.videoId, playbackPositionMs, playbackState])
+    if (signature === publishState.signature) return
+    publishState.signature = signature
+    const playbackRevision = ++publishState.revision
+    socialSocket.emit('social:room-playback:update', {
+      roomId: ownedRoomId,
+      videoId: currentTrack.videoId,
+      playbackPositionMs,
+      playbackState,
+      playbackRevision,
+    }, (result: { ok?: boolean; playback?: { playbackRevision?: number } } = {}) => {
+      publishState.revision = Math.max(
+        publishState.revision,
+        Number(result.playback?.playbackRevision) || 0,
+      )
+      if (!result.ok) publishState.signature = ''
+    })
+  }, [currentTrack.isPlaying, currentTrack.position, currentTrack.videoId, isCompanion, ownedRoomId, ownedRoomRevision])
 
   useEffect(() => {
     if (!snapshot.notificationPreferences.deviceEnabled || !document.hidden) return

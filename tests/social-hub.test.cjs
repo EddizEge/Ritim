@@ -216,6 +216,74 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   ))
   assert.equal(listeningState.rooms[0].memberCount, 2)
 
+  const firstPlayback = await new Promise((resolve) => {
+    desktopB.emit('social:room-playback:update', {
+      roomId: ownerRoomState.rooms[0].id,
+      videoId: 'alpha4-video-one',
+      playbackPositionMs: 42_000,
+      playbackState: 'playing',
+      playbackRevision: 1,
+    }, resolve)
+  })
+  assert.equal(firstPlayback.ok, true)
+  assert.equal(firstPlayback.playback.ownerId, 'account-b')
+  assert.equal(firstPlayback.playback.serverTimeMs > 0, true)
+  const synchronizedPlayback = await waitForState('Ediz Telefon', (state) => (
+    state.rooms[0]?.playback?.playbackRevision === 1
+    && state.rooms[0].playback.videoId === 'alpha4-video-one'
+  ))
+  assert.equal(synchronizedPlayback.rooms[0].playback.playbackPositionMs, 42_000)
+
+  const duplicatePlayback = await new Promise((resolve) => {
+    desktopB.emit('social:room-playback:update', {
+      roomId: ownerRoomState.rooms[0].id,
+      videoId: 'alpha4-video-old',
+      playbackPositionMs: 1_000,
+      playbackState: 'paused',
+      playbackRevision: 1,
+    }, resolve)
+  })
+  assert.equal(duplicatePlayback.ok, false)
+  assert.equal(duplicatePlayback.code, 'stale_revision')
+  assert.equal(duplicatePlayback.playback.videoId, 'alpha4-video-one')
+
+  const companionSpoof = await new Promise((resolve) => {
+    phoneB.emit('social:room-playback:update', {
+      roomId: ownerRoomState.rooms[0].id,
+      videoId: 'companion-spoof',
+      playbackPositionMs: 0,
+      playbackState: 'playing',
+      playbackRevision: 2,
+    }, resolve)
+  })
+  assert.deepEqual(companionSpoof, { ok: false, code: 'playback_forbidden' })
+
+  const listenerSpoof = await new Promise((resolve) => {
+    desktopA.emit('social:room-playback:update', {
+      roomId: ownerRoomState.rooms[0].id,
+      videoId: 'listener-spoof',
+      playbackPositionMs: 0,
+      playbackState: 'playing',
+      playbackRevision: 2,
+    }, resolve)
+  })
+  assert.deepEqual(listenerSpoof, { ok: false, code: 'playback_forbidden' })
+
+  const secondPlayback = await new Promise((resolve) => {
+    desktopB.emit('social:room-playback:update', {
+      roomId: ownerRoomState.rooms[0].id,
+      videoId: 'alpha4-video-two',
+      playbackPositionMs: 9_500,
+      playbackState: 'paused',
+      playbackRevision: 2,
+    }, resolve)
+  })
+  assert.equal(secondPlayback.ok, true)
+  await waitForState('Ediz PC', (state) => (
+    state.rooms[0]?.playback?.playbackRevision === 2
+    && state.rooms[0].playback.playbackState === 'paused'
+  ))
+
   const leftRoom = await new Promise((resolve) => {
     desktopA.emit('social:room-membership', { roomId: ownerRoomState.rooms[0].id }, resolve)
   })

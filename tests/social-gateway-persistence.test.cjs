@@ -6,6 +6,7 @@ const gatewayUrl = process.env.RITIM_SOCIAL_TEST_URL
 const phase = process.env.RITIM_SOCIAL_TEST_PHASE || 'seed'
 const messageText = 'Alpha2 kalıcı mesaj'
 const roomTitle = 'Alpha2 kalıcı oda'
+const playbackVideoId = 'alpha4-persistent-video'
 const accountA = process.env.RITIM_SOCIAL_TEST_ACCOUNT_A || 'alpha2-persistence-account-a'
 const accountB = process.env.RITIM_SOCIAL_TEST_ACCOUNT_B || 'alpha2-persistence-account-b'
 const accessTokenA = process.env.RITIM_SOCIAL_TEST_ACCESS_TOKEN_A
@@ -89,6 +90,16 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
       clientA.emit('social:room-membership', { roomId }, resolve)
     })
     assert.deepEqual(joined, { ok: true, status: 'joined' })
+    const playback = await new Promise((resolve) => {
+      clientB.emit('social:room-playback:update', {
+        roomId,
+        videoId: playbackVideoId,
+        playbackPositionMs: 64_000,
+        playbackState: 'playing',
+        playbackRevision: 7,
+      }, resolve)
+    })
+    assert.equal(playback.ok, true)
   }
 
   const persistedState = await waitForState(states, 'Alpha Bir', (state) => (
@@ -97,6 +108,8 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
       room.title === roomTitle
       && room.viewerRole === 'listener'
       && room.memberCount === 2
+      && room.playback?.playbackRevision === 7
+      && room.playback?.videoId === playbackVideoId
     ))
   ))
   assert.equal(
@@ -107,9 +120,26 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
   assert.equal(persistedRoom.cover, 4)
   assert.equal(persistedRoom.ownerId, accountB)
   assert.equal(persistedRoom.maxMembers, 8)
+  assert.equal(persistedRoom.playback.playbackPositionMs, 64_000)
+  assert.equal(persistedRoom.playback.playbackState, 'playing')
   const recipientState = await waitForState(states, 'Alpha İki', (state) => (
     state.unreadCounts[accountA] >= 1
     && state.rooms.some((room) => room.viewerRole === 'owner' && room.memberCount === 2)
   ))
   assert.equal(recipientState.unreadCounts[accountA] >= 1, true)
+
+  if (phase !== 'seed') {
+    const stalePlayback = await new Promise((resolve) => {
+      clientB.emit('social:room-playback:update', {
+        roomId: persistedRoom.id,
+        videoId: 'alpha4-stale-video',
+        playbackPositionMs: 1_000,
+        playbackState: 'paused',
+        playbackRevision: 7,
+      }, resolve)
+    })
+    assert.equal(stalePlayback.ok, false)
+    assert.equal(stalePlayback.code, 'stale_revision')
+    assert.equal(stalePlayback.playback.videoId, playbackVideoId)
+  }
 })
