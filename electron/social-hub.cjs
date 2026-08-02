@@ -30,6 +30,7 @@ function sanitizeRoomPlayback(value, ownerId) {
   if (
     !roomId
     || !videoId
+    || !Number.isSafeInteger(playbackRevision)
     || playbackRevision < 1
     || playbackPositionMs < 0
     || playbackPositionMs > MAX_PLAYBACK_POSITION_MS
@@ -983,6 +984,63 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       }
       reply({ ok: true, playback: result.playback })
       await scheduleEmit()
+    }))
+
+    socket.on('social:clock:ping', ({ requestId, clientSentAtMs } = {}, acknowledge) => {
+      if (typeof acknowledge !== 'function') return
+      if (!socket.data.socialAccountId || !eventAllowed(socket, 'clock-ping', 30, 60_000)) {
+        acknowledge({ ok: false })
+        return
+      }
+      acknowledge({
+        ok: true,
+        requestId: cleanText(requestId, 80),
+        clientSentAtMs: Number(clientSentAtMs) || 0,
+        serverTimeMs: Date.now(),
+      })
+    })
+
+    socket.on('social:room-playback:result', safely('Oda oynatma sonucu kaydedilemedi', async (payload = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'room-playback-result', 180, 60_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
+      const accountId = socket.data.socialAccountId
+      const roomId = cleanText(payload.roomId, 80)
+      const playbackRevision = Math.floor(Number(payload.playbackRevision) || 0)
+      if (
+        !accountId
+        || socket.data.socialDeviceRole !== 'desktop'
+        || !roomId
+        || !Number.isSafeInteger(playbackRevision)
+        || playbackRevision < 1
+      ) {
+        reply({ ok: false, code: 'playback_result_forbidden' })
+        return
+      }
+      const allowed = store?.isRoomListener
+        ? await store.isRoomListener(accountId, roomId)
+        : Boolean(rooms.get(roomId) && listening.get(accountId) === rooms.get(roomId).ownerId)
+      if (!allowed) {
+        reply({ ok: false, code: 'playback_result_forbidden' })
+        return
+      }
+      socket.data.socialRoomPlaybackResult = {
+        roomId,
+        playbackRevision,
+        status: payload.status === 'applied' ? 'applied' : 'failed',
+        seekApplied: Boolean(payload.seekApplied),
+        playbackStateApplied: Boolean(payload.playbackStateApplied),
+        driftMs: Math.max(-86_400_000, Math.min(86_400_000, Number(payload.driftMs) || 0)),
+        roundTripMs: Math.max(0, Math.min(60_000, Number(payload.roundTripMs) || 0)),
+        reason: cleanText(payload.reason, 64),
+        error: cleanText(payload.error, 240),
+        reportedAtMs: Date.now(),
+      }
+      reply({ ok: true })
     }))
 
     socket.on('social:privacy', safely('Gizlilik ayarı güncellenemedi', async ({

@@ -6,6 +6,7 @@ const path = require('node:path')
 const QRCode = require('qrcode')
 const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
+const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
@@ -38,6 +39,9 @@ let scheduledPlaybackRevision = 0
 let pendingRoomPlayback
 let roomPlaybackApplyRunning = false
 let roomPlaybackApplyChain = Promise.resolve()
+let socialClockEstimate = {}
+let socialClockPingInFlight = false
+let socialClockTimer
 let updateController
 let isShuttingDown = false
 let activeShellView = 'music'
@@ -58,6 +62,9 @@ if (!hasSingleInstanceLock) {
 
 function stopRuntime() {
   socialStartSequence += 1
+  if (socialClockTimer) clearInterval(socialClockTimer)
+  socialClockTimer = undefined
+  socialClockPingInFlight = false
   socialSocket?.disconnect()
   socialSocket = null
   musicBridge?.destroy()
@@ -238,6 +245,49 @@ function publishOwnedRoomPlayback() {
   })
 }
 
+function measureSocialClock() {
+  const listenerRoom = latestSocialState?.rooms?.find((candidate) => candidate.viewerRole === 'listener')
+  if (!listenerRoom || !socialSocket?.connected || socialClockPingInFlight) return
+  const activeSocket = socialSocket
+  const requestId = crypto.randomUUID()
+  const clientSentAtMs = Date.now()
+  socialClockPingInFlight = true
+  let settled = false
+  const finish = () => {
+    if (settled) return false
+    settled = true
+    socialClockPingInFlight = false
+    clearTimeout(timeout)
+    return true
+  }
+  const timeout = setTimeout(() => finish(), 3_000)
+  activeSocket.emit('social:clock:ping', { requestId, clientSentAtMs }, (result = {}) => {
+    const clientReceivedAtMs = Date.now()
+    if (!finish() || activeSocket !== socialSocket || result.requestId !== requestId) return
+    if (!Number.isFinite(Number(result.serverTimeMs))) return
+    socialClockEstimate = updateClockEstimate(socialClockEstimate, {
+      clientSentAtMs,
+      clientReceivedAtMs,
+      serverTimeMs: Number(result.serverTimeMs),
+    })
+  })
+}
+
+function reportRoomPlaybackResult(playback, result) {
+  if (!socialSocket?.connected || !playback?.roomId || !playback?.playbackRevision) return
+  socialSocket.emit('social:room-playback:result', {
+    roomId: playback.roomId,
+    playbackRevision: playback.playbackRevision,
+    status: result?.applied ? 'applied' : 'failed',
+    seekApplied: Boolean(result?.seekApplied),
+    playbackStateApplied: Boolean(result?.playbackStateApplied),
+    driftMs: Number(result?.driftMs) || 0,
+    roundTripMs: Number(socialClockEstimate.roundTripMs) || 0,
+    reason: result?.reason,
+    error: result?.error,
+  })
+}
+
 function applyJoinedRoomPlayback(state) {
   const room = state?.rooms?.find((candidate) => candidate.viewerRole === 'listener')
   const playback = room?.playback
@@ -262,9 +312,15 @@ function applyJoinedRoomPlayback(state) {
       const nextPlayback = pendingRoomPlayback
       pendingRoomPlayback = undefined
       try {
-        await musicBridge?.applyRoomPlayback(nextPlayback)
+        const result = await musicBridge?.applyRoomPlayback(nextPlayback, socialClockEstimate)
+        reportRoomPlaybackResult(nextPlayback, result)
       } catch (error) {
         console.warn('[Ritim Social] Oda oynatma durumu uygulanamadı:', error?.message || error)
+        reportRoomPlaybackResult(nextPlayback, {
+          applied: false,
+          reason: 'apply_failed',
+          error: error?.message || String(error),
+        })
       }
     }
   })().finally(() => {
@@ -298,6 +354,10 @@ function broadcastSocialState(status, incomingState) {
 
 async function startSocialClient({ forceRefresh = false } = {}) {
   const sequence = ++socialStartSequence
+  if (socialClockTimer) clearInterval(socialClockTimer)
+  socialClockTimer = undefined
+  socialClockPingInFlight = false
+  socialClockEstimate = {}
   socialSocket?.disconnect()
   broadcastSocialState('connecting')
   let accessToken = ''
@@ -325,6 +385,7 @@ async function startSocialClient({ forceRefresh = false } = {}) {
       deviceRole: 'desktop',
       profile: desktopSocialProfile(),
     })
+    measureSocialClock()
   })
   socialSocket.on('disconnect', () => broadcastSocialState('offline'))
   let authRetryUsed = false
@@ -346,7 +407,10 @@ async function startSocialClient({ forceRefresh = false } = {}) {
     broadcastSocialState('online', state)
     publishOwnedRoomPlayback()
     applyJoinedRoomPlayback(state)
+    if (Date.now() - (Number(socialClockEstimate.measuredAtMs) || 0) >= 5_000) measureSocialClock()
   })
+  socialClockTimer = setInterval(measureSocialClock, 5_000)
+  socialClockTimer.unref?.()
 }
 
 function createMusicView() {
