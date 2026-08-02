@@ -41,6 +41,17 @@ export type SocialRoom = {
   isLive: boolean
   memberInitials: string[]
   viewerRole?: 'owner' | 'listener'
+  playback?: SocialRoomPlayback
+}
+
+export type SocialRoomPlayback = {
+  roomId: string
+  ownerId: string
+  videoId: string
+  playbackPositionMs: number
+  playbackState: 'playing' | 'paused'
+  playbackRevision: number
+  serverTimeMs: number
 }
 
 export type SocialMessage = {

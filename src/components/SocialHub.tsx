@@ -141,13 +141,16 @@ function SocialRoomCard({
   const owner = room.viewerRole === 'owner'
   const listening = room.viewerRole === 'listener'
   const actionLabel = owner ? 'Senin odan' : listening ? 'Odadan ayrıl' : full ? 'Oda dolu' : 'Odaya katıl'
+  const playbackLabel = room.playback
+    ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
+    : 'Oynatma bekleniyor'
 
   return (
     <article className={`${mobile ? 'mobile-room-card' : 'social-room-card'} ${room.viewerRole ? 'is-active' : ''}`}>
       <Cover index={room.cover} className={mobile ? 'mobile-room-cover' : 'social-room-cover'} label="" />
       <span className={mobile ? 'mobile-room-live' : 'social-room-live'}><i />CANLI</span>
       <b>{room.title}</b>
-      <small>{room.memberCount}/{room.maxMembers} kişi</small>
+      <small>{room.memberCount}/{room.maxMembers} kişi • {playbackLabel}</small>
       <span className={mobile ? 'mobile-room-members' : 'social-room-members'}>
         {room.memberInitials.slice(0, 3).map((initials, index) => (
           <i key={`${room.id}-${initials}-${index}`}>{initials}</i>

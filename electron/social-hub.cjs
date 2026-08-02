@@ -1,6 +1,7 @@
 const crypto = require('node:crypto')
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_ROOM_MEMBERS = 8
+const MAX_PLAYBACK_POSITION_MS = 24 * 60 * 60 * 1000
 
 function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
@@ -21,11 +22,35 @@ function sanitizeTrack(track) {
   }
 }
 
+function sanitizeRoomPlayback(value, ownerId) {
+  const roomId = cleanText(value?.roomId, 80)
+  const videoId = cleanText(value?.videoId, 32)
+  const playbackRevision = Math.floor(Number(value?.playbackRevision) || 0)
+  const playbackPositionMs = Math.floor(Number(value?.playbackPositionMs) || 0)
+  if (
+    !roomId
+    || !videoId
+    || playbackRevision < 1
+    || playbackPositionMs < 0
+    || playbackPositionMs > MAX_PLAYBACK_POSITION_MS
+    || !['playing', 'paused'].includes(value?.playbackState)
+  ) return null
+  return {
+    roomId,
+    ownerId,
+    videoId,
+    playbackPositionMs,
+    playbackState: value.playbackState,
+    playbackRevision,
+  }
+}
+
 function createSocialHub(io, { store, onAbuse } = {}) {
   const messages = []
   const reactions = new Map()
   const listening = new Map()
   const rooms = new Map()
+  const roomPlayback = new Map()
   const privacy = new Map()
   const blocks = new Set()
   const readMarkers = new Map()
@@ -255,6 +280,9 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           memoryModeration(accountIds),
         ]
     const privacyByAccount = new Map(privacyEntries)
+    const playbackByRoom = store?.loadRoomPlaybacks
+      ? await store.loadRoomPlaybacks(selectedRooms.map((room) => room.id))
+      : roomPlayback
 
     for (const socket of socialSockets()) {
       const accountId = socket.data.socialAccountId
@@ -300,6 +328,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             cover: socialRoom.cover,
             isLive: true,
             memberInitials: socialRoom.memberInitials,
+            playback: playbackByRoom.get(socialRoom.id),
             viewerRole: socialRoom.ownerId === accountId
               ? 'owner'
               : socialRoom.memberIds.includes(accountId)
@@ -321,6 +350,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
               cover: socialRoom.cover,
               isLive: true,
               memberInitials: memberProfiles.map((profile) => profile.initials).slice(0, 4),
+              playback: playbackByRoom.get(socialRoom.id),
               viewerRole: socialRoom.ownerId === accountId
                 ? 'owner'
                 : selectedListening.get(accountId) === socialRoom.ownerId
@@ -884,6 +914,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         const existing = [...rooms.values()].find((socialRoom) => socialRoom.ownerId === ownerId)
         if (existing) {
           rooms.delete(existing.id)
+          roomPlayback.delete(existing.id)
           for (const [memberId, targetOwnerId] of listening.entries()) {
             if (targetOwnerId === ownerId) listening.delete(memberId)
           }
@@ -894,6 +925,63 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           rooms.set(id, { id, ownerId, title: cleanTitle, cover: cleanCover })
         }
       }
+      await scheduleEmit()
+    }))
+
+    socket.on('social:room-playback:update', safely('Oda oynatma durumu güncellenemedi', async (payload = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'room-playback', 180, 60_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
+      const ownerId = socket.data.socialAccountId
+      if (!ownerId || socket.data.socialDeviceRole !== 'desktop') {
+        reply({ ok: false, code: 'playback_forbidden' })
+        return
+      }
+      const candidate = sanitizeRoomPlayback(payload, ownerId)
+      if (!candidate) {
+        reply({ ok: false, code: 'playback_invalid' })
+        return
+      }
+
+      let result
+      if (store?.publishRoomPlayback) {
+        try {
+          result = await store.publishRoomPlayback(ownerId, candidate)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          reply({
+            ok: false,
+            code: /eski|revision/i.test(message) ? 'stale_revision' : 'playback_forbidden',
+          })
+          return
+        }
+      } else {
+        const room = rooms.get(candidate.roomId)
+        if (!room || room.ownerId !== ownerId) {
+          reply({ ok: false, code: 'playback_forbidden' })
+          return
+        }
+        const previous = roomPlayback.get(candidate.roomId)
+        if (previous && candidate.playbackRevision <= previous.playbackRevision) {
+          reply({ ok: false, code: 'stale_revision', playback: previous })
+          return
+        }
+        result = {
+          accepted: true,
+          playback: { ...candidate, serverTimeMs: Date.now() },
+        }
+        roomPlayback.set(candidate.roomId, result.playback)
+      }
+
+      if (!result?.accepted) {
+        reply({ ok: false, code: 'stale_revision', playback: result?.playback })
+        return
+      }
+      reply({ ok: true, playback: result.playback })
       await scheduleEmit()
     }))
 

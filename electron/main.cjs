@@ -30,6 +30,14 @@ let socialStartSequence = 0
 let latestSocialState
 let socialConnectionStatus = 'connecting'
 let latestPlayerState
+let publishedPlaybackRoomId = ''
+let publishedPlaybackRevision = 0
+let publishedPlaybackSignature = ''
+let appliedPlaybackRoomId = ''
+let scheduledPlaybackRevision = 0
+let pendingRoomPlayback
+let roomPlaybackApplyRunning = false
+let roomPlaybackApplyChain = Promise.resolve()
 let updateController
 let isShuttingDown = false
 let activeShellView = 'music'
@@ -195,6 +203,76 @@ function publishDesktopSocialProfile() {
   socialSocket.emit('social:profile', { profile: desktopSocialProfile() })
 }
 
+function publishOwnedRoomPlayback() {
+  if (!socialSocket?.connected || !latestPlayerState) return
+  const room = latestSocialState?.rooms?.find((candidate) => candidate.viewerRole === 'owner')
+  const track = latestPlayerState.catalog?.[latestPlayerState.trackId]
+  const videoId = String(track?.youtubeVideoId || '').trim()
+  if (!room || !videoId) return
+  if (publishedPlaybackRoomId !== room.id) {
+    publishedPlaybackRoomId = room.id
+    publishedPlaybackRevision = Number(room.playback?.playbackRevision) || 0
+    publishedPlaybackSignature = ''
+  } else {
+    publishedPlaybackRevision = Math.max(
+      publishedPlaybackRevision,
+      Number(room.playback?.playbackRevision) || 0,
+    )
+  }
+  const playbackPositionMs = Math.max(0, Math.round((Number(latestPlayerState.position) || 0) * 1000))
+  const playbackState = latestPlayerState.isPlaying ? 'playing' : 'paused'
+  const signature = JSON.stringify([videoId, playbackPositionMs, playbackState])
+  if (signature === publishedPlaybackSignature) return
+  publishedPlaybackSignature = signature
+  const playbackRevision = ++publishedPlaybackRevision
+  socialSocket.emit('social:room-playback:update', {
+    roomId: room.id,
+    videoId,
+    playbackPositionMs,
+    playbackState,
+    playbackRevision,
+  }, (result = {}) => {
+    const acceptedRevision = Number(result.playback?.playbackRevision) || 0
+    publishedPlaybackRevision = Math.max(publishedPlaybackRevision, acceptedRevision)
+    if (!result.ok) publishedPlaybackSignature = ''
+  })
+}
+
+function applyJoinedRoomPlayback(state) {
+  const room = state?.rooms?.find((candidate) => candidate.viewerRole === 'listener')
+  const playback = room?.playback
+  if (!room || !playback) {
+    appliedPlaybackRoomId = ''
+    scheduledPlaybackRevision = 0
+    pendingRoomPlayback = undefined
+    return
+  }
+  if (appliedPlaybackRoomId !== room.id) {
+    appliedPlaybackRoomId = room.id
+    scheduledPlaybackRevision = 0
+  }
+  const revision = Number(playback.playbackRevision) || 0
+  if (revision <= scheduledPlaybackRevision) return
+  scheduledPlaybackRevision = revision
+  pendingRoomPlayback = playback
+  if (roomPlaybackApplyRunning) return
+  roomPlaybackApplyRunning = true
+  roomPlaybackApplyChain = (async () => {
+    while (pendingRoomPlayback) {
+      const nextPlayback = pendingRoomPlayback
+      pendingRoomPlayback = undefined
+      try {
+        await musicBridge?.applyRoomPlayback(nextPlayback)
+      } catch (error) {
+        console.warn('[Ritim Social] Oda oynatma durumu uygulanamadı:', error?.message || error)
+      }
+    }
+  })().finally(() => {
+    roomPlaybackApplyRunning = false
+    if (pendingRoomPlayback) applyJoinedRoomPlayback(latestSocialState)
+  })
+}
+
 function broadcastSocialState(status, incomingState) {
   socialConnectionStatus = status
   const previous = incomingState || latestSocialState
@@ -266,6 +344,8 @@ async function startSocialClient({ forceRefresh = false } = {}) {
   socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
   socialSocket.on('social:state', (state) => {
     broadcastSocialState('online', state)
+    publishOwnedRoomPlayback()
+    applyJoinedRoomPlayback(state)
   })
 }
 
@@ -312,6 +392,7 @@ function createMusicView() {
     onState: (state) => {
       latestPlayerState = state
       publishDesktopSocialProfile()
+      publishOwnedRoomPlayback()
     },
     room: ROOM,
     syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
