@@ -1317,6 +1317,24 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     return JSON.parse(String(result)) as { accepted: boolean; playback: RoomPlayback }
   }
 
+  async function isRoomListener(accountId: string, roomPublicId: string) {
+    const selectedRoomId = roomPublicId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(selectedRoomId)) return false
+    const result = await pool.query(
+      `select 1
+       from ritim.room_members member
+       join ritim.listening_rooms room on room.id = member.room_id
+       join ritim.users listener on listener.id = member.user_id
+       where room.public_id = $1
+         and room.ended_at is null
+         and member.left_at is null
+         and member.role = 'listener'
+         and coalesce(encode(listener.legacy_account_id_hash, 'hex'), listener.public_id::text) = $2`,
+      [selectedRoomId, accountKey(accountId)],
+    )
+    return Boolean(result.rowCount)
+  }
+
   async function loadRooms(accountIds: string[]): Promise<StoredRoom[]> {
     if (!accountIds.length) return []
     const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
@@ -1553,6 +1571,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     loadRooms,
     loadRoomPlaybacks,
     publishRoomPlayback,
+    isRoomListener,
     toggleRoomMembership,
     toggleListening,
     loadListening,

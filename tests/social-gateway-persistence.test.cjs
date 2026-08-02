@@ -128,6 +128,29 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
   ))
   assert.equal(recipientState.unreadCounts[accountA] >= 1, true)
 
+  const listenerResult = await new Promise((resolve) => {
+    clientA.emit('social:room-playback:result', {
+      roomId: persistedRoom.id,
+      playbackRevision: 7,
+      status: 'applied',
+      seekApplied: false,
+      playbackStateApplied: false,
+      driftMs: 320,
+      roundTripMs: 48,
+      reason: 'within_tolerance',
+    }, resolve)
+  })
+  assert.deepEqual(listenerResult, { ok: true })
+
+  const ownerResult = await new Promise((resolve) => {
+    clientB.emit('social:room-playback:result', {
+      roomId: persistedRoom.id,
+      playbackRevision: 7,
+      status: 'applied',
+    }, resolve)
+  })
+  assert.deepEqual(ownerResult, { ok: false, code: 'playback_result_forbidden' })
+
   if (phase !== 'seed') {
     const stalePlayback = await new Promise((resolve) => {
       clientB.emit('social:room-playback:update', {

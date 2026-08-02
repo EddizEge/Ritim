@@ -216,6 +216,16 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   ))
   assert.equal(listeningState.rooms[0].memberCount, 2)
 
+  const clockResult = await new Promise((resolve) => {
+    desktopA.emit('social:clock:ping', {
+      requestId: 'alpha4-clock-sample',
+      clientSentAtMs: Date.now(),
+    }, resolve)
+  })
+  assert.equal(clockResult.ok, true)
+  assert.equal(clockResult.requestId, 'alpha4-clock-sample')
+  assert.equal(clockResult.serverTimeMs > 0, true)
+
   const firstPlayback = await new Promise((resolve) => {
     desktopB.emit('social:room-playback:update', {
       roomId: ownerRoomState.rooms[0].id,
@@ -283,6 +293,38 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     state.rooms[0]?.playback?.playbackRevision === 2
     && state.rooms[0].playback.playbackState === 'paused'
   ))
+
+  const playbackResult = await new Promise((resolve) => {
+    desktopA.emit('social:room-playback:result', {
+      roomId: ownerRoomState.rooms[0].id,
+      playbackRevision: 2,
+      status: 'applied',
+      seekApplied: true,
+      playbackStateApplied: false,
+      driftMs: 2_300,
+      roundTripMs: 54,
+      reason: 'drift_correction',
+    }, resolve)
+  })
+  assert.deepEqual(playbackResult, { ok: true })
+
+  const ownerPlaybackResult = await new Promise((resolve) => {
+    desktopB.emit('social:room-playback:result', {
+      roomId: ownerRoomState.rooms[0].id,
+      playbackRevision: 2,
+      status: 'applied',
+    }, resolve)
+  })
+  assert.deepEqual(ownerPlaybackResult, { ok: false, code: 'playback_result_forbidden' })
+
+  const phonePlaybackResult = await new Promise((resolve) => {
+    phoneA.emit('social:room-playback:result', {
+      roomId: ownerRoomState.rooms[0].id,
+      playbackRevision: 2,
+      status: 'applied',
+    }, resolve)
+  })
+  assert.deepEqual(phonePlaybackResult, { ok: false, code: 'playback_result_forbidden' })
 
   const leftRoom = await new Promise((resolve) => {
     desktopA.emit('social:room-membership', { roomId: ownerRoomState.rooms[0].id }, resolve)

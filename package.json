@@ -17,7 +17,7 @@
     "start:server": "tsx server/index.ts",
     "start:social": "tsx server/social.ts",
     "build:social": "tsc -p tsconfig.social.json",
-    "test:social": "node --import tsx --test tests/social-auth.test.ts tests/social-auth-client.test.cjs tests/social-hub.test.cjs tests/social-infrastructure.test.ts tests/social-security.test.ts tests/sync-server-social-ticket.test.cjs",
+    "test:social": "node --import tsx --test tests/room-playback-sync.test.cjs tests/social-auth.test.ts tests/social-auth-client.test.cjs tests/social-hub.test.cjs tests/social-infrastructure.test.ts tests/social-security.test.ts tests/sync-server-social-ticket.test.cjs",
     "test:sync": "node --test tests/sync-server-reliability.test.cjs tests/sync-server-social-ticket.test.cjs",
     "test:social:auth-gateway": "node --test tests/social-gateway-auth.test.cjs",
     "test:social:persistence": "node --test tests/social-gateway-persistence.test.cjs",
