@@ -75,6 +75,14 @@ type StoredRoom = {
   memberIds: string[]
 }
 
+type StoredRoomMessage = {
+  id: string
+  roomId: string
+  senderId: string
+  text: string
+  sentAt: number
+}
+
 type RoomPlayback = {
   roomId: string
   ownerId: string
@@ -1264,6 +1272,10 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
            where room_id = any($1::bigint[]) and left_at is null`,
           [ended.rows.map((row) => row.id)],
         )
+        await client.query(
+          'delete from ritim.room_messages where room_id = any($1::bigint[])',
+          [ended.rows.map((row) => row.id)],
+        )
         return {
           created: false,
           endedRoomPublicIds: ended.rows.map((row) => row.public_id),
@@ -1378,6 +1390,104 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       [selectedRoomId, accountKey(accountId)],
     )
     return Boolean(result.rowCount)
+  }
+
+  async function isRoomMember(accountId: string, roomPublicId: string) {
+    const selectedRoomId = roomPublicId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(selectedRoomId)) return false
+    const result = await pool.query(
+      `select 1
+       from ritim.room_members member
+       join ritim.listening_rooms room on room.id = member.room_id
+       join ritim.users room_user on room_user.id = member.user_id
+       where room.public_id = $1
+         and room.ended_at is null
+         and member.left_at is null
+         and coalesce(encode(room_user.legacy_account_id_hash, 'hex'), room_user.public_id::text) = $2`,
+      [selectedRoomId, accountKey(accountId)],
+    )
+    return Boolean(result.rowCount)
+  }
+
+  async function saveRoomMessage(accountId: string, message: StoredRoomMessage) {
+    const selectedRoomId = message.roomId.replace(/^room-/, '')
+    if (!UUID_PATTERN.test(selectedRoomId) || !UUID_PATTERN.test(message.id)) {
+      throw new Error('Oda mesajı geçersiz.')
+    }
+    return inTransaction(pool, async (client) => {
+      const senderId = await findUserId(client, accountId)
+      if (!senderId) throw new Error('Oda mesajı kullanıcısı bulunamadı.')
+      const room = await client.query<{ id: string }>(
+        `select room.id
+         from ritim.listening_rooms room
+         join ritim.room_members member on member.room_id = room.id
+         where room.public_id = $1
+           and room.ended_at is null
+           and member.user_id = $2
+           and member.left_at is null
+         for update of room`,
+        [selectedRoomId, senderId],
+      )
+      if (!room.rows[0]) throw new Error('Oda mesajı erişimi reddedildi.')
+      const inserted = await client.query(
+        `insert into ritim.room_messages (public_id, room_id, sender_id, body, sent_at)
+         values ($1, $2, $3, $4, $5)
+         on conflict (public_id) do nothing`,
+        [message.id, room.rows[0].id, senderId, message.text, new Date(message.sentAt)],
+      )
+      await client.query(
+        `delete from ritim.room_messages
+         where room_id = $1
+           and id not in (
+             select id from ritim.room_messages
+             where room_id = $1
+             order by sent_at desc, id desc
+             limit 50
+           )`,
+        [room.rows[0].id],
+      )
+      return { duplicate: !inserted.rowCount }
+    })
+  }
+
+  async function loadRoomMessages(roomIds: string[], accountIds: string[]): Promise<Map<string, StoredRoomMessage[]>> {
+    const publicIds = roomIds.map((roomId) => roomId.replace(/^room-/, '')).filter((id) => UUID_PATTERN.test(id))
+    const resultByRoom = new Map<string, StoredRoomMessage[]>(roomIds.map((roomId) => [roomId, []]))
+    if (!publicIds.length) return resultByRoom
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const result = await pool.query<{
+      room_public_id: string
+      public_id: string
+      sender_key: string
+      body: string
+      sent_at: Date
+    }>(
+      `select room.public_id as room_public_id,
+              message.public_id,
+              coalesce(encode(sender.legacy_account_id_hash, 'hex'), sender.public_id::text) as sender_key,
+              message.body,
+              message.sent_at
+       from ritim.room_messages message
+       join ritim.listening_rooms room on room.id = message.room_id
+       join ritim.users sender on sender.id = message.sender_id
+       where room.public_id = any($1::uuid[])
+         and room.ended_at is null
+       order by message.sent_at asc, message.id asc`,
+      [publicIds],
+    )
+    for (const row of result.rows) {
+      const roomId = `room-${row.room_public_id}`
+      const selected = resultByRoom.get(roomId)
+      if (!selected) continue
+      selected.push({
+        id: row.public_id,
+        roomId,
+        senderId: accountByKey.get(row.sender_key) || row.sender_key,
+        text: row.body,
+        sentAt: row.sent_at.getTime(),
+      })
+    }
+    return resultByRoom
   }
 
   async function loadRooms(accountIds: string[]): Promise<StoredRoom[]> {
@@ -1643,6 +1753,9 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     loadRoomOwnerKey,
     publishRoomPlayback,
     isRoomListener,
+    isRoomMember,
+    saveRoomMessage,
+    loadRoomMessages,
     toggleRoomMembership,
     toggleListening,
     loadListening,

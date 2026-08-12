@@ -7,6 +7,7 @@ const phase = process.env.RITIM_SOCIAL_TEST_PHASE || 'seed'
 const messageText = 'Alpha2 kalıcı mesaj'
 const roomTitle = 'Alpha2 kalıcı oda'
 const playbackVideoId = 'alpha4-persistent-video'
+const roomMessageText = 'Alpha4 kalıcı oda mesajı'
 const accountA = process.env.RITIM_SOCIAL_TEST_ACCOUNT_A || 'alpha2-persistence-account-a'
 const accountB = process.env.RITIM_SOCIAL_TEST_ACCOUNT_B || 'alpha2-persistence-account-b'
 const accessTokenA = process.env.RITIM_SOCIAL_TEST_ACCESS_TOKEN_A
@@ -90,6 +91,14 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
       clientA.emit('social:room-membership', { roomId }, resolve)
     })
     assert.deepEqual(joined, { ok: true, status: 'joined' })
+    const roomMessage = await new Promise((resolve) => {
+      clientA.emit('social:room-message', {
+        roomId,
+        text: roomMessageText,
+        clientMessageId: '70000000-0000-4000-8000-000000000001',
+      }, resolve)
+    })
+    assert.deepEqual(roomMessage, { ok: true, duplicate: false })
     const playback = await new Promise((resolve) => {
       clientB.emit('social:room-playback:update', {
         roomId,
@@ -111,6 +120,9 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
       && room.playback?.playbackRevision === 7
       && room.playback?.videoId === playbackVideoId
     ))
+    && Object.values(state.roomMessages || {}).some((messages) => (
+      messages.some((message) => message.text === roomMessageText)
+    ))
   ))
   assert.equal(
     persistedState.conversations[accountB].filter((message) => message.text === messageText).length,
@@ -122,6 +134,10 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
   assert.equal(persistedRoom.maxMembers, 8)
   assert.equal(persistedRoom.playback.playbackPositionMs, 64_000)
   assert.equal(persistedRoom.playback.playbackState, 'playing')
+  assert.equal(
+    persistedState.roomMessages[persistedRoom.id].filter((message) => message.text === roomMessageText).length,
+    1,
+  )
   const recipientState = await waitForState(states, 'Alpha İki', (state) => (
     state.unreadCounts[accountA] >= 1
     && state.rooms.some((room) => room.viewerRole === 'owner' && room.memberCount === 2)
