@@ -367,7 +367,8 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
 test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hataları güvenle yönetilir', async (context) => {
   const httpServer = createServer()
   const io = new Server(httpServer, { cors: { origin: true } })
-  const hub = createSocialHub(io)
+  const abuseEvents = []
+  const hub = createSocialHub(io, { onAbuse: (event) => abuseEvents.push(event) })
   io.on('connection', (socket) => hub.attach(socket))
   await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
   const address = httpServer.address()
@@ -422,6 +423,71 @@ test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hata
   ))
   const roomId = initialRoom.rooms[0].id
   assert.deepEqual(await roomMembership(listener, roomId), { ok: true, status: 'joined' })
+
+  const outsiderMessage = await new Promise((resolve) => {
+    outsider.emit('social:room-message', {
+      roomId,
+      text: 'Odaya katılmadan gönderilememeli',
+      clientMessageId: '60000000-0000-4000-8000-000000000001',
+    }, resolve)
+  })
+  assert.deepEqual(outsiderMessage, { ok: false, code: 'room_access_denied' })
+  const outsiderState = await waitForState('Yeni Dinleyici PC', (state) => state.rooms[0]?.id === roomId)
+  assert.deepEqual(outsiderState.roomMessages, {})
+
+  const roomMessageId = '60000000-0000-4000-8000-000000000002'
+  const roomMessage = await new Promise((resolve) => {
+    ownerPhone.emit('social:room-message', {
+      roomId,
+      text: 'Bu nakarat çok iyi',
+      clientMessageId: roomMessageId,
+    }, resolve)
+  })
+  assert.deepEqual(roomMessage, { ok: true, duplicate: false })
+  const roomChatState = await waitForState('Dinleyici PC', (state) => (
+    state.roomMessages?.[roomId]?.[0]?.text === 'Bu nakarat çok iyi'
+  ))
+  assert.equal(roomChatState.roomMessages[roomId][0].senderId, 'owner-account')
+  await waitForState('Oda Sahibi PC', (state) => state.roomMessages?.[roomId]?.length === 1)
+
+  const duplicateRoomMessage = await new Promise((resolve) => {
+    ownerPhone.emit('social:room-message', {
+      roomId,
+      text: 'Bu nakarat çok iyi',
+      clientMessageId: roomMessageId,
+    }, resolve)
+  })
+  assert.deepEqual(duplicateRoomMessage, { ok: true, duplicate: true })
+
+  const longRoomMessage = await new Promise((resolve) => {
+    listener.emit('social:room-message', {
+      roomId,
+      text: 'x'.repeat(281),
+      clientMessageId: '60000000-0000-4000-8000-000000000003',
+    }, resolve)
+  })
+  assert.deepEqual(longRoomMessage, { ok: false, code: 'room_message_too_long' })
+
+  const firstReaction = await new Promise((resolve) => {
+    listener.emit('social:room-reaction', { roomId, reaction: '🔥' }, resolve)
+  })
+  assert.deepEqual(firstReaction, { ok: true })
+  const reactedRoomState = await waitForState('Oda Sahibi Telefon', (state) => (
+    state.roomReactions?.[roomId]?.some((reaction) => reaction.reaction === '🔥')
+  ))
+  assert.equal(reactedRoomState.roomReactions[roomId][0].actorId, 'listener-account')
+
+  for (let index = 0; index < 11; index += 1) {
+    const allowedReaction = await new Promise((resolve) => {
+      listener.emit('social:room-reaction', { roomId, reaction: '👏' }, resolve)
+    })
+    assert.equal(allowedReaction.ok, true)
+  }
+  const limitedReaction = await new Promise((resolve) => {
+    listener.emit('social:room-reaction', { roomId, reaction: '🎵' }, resolve)
+  })
+  assert.deepEqual(limitedReaction, { ok: false, code: 'rate_limited' })
+  assert.equal(abuseEvents.some((event) => event.category === 'socket_event:room-reaction'), true)
 
   const playbackAck = await new Promise((resolve) => {
     ownerDesktop.emit('social:room-playback:update', {

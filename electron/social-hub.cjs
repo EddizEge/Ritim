@@ -58,6 +58,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const listening = new Map()
   const rooms = new Map()
   const roomPlayback = new Map()
+  const roomMessages = new Map()
+  const roomReactions = new Map()
   const privacy = new Map()
   const blocks = new Set()
   const readMarkers = new Map()
@@ -295,6 +297,15 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     const playbackByRoom = store?.loadRoomPlaybacks
       ? await store.loadRoomPlaybacks(selectedRooms.map((room) => room.id))
       : roomPlayback
+    const messagesByRoom = store?.loadRoomMessages
+      ? await store.loadRoomMessages(selectedRooms.map((room) => room.id), accountIds)
+      : roomMessages
+    const now = Date.now()
+    for (const [roomId, selected] of roomReactions.entries()) {
+      const active = selected.filter((reaction) => reaction.expiresAt > now)
+      if (active.length) roomReactions.set(roomId, active)
+      else roomReactions.delete(roomId)
+    }
     const desktopAccountKeys = desktopAccountKeysForCurrentSockets()
 
     for (const socket of socialSockets()) {
@@ -420,6 +431,17 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             }
           })
       const accountDevices = socketsForAccount(accountId)
+      const memberRoomIds = publicRooms
+        .filter((socialRoom) => socialRoom.viewerRole)
+        .map((socialRoom) => socialRoom.id)
+      const visibleRoomMessages = Object.fromEntries(memberRoomIds.map((roomId) => [
+        roomId,
+        (messagesByRoom.get(roomId) || []).slice(-50),
+      ]))
+      const visibleRoomReactions = Object.fromEntries(memberRoomIds.map((roomId) => [
+        roomId,
+        (roomReactions.get(roomId) || []).filter((reaction) => reaction.expiresAt > Date.now()),
+      ]))
 
       socket.emit('social:state', {
         currentUser: publicUser(currentProfile, selectedReactions.get(accountId)),
@@ -431,6 +453,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         companionConnected: accountDevices.some((peer) => peer.data.socialDeviceRole === 'companion'),
         users,
         rooms: publicRooms,
+        roomMessages: visibleRoomMessages,
+        roomReactions: visibleRoomReactions,
         conversations,
         unreadCounts,
         messageRequests: selectedRequests.get(accountId) || [],
@@ -1014,6 +1038,8 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         if (existing) {
           rooms.delete(existing.id)
           roomPlayback.delete(existing.id)
+          roomMessages.delete(existing.id)
+          roomReactions.delete(existing.id)
           for (const [memberId, targetOwnerId] of listening.entries()) {
             if (targetOwnerId === ownerId) listening.delete(memberId)
           }
@@ -1035,6 +1061,124 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         }
       }
       await scheduleEmit()
+    }))
+
+    socket.on('social:room-message', safely('Oda mesajı kaydedilemedi', async ({
+      roomId,
+      text,
+      clientMessageId,
+    } = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'room-message', 12, 60_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
+      const senderId = socket.data.socialAccountId
+      const selectedRoomId = cleanText(roomId, 80)
+      const rawMessage = String(text || '').trim()
+      if (rawMessage.length > 280) {
+        socket.emit('social:error', { code: 'room_message_too_long', event: 'room-message' })
+        reply({ ok: false, code: 'room_message_too_long' })
+        return
+      }
+      const cleanMessage = cleanText(rawMessage, 280)
+      if (!senderId || !selectedRoomId || !cleanMessage) {
+        reply({ ok: false, code: 'room_access_denied' })
+        return
+      }
+      const allowed = store?.isRoomMember
+        ? await store.isRoomMember(senderId, selectedRoomId)
+        : Boolean(
+            rooms.get(selectedRoomId)
+            && (
+              rooms.get(selectedRoomId).ownerId === senderId
+              || listening.get(senderId) === rooms.get(selectedRoomId).ownerId
+            )
+          )
+      if (!allowed) {
+        socket.emit('social:error', { code: 'room_access_denied', event: 'room-message' })
+        reply({ ok: false, code: 'room_access_denied' })
+        return
+      }
+      const message = {
+        id: UUID_PATTERN.test(clientMessageId) ? clientMessageId : crypto.randomUUID(),
+        roomId: selectedRoomId,
+        senderId,
+        text: cleanMessage,
+        sentAt: Date.now(),
+      }
+      if (store?.saveRoomMessage) {
+        try {
+          const result = await store.saveRoomMessage(senderId, message)
+          if (result?.duplicate) {
+            reply({ ok: true, duplicate: true })
+            return
+          }
+        } catch {
+          socket.emit('social:error', { code: 'room_access_denied', event: 'room-message' })
+          reply({ ok: false, code: 'room_access_denied' })
+          return
+        }
+      } else {
+        const selected = roomMessages.get(selectedRoomId) || []
+        if (selected.some((candidate) => candidate.id === message.id && candidate.senderId === senderId)) {
+          reply({ ok: true, duplicate: true })
+          return
+        }
+        selected.push(message)
+        roomMessages.set(selectedRoomId, selected.slice(-50))
+      }
+      reply({ ok: true, duplicate: false })
+      await scheduleEmit()
+    }))
+
+    socket.on('social:room-reaction', safely('Oda tepkisi gönderilemedi', async ({
+      roomId,
+      reaction,
+    } = {}, acknowledge) => {
+      const reply = (value) => {
+        if (typeof acknowledge === 'function') acknowledge(value)
+      }
+      if (!eventAllowed(socket, 'room-reaction', 12, 10_000)) {
+        reply({ ok: false, code: 'rate_limited' })
+        return
+      }
+      const actorId = socket.data.socialAccountId
+      const selectedRoomId = cleanText(roomId, 80)
+      const allowedReactions = new Set(['♥', '🔥', '👏', '🎵'])
+      const allowed = actorId && selectedRoomId && allowedReactions.has(reaction) && (
+        store?.isRoomMember
+          ? await store.isRoomMember(actorId, selectedRoomId)
+          : Boolean(
+              rooms.get(selectedRoomId)
+              && (
+                rooms.get(selectedRoomId).ownerId === actorId
+                || listening.get(actorId) === rooms.get(selectedRoomId).ownerId
+              )
+            )
+      )
+      if (!allowed) {
+        socket.emit('social:error', { code: 'room_access_denied', event: 'room-reaction' })
+        reply({ ok: false, code: 'room_access_denied' })
+        return
+      }
+      const createdAt = Date.now()
+      const selected = roomReactions.get(selectedRoomId) || []
+      selected.push({
+        id: crypto.randomUUID(),
+        roomId: selectedRoomId,
+        actorId,
+        reaction,
+        createdAt,
+        expiresAt: createdAt + 8_000,
+      })
+      roomReactions.set(selectedRoomId, selected.slice(-24))
+      reply({ ok: true })
+      await scheduleEmit()
+      const expiryTimer = setTimeout(scheduleEmit, 8_100)
+      expiryTimer.unref?.()
     }))
 
     socket.on('social:room-playback:update', safely('Oda oynatma durumu güncellenemedi', async (payload = {}, acknowledge) => {

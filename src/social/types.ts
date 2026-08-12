@@ -71,6 +71,23 @@ export type SocialMessageReaction = {
   reaction: '♥' | '🔥' | '😂' | '👍'
 }
 
+export type SocialRoomMessage = {
+  id: string
+  roomId: string
+  senderId: string
+  text: string
+  sentAt: number
+}
+
+export type SocialRoomReaction = {
+  id: string
+  roomId: string
+  actorId: string
+  reaction: '♥' | '🔥' | '👏' | '🎵'
+  createdAt: number
+  expiresAt: number
+}
+
 export type SocialMessageRequest = {
   userId: string
   direction: 'incoming' | 'outgoing'
@@ -108,6 +125,8 @@ export type SocialState = {
   companionConnected: boolean
   users: SocialUser[]
   rooms: SocialRoom[]
+  roomMessages: Record<string, SocialRoomMessage[]>
+  roomReactions: Record<string, SocialRoomReaction[]>
   conversations: Record<string, SocialMessage[]>
   unreadCounts: Record<string, number>
   messageRequests: SocialMessageRequest[]
@@ -136,6 +155,8 @@ export type SocialActions = {
   clearFeedback: () => void
   toggleListeningWith: (userId: string) => void
   joinRoom: (roomId: string) => void
+  sendRoomMessage: (roomId: string, text: string) => Promise<boolean>
+  sendRoomReaction: (roomId: string, reaction: SocialRoomReaction['reaction']) => void
   createRoom: () => void
   updatePrivacy: (privacy: SocialPrivacy) => void
   blockUser: (userId: string) => void

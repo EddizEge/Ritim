@@ -312,6 +312,35 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .social-room-card.is-unavailable .social-room-live { color: #f2b15d; }
 .social-room-empty { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 11px; border: 1px dashed #323536; border-radius: 8px; color: #777; font-size: 8px; }
 .social-room-empty svg { width: 15px; color: #ff6976; }
+.room-interaction-panel { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 235px; grid-template-rows: auto minmax(74px, 112px) auto; gap: 8px 12px; margin: 0 0 13px; padding: 11px; overflow: hidden; border: 1px solid #343638; border-radius: 9px; background: linear-gradient(135deg, #181a1a, #111313); }
+.room-interaction-panel > header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.room-interaction-panel > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.room-interaction-panel > header svg { width: 14px; color: #ff6976; }
+.room-interaction-panel > header b { font-size: 9px; }
+.room-interaction-panel > header small { color: #777b7c; font-size: 7px; }
+.room-quick-reactions { display: flex; gap: 5px; }
+.room-quick-reactions button { display: grid; place-items: center; width: 27px; height: 25px; border: 1px solid #3b3e3f; border-radius: 6px; background: #202222; font-size: 12px; transition: transform .14s ease, border-color .14s ease; }
+.room-quick-reactions button:hover { border-color: #7c454d; transform: translateY(-1px); }
+.room-reaction-stream { position: absolute; top: 43px; right: 14px; z-index: 2; display: flex; flex-direction: row-reverse; gap: 5px; pointer-events: none; }
+.room-reaction-stream span { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid rgba(255, 105, 118, .38); border-radius: 50%; background: rgba(44, 25, 29, .92); box-shadow: 0 5px 16px #0008; font-size: 15px; animation: room-reaction-pop .28s ease both; }
+@keyframes room-reaction-pop { from { opacity: 0; transform: translateY(9px) scale(.65); } to { opacity: 1; transform: none; } }
+.room-message-list { display: flex; flex-direction: column; gap: 5px; min-height: 74px; max-height: 112px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
+.room-message-list article { align-self: flex-start; max-width: 86%; padding: 6px 8px; border-radius: 7px 7px 7px 2px; background: #242727; }
+.room-message-list article.is-own { align-self: flex-end; border-radius: 7px 7px 2px; background: #3b2025; }
+.room-message-list article > span { display: flex; align-items: center; gap: 7px; color: #a7aaab; font-size: 6px; }
+.room-message-list article > span b { color: #ff929c; }
+.room-message-list article p { margin: 3px 0 0; color: #eee; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.room-message-empty { display: flex; align-items: center; gap: 9px; height: 100%; padding: 9px; border: 1px dashed #323536; border-radius: 7px; color: #757879; }
+.room-message-empty svg { width: 17px; color: #b6515c; }
+.room-message-empty span { display: grid; gap: 2px; }
+.room-message-empty b { color: #bbb; font-size: 8px; }
+.room-message-empty small { font-size: 7px; }
+.room-message-composer { grid-column: 2; grid-row: 2 / 4; align-self: end; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 6px; border: 1px solid #333637; border-radius: 7px; background: #0d0f0f; }
+.room-message-composer input { min-width: 0; border: 0; outline: 0; color: #eee; background: transparent; font-size: 8px; }
+.room-message-composer small { color: #626566; font-size: 6px; }
+.room-message-composer button { display: grid; place-items: center; width: 27px; height: 25px; border: 0; border-radius: 6px; color: #fff; background: #b83f4c; }
+.room-message-composer button:disabled { color: #666; background: #292b2c; }
+.room-message-composer svg { width: 12px; }
 .social-section-heading { display: flex; align-items: center; justify-content: space-between; height: 33px; margin-bottom: 8px; }
 .social-section-heading h2 { margin: 0; font-size: 15px; letter-spacing: -.35px; }
 .social-section-heading small { color: #747778; font-size: 8px; }
@@ -711,6 +740,22 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-room-card > button:disabled { color: #777; border-color: #343637; background: #202222; }
 .mobile-room-card.is-owner-offline .mobile-room-live { color: #a5a8ac; }
 .mobile-room-card.is-unavailable .mobile-room-live { color: #f2b15d; }
+.room-interaction-panel.is-mobile { display: flex; flex-direction: column; gap: 10px; margin: 4px 18px 0; padding: 12px; border-radius: 12px; }
+.room-interaction-panel.is-mobile > header { align-items: flex-start; }
+.room-interaction-panel.is-mobile > header > span { flex-wrap: wrap; }
+.room-interaction-panel.is-mobile > header b { font-size: 12px; }
+.room-interaction-panel.is-mobile > header small { width: 100%; padding-left: 21px; font-size: 9px; }
+.room-interaction-panel.is-mobile .room-quick-reactions button { width: 32px; height: 31px; font-size: 15px; }
+.room-interaction-panel.is-mobile .room-reaction-stream { top: 53px; right: 14px; }
+.room-interaction-panel.is-mobile .room-message-list { width: 100%; min-height: 90px; max-height: 180px; }
+.room-interaction-panel.is-mobile .room-message-list article { padding: 8px 10px; }
+.room-interaction-panel.is-mobile .room-message-list article > span { font-size: 8px; }
+.room-interaction-panel.is-mobile .room-message-list article p { font-size: 11px; }
+.room-interaction-panel.is-mobile .room-message-empty b { font-size: 11px; }
+.room-interaction-panel.is-mobile .room-message-empty small { font-size: 9px; }
+.room-interaction-panel.is-mobile .room-message-composer { align-self: stretch; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; padding: 8px; }
+.room-interaction-panel.is-mobile .room-message-composer input { font-size: 11px; }
+.room-interaction-panel.is-mobile .room-message-composer button { width: 34px; height: 32px; }
 .mobile-social-list { margin-top: 25px; }
 .mobile-social-user { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; min-height: 124px; padding: 14px 18px; border-top: 1px solid #252728; background: #101212; }
 .mobile-social-user:last-child { border-bottom: 1px solid #252728; }

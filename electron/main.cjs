@@ -352,6 +352,8 @@ function broadcastSocialState(status, incomingState) {
     companionConnected: Boolean(previous?.companionConnected),
     users: (previous?.users || []).map((user) => status === 'online' ? user : { ...user, presence: 'offline' }),
     rooms: previous?.rooms || [],
+    roomMessages: previous?.roomMessages || {},
+    roomReactions: previous?.roomReactions || {},
     conversations: previous?.conversations || {},
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
@@ -589,6 +591,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     companionConnected: false,
     users: [],
     rooms: [],
+    roomMessages: {},
+    roomReactions: {},
     conversations: {},
     selectedUserId: '',
     authentication: socialAuthStatus,
@@ -623,6 +627,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (!socialSocket?.connected) return
     const payload = action.payload || {}
     if (action.type === 'message') socialSocket.emit('social:message', payload)
+    if (action.type === 'room-message') socialSocket.emit('social:room-message', payload)
+    if (action.type === 'room-reaction') socialSocket.emit('social:room-reaction', payload)
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
     if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
     if (action.type === 'block') socialSocket.emit('social:block', payload)

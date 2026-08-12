@@ -60,6 +60,18 @@ docker compose -f compose.alpha2.yml exec -T postgres \
   < postgres/init/050_alpha4_room_membership.sql
 ```
 
+Alpha.4 oda sohbeti geçişi (Dilim 5):
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/060_alpha4_room_interactions.sql
+```
+
+`060` geçişi yalnızca kısa oda mesajı tablosunu ve gerekli izinleri ekler.
+Gateway imajını yenilemeden önce bir kez uygulanmalıdır; Cloudflare ayarında
+değişiklik gerektirmez.
+
 Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları
 silmez veya yeniden yazmaz. Betik tekrar çalıştırılabilir.
 

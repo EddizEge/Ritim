@@ -8,6 +8,7 @@ import type {
   SocialNotification,
   SocialNotificationPreferences,
   SocialPrivacy,
+  SocialRoomReaction,
   SocialState,
   SocialTrack,
   SocialUser,
@@ -60,6 +61,7 @@ function socialErrorText(code?: string) {
   if (code === 'room_owner') return 'Odanın sahibisin; ayrılmak için odayı kapatabilirsin.'
   if (code === 'room_owner_offline') return 'Oda sahibinin bilgisayarı çevrimdışı. Bağlandığında tekrar deneyebilirsin.'
   if (code === 'room_access_denied') return 'Bu dinleme odasına erişimin bulunmuyor.'
+  if (code === 'room_message_too_long') return 'Oda mesajı en fazla 280 karakter olabilir.'
   return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
 }
 
@@ -196,6 +198,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     companionConnected: isCompanion,
     users: [],
     rooms: [],
+    roomMessages: {},
+    roomReactions: {},
     conversations: {},
     unreadCounts: {},
     messageRequests: [],
@@ -306,6 +310,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       if (
         error?.event === 'profile'
         || error?.event === 'message'
+        || error?.event === 'room-message'
+        || error?.event === 'room-reaction'
         || error?.event === 'room-membership'
       ) return
       setSnapshot((previous) => ({
@@ -577,6 +583,62 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     })
   }, [])
 
+  const sendRoomMessage = useCallback((roomId: string, text: string): Promise<boolean> => {
+    const message = text.trim().slice(0, 280)
+    if (!message || !socialSocket.connected) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      let acknowledged = false
+      const timeout = window.setTimeout(() => {
+        if (acknowledged) return
+        acknowledged = true
+        setSnapshot((current) => ({
+          ...current,
+          feedback: {
+            id: crypto.randomUUID(),
+            tone: 'error',
+            text: 'Oda mesajı zamanında onaylanmadı; taslağın korunuyor.',
+          },
+        }))
+        resolve(false)
+      }, 5_000)
+      socialSocket.emit('social:room-message', {
+        roomId,
+        text: message,
+        clientMessageId: crypto.randomUUID(),
+      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
+        if (acknowledged) return
+        acknowledged = true
+        window.clearTimeout(timeout)
+        if (!result.ok) {
+          setSnapshot((current) => ({
+            ...current,
+            feedback: {
+              id: crypto.randomUUID(),
+              tone: 'error',
+              text: socialErrorText(result.code),
+            },
+          }))
+        }
+        resolve(Boolean(result.ok))
+      })
+    })
+  }, [])
+
+  const sendRoomReaction = useCallback((roomId: string, reaction: SocialRoomReaction['reaction']) => {
+    if (!socialSocket.connected) return
+    socialSocket.emit('social:room-reaction', { roomId, reaction }, (result: { ok?: boolean; code?: string } = {}) => {
+      if (result.ok) return
+      setSnapshot((current) => ({
+        ...current,
+        feedback: {
+          id: crypto.randomUUID(),
+          tone: 'error',
+          text: socialErrorText(result.code),
+        },
+      }))
+    })
+  }, [])
+
   const createRoom = useCallback(() => {
     socialSocket.emit('social:create-room', {
       title: currentTrack.title || `${resolvedName} dinliyor`,
@@ -618,6 +680,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       clearFeedback,
       toggleListeningWith,
       joinRoom,
+      sendRoomMessage,
+      sendRoomReaction,
       createRoom,
       updatePrivacy,
       blockUser,

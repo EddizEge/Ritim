@@ -13,6 +13,7 @@ type SocialProps = {
 }
 
 const QUICK_MESSAGE_REACTIONS = ['♥', '🔥', '😂', '👍'] as const
+const QUICK_ROOM_REACTIONS = ['♥', '🔥', '👏', '🎵'] as const
 
 function SocialAvatar({ user, small = false }: { user: SocialUser; small?: boolean }) {
   return (
@@ -197,6 +198,74 @@ function DesktopRoomShelf({ state, actions }: SocialProps) {
       ) : (
         <div className="social-room-empty"><Radio /><span>İlk odayı yukarıdan oluştur.</span></div>
       )}
+    </section>
+  )
+}
+
+function RoomInteractionPanel({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const roomId = state.activeRoomId
+  const room = state.rooms.find((candidate) => candidate.id === roomId)
+  if (!roomId || !room) return null
+  const messages = state.roomMessages[roomId] || []
+  const reactions = (state.roomReactions[roomId] || []).filter((reaction) => reaction.expiresAt > Date.now())
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!message.trim() || sending || state.connectionStatus !== 'online') return
+    setSending(true)
+    const sent = await actions.sendRoomMessage(roomId, message)
+    if (sent) setMessage('')
+    setSending(false)
+  }
+
+  const senderName = (senderId: string) => {
+    if (senderId === state.currentUser.id) return 'Sen'
+    return state.users.find((user) => user.id === senderId)?.displayName || 'Oda üyesi'
+  }
+
+  return (
+    <section className={`room-interaction-panel ${mobile ? 'is-mobile' : ''}`} aria-label={`${room.title} oda sohbeti`}>
+      <header>
+        <span><MessageCircle /><b>Oda sohbeti</b><small>{room.memberCount} kişi burada</small></span>
+        <div className="room-quick-reactions" aria-label="Odaya hızlı tepki gönder">
+          {QUICK_ROOM_REACTIONS.map((reaction) => (
+            <button key={reaction} type="button" onClick={() => actions.sendRoomReaction(roomId, reaction)}>{reaction}</button>
+          ))}
+        </div>
+      </header>
+      {reactions.length ? (
+        <div className="room-reaction-stream" aria-live="polite">
+          {reactions.slice(-8).map((reaction) => (
+            <span key={reaction.id} title={senderName(reaction.actorId)}>{reaction.reaction}</span>
+          ))}
+        </div>
+      ) : null}
+      <div className="room-message-list" aria-live="polite">
+        {messages.length ? messages.slice(-20).map((item) => (
+          <article className={item.senderId === state.currentUser.id ? 'is-own' : ''} key={item.id}>
+            <span><b>{senderName(item.senderId)}</b><time dateTime={new Date(item.sentAt).toISOString()}>{messageTime(item.sentAt)}</time></span>
+            <p>{item.text}</p>
+          </article>
+        )) : (
+          <div className="room-message-empty"><SmilePlus /><span><b>Odaya bir şey söyle</b><small>Bu kısa sohbet oda kapanınca temizlenir.</small></span></div>
+        )}
+      </div>
+      <form className="room-message-composer" onSubmit={submit}>
+        <input
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          maxLength={280}
+          placeholder="Odaya mesaj yaz…"
+          aria-label="Oda mesajı"
+          disabled={state.connectionStatus !== 'online'}
+        />
+        <small>{message.length}/280</small>
+        <button type="submit" disabled={!message.trim() || sending || state.connectionStatus !== 'online'} aria-label="Oda mesajını gönder">
+          {sending ? <RefreshCw className="is-spinning" /> : <Send />}
+        </button>
+      </form>
     </section>
   )
 }
@@ -517,6 +586,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
       <div className="social-desktop-layout">
         <div className="social-directory">
           <DesktopRoomShelf state={state} actions={actions} />
+          <RoomInteractionPanel state={state} actions={actions} />
           <MessageRequestList state={state} actions={actions} />
           <BlockedUsersPanel state={state} actions={actions} />
           <div className="social-section-heading">
@@ -596,6 +666,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
               <SocialRoomCard key={room.id} room={room} actions={actions} mobile />
             )) : <div className="social-no-results"><Radio /><b>Henüz oda yok</b><p>İlk dinleme odasını yukarıdan oluştur.</p></div>}
           </div>
+          <RoomInteractionPanel state={state} actions={actions} mobile />
         </section>
         <section className="mobile-social-list">
           <div className="mobile-social-section-title"><h2>Şu an dinleyenler</h2><small>{onlineCount} kişi</small></div>
