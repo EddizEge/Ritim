@@ -99,15 +99,17 @@ try {
     connect('a', tokensA),
     connect('b', tokensB),
   ])
-  await waitFor('a', (state) => state.users.length === 1, 'İki hesabın görünürlüğü')
+  const seesUser = (state, userId) => state.users.some((user) => user.id === userId)
+  const findUser = (state, userId) => state.users.find((user) => user.id === userId)
+  await waitFor('a', (state) => seesUser(state, tokensB.user.id), 'İki hesabın görünürlüğü')
 
   clientA.emit('social:reaction', { targetUserId: tokensB.user.id, reaction: '🔥' })
   const reacted = await waitFor(
     'a',
-    (state) => state.users[0]?.reactionCount === 1,
+    (state) => findUser(state, tokensB.user.id)?.reactionCount === 1,
     'Kalıcı tepki',
   )
-  assert.equal(reacted.users[0].lastReaction, '🔥')
+  assert.equal(findUser(reacted, tokensB.user.id)?.lastReaction, '🔥')
   const reactionRows = await pool.query(
     `select count(*)::int as count
      from ritim.reactions reaction
@@ -121,12 +123,12 @@ try {
     profileVisibility: 'hidden',
     listeningVisibility: 'hidden',
   })
-  await waitFor('a', (state) => state.users.length === 0, 'Gizli profil filtresi')
+  await waitFor('a', (state) => !seesUser(state, tokensB.user.id), 'Gizli profil filtresi')
   clientB.emit('social:privacy', {
     profileVisibility: 'everyone',
     listeningVisibility: 'everyone',
   })
-  await waitFor('a', (state) => state.users.length === 1, 'Profil görünürlüğü geri dönüşü')
+  await waitFor('a', (state) => seesUser(state, tokensB.user.id), 'Profil görünürlüğü geri dönüşü')
 
   clientA.emit('social:message', { targetUserId: tokensB.user.id, text: 'Canlı politika testi' })
   await waitFor(
@@ -140,8 +142,8 @@ try {
   await waitFor('b', (state) => state.messageRequests.length === 0, 'Mesaj isteğinin kabulü')
 
   clientB.emit('social:block', { targetUserId: tokensA.user.id })
-  await waitFor('a', (state) => state.users.length === 0, 'Engellemenin karşı tarafa uygulanması')
-  await waitFor('b', (state) => state.users.length === 0, 'Engellemenin engelleyene uygulanması')
+  await waitFor('a', (state) => !seesUser(state, tokensB.user.id), 'Engellemenin karşı tarafa uygulanması')
+  await waitFor('b', (state) => !seesUser(state, tokensA.user.id), 'Engellemenin engelleyene uygulanması')
   const blockRows = await pool.query(
     `select count(*)::int as count
      from ritim.blocks block
