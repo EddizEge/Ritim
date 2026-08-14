@@ -6,6 +6,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.core.content.ContextCompat;
 
@@ -17,12 +19,16 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import java.lang.ref.WeakReference;
+
 @CapacitorPlugin(
     name = "RitimMedia",
     permissions = { @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS }) }
 )
 public class RitimMediaPlugin extends Plugin {
     public static final String ACTION_MEDIA_EVENT = "app.ritim.mobile.MEDIA_EVENT";
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static WeakReference<RitimMediaPlugin> activePlugin = new WeakReference<>(null);
 
     private final BroadcastReceiver mediaReceiver = new BroadcastReceiver() {
         @Override
@@ -36,6 +42,7 @@ public class RitimMediaPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
+        activePlugin = new WeakReference<>(this);
         ContextCompat.registerReceiver(
             getContext(),
             mediaReceiver,
@@ -46,8 +53,20 @@ public class RitimMediaPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        if (activePlugin.get() == this) activePlugin.clear();
         try { getContext().unregisterReceiver(mediaReceiver); } catch (Exception ignored) {}
         super.handleOnDestroy();
+    }
+
+    public static boolean dispatchMediaAction(String action) {
+        RitimMediaPlugin plugin = activePlugin.get();
+        if (plugin == null) return false;
+        MAIN_HANDLER.post(() -> {
+            JSObject payload = new JSObject();
+            payload.put("action", action);
+            plugin.notifyListeners("mediaAction", payload, true);
+        });
+        return true;
     }
 
     @PluginMethod

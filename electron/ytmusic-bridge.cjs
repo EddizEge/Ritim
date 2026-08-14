@@ -1,5 +1,6 @@
 const crypto = require('node:crypto')
 const { io } = require('socket.io-client')
+const { planRoomPlaybackCorrection } = require('./room-playback-sync.cjs')
 
 function trackId(title, artist) {
   return `ytmusic:${crypto.createHash('sha1').update(`${title}|${artist}`).digest('hex').slice(0, 14)}`
@@ -41,8 +42,11 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   let actionSequence = 0
   let loadMoreTask = null
   let commandQueue = Promise.resolve()
+  let lastRoomSeekAtMs = 0
+  let lastRoomPlaybackRoomId = ''
   const appliedCommandIds = new Set()
   const inFlightCommandIds = new Set()
+  const coalescedCommandTasks = new Map()
   const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
@@ -1142,6 +1146,127 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
   }
 
+  async function applyAuthoritativeRoomPlayback(playback, timing = {}) {
+    const videoId = String(playback?.videoId || '').trim()
+    if (!videoId || !['playing', 'paused'].includes(playback?.playbackState)) {
+      throw new Error('Oda oynatma durumu geçersiz')
+    }
+    if (lastRoomPlaybackRoomId !== playback.roomId) {
+      lastRoomPlaybackRoomId = String(playback.roomId || '')
+      lastRoomSeekAtMs = 0
+    }
+
+    const currentVideoId = state.catalog?.[state.trackId]?.youtubeVideoId || ''
+    const trackChanged = currentVideoId !== videoId
+    if (trackChanged) {
+      expectedVideoId = videoId
+      expectedTrackTitle = ''
+      expectedVideoDeadline = Date.now() + 10_000
+      const queued = await clickQueueMusicItem({ videoId, title: '' })
+      if (!queued?.success) {
+        await queueNavigation(`https://music.youtube.com/watch?v=${encodeURIComponent(videoId)}`)
+      }
+      await waitForPlayerTrack(videoId, '', 9_000)
+    }
+
+    const playerSnapshot = await webContents.executeJavaScript(`(() => {
+      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const data = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
+      const media = [...document.querySelectorAll('video, audio')]
+        .find((item) => Number.isFinite(item.duration) && item.duration > 0);
+      return {
+        videoId: String(data.video_id || data.videoId || ''),
+        positionMs: media ? Math.max(0, Number(media.currentTime) || 0) * 1000 : 0,
+        playbackState: media && !media.paused ? 'playing' : 'paused',
+        mediaReady: Boolean(media),
+      };
+    })()`, true)
+    if (!playerSnapshot?.mediaReady) {
+      throw new Error('YouTube Music oynatıcısı oda durumunu uygulamaya hazır değil')
+    }
+    const localTimeMs = Date.now()
+    const plan = planRoomPlaybackCorrection({
+      playback,
+      currentVideoId: playerSnapshot.videoId || currentVideoId,
+      currentPositionMs: playerSnapshot.positionMs,
+      currentPlaybackState: playerSnapshot.playbackState,
+      clockOffsetMs: timing.clockOffsetMs,
+      localTimeMs,
+      lastSeekAtMs: lastRoomSeekAtMs,
+      trackChanged,
+    })
+    if (!plan.seekRequired && !plan.playbackStateRequired) {
+      return {
+        applied: true,
+        playbackRevision: playback.playbackRevision,
+        seekApplied: false,
+        playbackStateApplied: false,
+        driftMs: Math.round(plan.driftMs),
+        targetPositionMs: Math.round(plan.targetPositionMs),
+        actualPositionMs: Math.round(plan.actualPositionMs),
+        reason: plan.reason,
+      }
+    }
+
+    const applied = await webContents.executeJavaScript(`(() => {
+      const media = [...document.querySelectorAll('video, audio')]
+        .find((item) => Number.isFinite(item.duration) && item.duration > 0);
+      if (!media) return Promise.resolve({ applied: false, reason: 'media_missing' });
+      const seekRequired = ${JSON.stringify(plan.seekRequired)};
+      const targetSeconds = ${JSON.stringify(plan.targetPositionMs / 1000)};
+      if (seekRequired) media.currentTime = Math.min(targetSeconds, media.duration || targetSeconds);
+      const shouldPlay = ${JSON.stringify(plan.expectedPlaybackState === 'playing')};
+      if (!shouldPlay && !media.paused) media.pause();
+      if (shouldPlay && media.paused) {
+        return Promise.resolve(media.play())
+          .then(() => ({ applied: true, isPlaying: true, positionMs: media.currentTime * 1000 }))
+          .catch(() => ({ applied: false, reason: 'autoplay_blocked' }));
+      }
+      return Promise.resolve({ applied: true, isPlaying: !media.paused, positionMs: media.currentTime * 1000 });
+    })()`, true)
+    if (!applied?.applied && applied?.reason === 'autoplay_blocked') sendKey('MediaPlayPause')
+    if (!applied?.applied && applied?.reason !== 'autoplay_blocked') {
+      throw new Error('YouTube Music oynatıcısı oda durumunu uygulamaya hazır değil')
+    }
+    if (plan.seekRequired) lastRoomSeekAtMs = localTimeMs
+    setTimeout(() => void capture(), 120)
+    return {
+      applied: true,
+      playbackRevision: playback.playbackRevision,
+      seekApplied: plan.seekRequired,
+      playbackStateApplied: plan.playbackStateRequired,
+      driftMs: Math.round(plan.driftMs),
+      targetPositionMs: Math.round(plan.targetPositionMs),
+      actualPositionMs: Math.round(plan.actualPositionMs),
+      reason: plan.reason,
+      roundTripMs: Math.max(0, Math.round(Number(timing.roundTripMs) || 0)),
+    }
+  }
+
+  function commandCoalescingKey(incoming) {
+    const type = String(incoming?.type || '')
+    if (!['loadMoreBrowse', 'requestLyrics', 'requestRelated'].includes(type) && !type.startsWith('navigate:')) return ''
+    return `${type}\u0000${String(incoming?.value || '')}`
+  }
+
+  function acknowledgeApplied(commandId, commandType) {
+    if (!commandId) return
+    appliedCommandIds.add(commandId)
+    if (appliedCommandIds.size > 200) appliedCommandIds.delete(appliedCommandIds.values().next().value)
+    socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
+  }
+
+  function acknowledgeFailed(commandId, commandType, error) {
+    console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message)
+    if (commandId) socket.emit('player:command:ack', {
+      id: commandId,
+      type: commandType,
+      status: 'failed',
+      message: error.message,
+      appliedAt: Date.now(),
+    })
+  }
+
   socket.on('player:command', (incoming) => {
     const commandId = String(incoming?.id || '')
     const commandType = String(incoming?.type || '')
@@ -1151,18 +1276,24 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
     if (commandId && inFlightCommandIds.has(commandId)) return
     if (commandId) inFlightCommandIds.add(commandId)
+    const coalescingKey = commandCoalescingKey(incoming)
+    const existingTask = coalescingKey ? coalescedCommandTasks.get(coalescingKey) : null
+    if (existingTask) {
+      void existingTask.then(() => acknowledgeApplied(commandId, commandType))
+        .catch((error) => acknowledgeFailed(commandId, commandType, error))
+        .finally(() => {
+          if (commandId) inFlightCommandIds.delete(commandId)
+        })
+      return
+    }
     const task = commandQueue.catch(() => {}).then(() => command(incoming))
     commandQueue = task
-    void task.then(() => {
-      if (!commandId) return
-      appliedCommandIds.add(commandId)
-      if (appliedCommandIds.size > 200) appliedCommandIds.delete(appliedCommandIds.values().next().value)
-      socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'applied', appliedAt: Date.now() })
-    }).catch((error) => {
-      console.warn('[Ritim] Telefon komutu uygulanamadı:', error.message)
-      if (commandId) socket.emit('player:command:ack', { id: commandId, type: commandType, status: 'failed', message: error.message, appliedAt: Date.now() })
-    }).finally(() => {
+    if (coalescingKey) coalescedCommandTasks.set(coalescingKey, task)
+    void task.then(() => acknowledgeApplied(commandId, commandType))
+      .catch((error) => acknowledgeFailed(commandId, commandType, error))
+      .finally(() => {
       if (commandId) inFlightCommandIds.delete(commandId)
+      if (coalescingKey && coalescedCommandTasks.get(coalescingKey) === task) coalescedCommandTasks.delete(coalescingKey)
     })
   })
 
@@ -1654,6 +1785,11 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   return {
     capture,
     command,
+    applyRoomPlayback(playback, timing) {
+      const task = commandQueue.catch(() => {}).then(() => applyAuthoritativeRoomPlayback(playback, timing))
+      commandQueue = task
+      return task
+    },
     destroy() {
       destroyed = true
       pendingNavigation = null

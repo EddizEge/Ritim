@@ -36,6 +36,45 @@ Bu klasör Alpha.2'nin Raspberry Pi üzerindeki kalıcı sosyal altyapısıdır.
    curl --fail http://127.0.0.1:8790/ready
    ```
 
+## Alpha.3 mesaj istekleri geçişi
+
+Mevcut Alpha.2 PostgreSQL volume'u ilk kurulum betiklerini tekrar çalıştırmaz.
+Alpha.3 gateway imajına geçmeden önce `030_alpha3_message_requests.sql`
+dosyasını bir kez yönetici hesabıyla uygula:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/030_alpha3_message_requests.sql
+
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/040_alpha3_notifications.sql
+```
+
+Alpha.4 oda üyeliği geçişi:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/050_alpha4_room_membership.sql
+```
+
+Alpha.4 oda sohbeti geçişi (Dilim 5):
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/060_alpha4_room_interactions.sql
+```
+
+`060` geçişi yalnızca kısa oda mesajı tablosunu ve gerekli izinleri ekler.
+Gateway imajını yenilemeden önce bir kez uygulanmalıdır; Cloudflare ayarında
+değişiklik gerektirmez.
+
+Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları
+silmez veya yeniden yazmaz. Betik tekrar çalıştırılabilir.
+
 `RITIM_AUTH_REQUIRED=true` yalnızca PC ve Android istemcileri Ritim access
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.

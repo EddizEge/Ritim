@@ -6,6 +6,7 @@ const path = require('node:path')
 const QRCode = require('qrcode')
 const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
+const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
@@ -30,6 +31,18 @@ let socialStartSequence = 0
 let latestSocialState
 let socialConnectionStatus = 'connecting'
 let latestPlayerState
+let publishedPlaybackRoomId = ''
+let publishedPlaybackRevision = 0
+let publishedPlaybackSignature = ''
+let appliedPlaybackRoomId = ''
+let scheduledPlaybackRevision = 0
+let pendingRoomPlayback
+let roomPlaybackApplyRunning = false
+let roomPlaybackApplyChain = Promise.resolve()
+let socialClockEstimate = {}
+let socialClockPingInFlight = false
+let socialClockTimer
+let expectedSocialRoomExitUntil = 0
 let updateController
 let isShuttingDown = false
 let activeShellView = 'music'
@@ -50,6 +63,9 @@ if (!hasSingleInstanceLock) {
 
 function stopRuntime() {
   socialStartSequence += 1
+  if (socialClockTimer) clearInterval(socialClockTimer)
+  socialClockTimer = undefined
+  socialClockPingInFlight = false
   socialSocket?.disconnect()
   socialSocket = null
   musicBridge?.destroy()
@@ -195,9 +211,137 @@ function publishDesktopSocialProfile() {
   socialSocket.emit('social:profile', { profile: desktopSocialProfile() })
 }
 
+function publishOwnedRoomPlayback() {
+  if (!socialSocket?.connected || !latestPlayerState) return
+  const room = latestSocialState?.rooms?.find((candidate) => candidate.viewerRole === 'owner')
+  const track = latestPlayerState.catalog?.[latestPlayerState.trackId]
+  const videoId = String(track?.youtubeVideoId || '').trim()
+  if (!room || !videoId) return
+  if (publishedPlaybackRoomId !== room.id) {
+    publishedPlaybackRoomId = room.id
+    publishedPlaybackRevision = Number(room.playback?.playbackRevision) || 0
+    publishedPlaybackSignature = ''
+  } else {
+    publishedPlaybackRevision = Math.max(
+      publishedPlaybackRevision,
+      Number(room.playback?.playbackRevision) || 0,
+    )
+  }
+  const playbackPositionMs = Math.max(0, Math.round((Number(latestPlayerState.position) || 0) * 1000))
+  const playbackState = latestPlayerState.isPlaying ? 'playing' : 'paused'
+  const signature = JSON.stringify([videoId, playbackPositionMs, playbackState])
+  if (signature === publishedPlaybackSignature) return
+  publishedPlaybackSignature = signature
+  const playbackRevision = ++publishedPlaybackRevision
+  socialSocket.emit('social:room-playback:update', {
+    roomId: room.id,
+    videoId,
+    playbackPositionMs,
+    playbackState,
+    playbackRevision,
+  }, (result = {}) => {
+    const acceptedRevision = Number(result.playback?.playbackRevision) || 0
+    publishedPlaybackRevision = Math.max(publishedPlaybackRevision, acceptedRevision)
+    if (!result.ok) publishedPlaybackSignature = ''
+  })
+}
+
+function measureSocialClock() {
+  const listenerRoom = latestSocialState?.rooms?.find((candidate) => candidate.viewerRole === 'listener')
+  if (!listenerRoom || !socialSocket?.connected || socialClockPingInFlight) return
+  const activeSocket = socialSocket
+  const requestId = crypto.randomUUID()
+  const clientSentAtMs = Date.now()
+  socialClockPingInFlight = true
+  let settled = false
+  const finish = () => {
+    if (settled) return false
+    settled = true
+    socialClockPingInFlight = false
+    clearTimeout(timeout)
+    return true
+  }
+  const timeout = setTimeout(() => finish(), 3_000)
+  activeSocket.emit('social:clock:ping', { requestId, clientSentAtMs }, (result = {}) => {
+    const clientReceivedAtMs = Date.now()
+    if (!finish() || activeSocket !== socialSocket || result.requestId !== requestId) return
+    if (!Number.isFinite(Number(result.serverTimeMs))) return
+    socialClockEstimate = updateClockEstimate(socialClockEstimate, {
+      clientSentAtMs,
+      clientReceivedAtMs,
+      serverTimeMs: Number(result.serverTimeMs),
+    })
+  })
+}
+
+function reportRoomPlaybackResult(playback, result) {
+  if (!socialSocket?.connected || !playback?.roomId || !playback?.playbackRevision) return
+  socialSocket.emit('social:room-playback:result', {
+    roomId: playback.roomId,
+    playbackRevision: playback.playbackRevision,
+    status: result?.applied ? 'applied' : 'failed',
+    seekApplied: Boolean(result?.seekApplied),
+    playbackStateApplied: Boolean(result?.playbackStateApplied),
+    driftMs: Number(result?.driftMs) || 0,
+    roundTripMs: Number(socialClockEstimate.roundTripMs) || 0,
+    reason: result?.reason,
+    error: result?.error,
+  })
+}
+
+function applyJoinedRoomPlayback(state) {
+  const room = state?.rooms?.find((candidate) => candidate.viewerRole === 'listener')
+  const playback = room?.playback
+  if (!room || !playback) {
+    appliedPlaybackRoomId = ''
+    scheduledPlaybackRevision = 0
+    pendingRoomPlayback = undefined
+    return
+  }
+  if (appliedPlaybackRoomId !== room.id) {
+    appliedPlaybackRoomId = room.id
+    scheduledPlaybackRevision = 0
+  }
+  const revision = Number(playback.playbackRevision) || 0
+  if (revision <= scheduledPlaybackRevision) return
+  scheduledPlaybackRevision = revision
+  pendingRoomPlayback = playback
+  if (roomPlaybackApplyRunning) return
+  roomPlaybackApplyRunning = true
+  roomPlaybackApplyChain = (async () => {
+    while (pendingRoomPlayback) {
+      const nextPlayback = pendingRoomPlayback
+      pendingRoomPlayback = undefined
+      try {
+        const result = await musicBridge?.applyRoomPlayback(nextPlayback, socialClockEstimate)
+        reportRoomPlaybackResult(nextPlayback, result)
+      } catch (error) {
+        console.warn('[Ritim Social] Oda oynatma durumu uygulanamadı:', error?.message || error)
+        reportRoomPlaybackResult(nextPlayback, {
+          applied: false,
+          reason: 'apply_failed',
+          error: error?.message || String(error),
+        })
+      }
+    }
+  })().finally(() => {
+    roomPlaybackApplyRunning = false
+    if (pendingRoomPlayback) applyJoinedRoomPlayback(latestSocialState)
+  })
+}
+
 function broadcastSocialState(status, incomingState) {
   socialConnectionStatus = status
-  const previous = incomingState || latestSocialState
+  const previousState = latestSocialState
+  const previous = incomingState || previousState
+  const lostActiveRoom = Boolean(
+    status === 'online'
+    && incomingState
+    && previousState?.activeRoomId
+    && !incomingState.activeRoomId
+  )
+  const expectedRoomExit = lostActiveRoom && expectedSocialRoomExitUntil >= Date.now()
+  if (lostActiveRoom) expectedSocialRoomExitUntil = 0
   latestSocialState = {
     currentUser: previous?.currentUser || desktopSocialProfile(),
     privacy: previous?.privacy || {
@@ -208,10 +352,15 @@ function broadcastSocialState(status, incomingState) {
     companionConnected: Boolean(previous?.companionConnected),
     users: (previous?.users || []).map((user) => status === 'online' ? user : { ...user, presence: 'offline' }),
     rooms: previous?.rooms || [],
+    roomMessages: previous?.roomMessages || {},
+    roomReactions: previous?.roomReactions || {},
     conversations: previous?.conversations || {},
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
     activeRoomId: previous?.activeRoomId,
+    roomNotice: lostActiveRoom && !expectedRoomExit
+      ? 'Dinleme odası kapatıldı veya erişimin kaldırıldı.'
+      : undefined,
     authentication: socialAuthStatus,
     connectionStatus: status,
   }
@@ -220,6 +369,10 @@ function broadcastSocialState(status, incomingState) {
 
 async function startSocialClient({ forceRefresh = false } = {}) {
   const sequence = ++socialStartSequence
+  if (socialClockTimer) clearInterval(socialClockTimer)
+  socialClockTimer = undefined
+  socialClockPingInFlight = false
+  socialClockEstimate = {}
   socialSocket?.disconnect()
   broadcastSocialState('connecting')
   let accessToken = ''
@@ -247,8 +400,14 @@ async function startSocialClient({ forceRefresh = false } = {}) {
       deviceRole: 'desktop',
       profile: desktopSocialProfile(),
     })
+    measureSocialClock()
   })
-  socialSocket.on('disconnect', () => broadcastSocialState('offline'))
+  socialSocket.on('disconnect', () => {
+    appliedPlaybackRoomId = ''
+    scheduledPlaybackRevision = 0
+    pendingRoomPlayback = undefined
+    broadcastSocialState('offline')
+  })
   let authRetryUsed = false
   socialSocket.on('connect_error', (error) => {
     broadcastSocialState('offline')
@@ -266,7 +425,12 @@ async function startSocialClient({ forceRefresh = false } = {}) {
   socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
   socialSocket.on('social:state', (state) => {
     broadcastSocialState('online', state)
+    publishOwnedRoomPlayback()
+    applyJoinedRoomPlayback(state)
+    if (Date.now() - (Number(socialClockEstimate.measuredAtMs) || 0) >= 5_000) measureSocialClock()
   })
+  socialClockTimer = setInterval(measureSocialClock, 5_000)
+  socialClockTimer.unref?.()
 }
 
 function createMusicView() {
@@ -312,6 +476,7 @@ function createMusicView() {
     onState: (state) => {
       latestPlayerState = state
       publishDesktopSocialProfile()
+      publishOwnedRoomPlayback()
     },
     room: ROOM,
     syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
@@ -426,6 +591,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     companionConnected: false,
     users: [],
     rooms: [],
+    roomMessages: {},
+    roomReactions: {},
     conversations: {},
     selectedUserId: '',
     authentication: socialAuthStatus,
@@ -460,11 +627,21 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (!socialSocket?.connected) return
     const payload = action.payload || {}
     if (action.type === 'message') socialSocket.emit('social:message', payload)
+    if (action.type === 'room-message') socialSocket.emit('social:room-message', payload)
+    if (action.type === 'room-reaction') socialSocket.emit('social:room-reaction', payload)
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
     if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
     if (action.type === 'block') socialSocket.emit('social:block', payload)
-    if (action.type === 'listening') socialSocket.emit('social:listening', payload)
+    if (action.type === 'listening') {
+      if (latestSocialState?.listeningWithUserId === payload.targetUserId) {
+        expectedSocialRoomExitUntil = Date.now() + 5_000
+      }
+      socialSocket.emit('social:listening', payload)
+    }
     if (action.type === 'create-room') {
+      if (latestSocialState?.rooms?.some((room) => room.viewerRole === 'owner')) {
+        expectedSocialRoomExitUntil = Date.now() + 5_000
+      }
       const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
       socialSocket.emit('social:create-room', {
         ...payload,
