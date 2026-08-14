@@ -22,6 +22,7 @@ function safeRoom(value) {
 function startSyncServer(distPath, port = 8787, {
   pairingToken = '',
   getSocialCompanionTicket,
+  commandOwnerTimeoutMs = 30000,
 } = {}) {
   const app = express()
   app.use(cors({
@@ -158,19 +159,48 @@ function startSyncServer(distPath, port = 8787, {
         })
         return
       }
-      commandOwners.set(normalizedCommand.id, socket.id)
+      const commandOwnerKey = `${normalizedRoom}\u0000${normalizedCommand.id}`
+      const existingOwner = commandOwners.get(commandOwnerKey)
+      if (existingOwner) clearTimeout(existingOwner.timer)
+      const timer = setTimeout(() => commandOwners.delete(commandOwnerKey), commandOwnerTimeoutMs)
+      commandOwners.set(commandOwnerKey, {
+        commandId: normalizedCommand.id,
+        socketId: socket.id,
+        room: normalizedRoom,
+        type: normalizedCommand.type,
+        timer,
+      })
       desktop.emit('player:command', normalizedCommand)
-      setTimeout(() => commandOwners.delete(normalizedCommand.id), 15000)
     })
 
     socket.on('player:command:ack', (ack) => {
       if (socket.data.role !== 'desktop' || !ack?.id) return
-      const ownerId = commandOwners.get(String(ack.id))
-      commandOwners.delete(String(ack.id))
-      if (ownerId) io.to(ownerId).emit('player:command:ack', ack)
+      const commandOwnerKey = `${socket.data.room || ''}\u0000${String(ack.id)}`
+      const owner = commandOwners.get(commandOwnerKey)
+      commandOwners.delete(commandOwnerKey)
+      if (owner) {
+        clearTimeout(owner.timer)
+        io.to(owner.socketId).emit('player:command:ack', ack)
+      }
     })
 
     socket.on('disconnect', () => {
+      for (const [commandOwnerKey, owner] of commandOwners) {
+        const companionDisconnected = owner.socketId === socket.id
+        const desktopDisconnected = socket.data.role === 'desktop' && owner.room === socket.data.room
+        if (!companionDisconnected && !desktopDisconnected) continue
+        clearTimeout(owner.timer)
+        commandOwners.delete(commandOwnerKey)
+        if (desktopDisconnected) {
+          io.to(owner.socketId).emit('player:command:ack', {
+            id: owner.commandId,
+            type: owner.type,
+            status: 'failed',
+            message: 'Ritim PC bağlantısı kesildi',
+            appliedAt: Date.now(),
+          })
+        }
+      }
       const room = socket.data.room
       if (!room) return
       const record = rooms.get(room)
@@ -186,6 +216,7 @@ function startSyncServer(distPath, port = 8787, {
   server.listen(port, '0.0.0.0', () => console.log(`[Ritim Sync V2] Telefon arayuzu: http://0.0.0.0:${port}/?companion=1`))
   server.io = io
   server.pairingToken = pairingToken
+  server.commandOwnerTimeoutMs = commandOwnerTimeoutMs
   return server
 }
 

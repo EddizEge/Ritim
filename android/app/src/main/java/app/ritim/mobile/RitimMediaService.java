@@ -92,6 +92,7 @@ public class RitimMediaService extends Service {
     }
 
     private void sendMediaAction(String action) {
+        if (RitimMediaPlugin.dispatchMediaAction(action)) return;
         Intent event = new Intent(RitimMediaPlugin.ACTION_MEDIA_EVENT);
         event.setPackage(getPackageName());
         event.putExtra("action", action);

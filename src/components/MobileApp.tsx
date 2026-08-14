@@ -271,6 +271,8 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [activeTab, setActiveTab] = useState<InfoTab>('queue')
   const [searchOpen, setSearchOpen] = useState(false)
   const [socialOpen, setSocialOpen] = useState(false)
+  const socialUnreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
+    + socialState.messageRequests.filter((request) => request.direction === 'incoming').length
   const [searchQuery, setSearchQuery] = useState('')
   const [requestedSearchQuery, setRequestedSearchQuery] = useState('')
   const [navigationRetries, setNavigationRetries] = useState(0)
@@ -562,7 +564,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         <button className={!socialOpen && requestedRoute === 'home' ? 'is-active' : ''} onClick={() => navigate('home')}><Home fill={!socialOpen && requestedRoute === 'home' ? 'currentColor' : 'none'} /><span>Ana Sayfa</span></button>
         <button className={!socialOpen && requestedRoute === 'explore' ? 'is-active' : ''} onClick={() => navigate('explore')}><Compass /><span>Keşfet</span></button>
         <button className={!socialOpen && requestedRoute === 'search' ? 'is-active' : ''} onClick={() => { setSocialOpen(false); setSearchOpen(true) }}><Search /><span>Ara</span></button>
-        <button className={socialOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setPlayerOpen(false); setSocialOpen(true) }}><UsersRound fill={socialOpen ? 'currentColor' : 'none'} /><span>Sosyal</span></button>
+        <button className={socialOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setPlayerOpen(false); setSocialOpen(true) }}><span className="mobile-nav-icon"><UsersRound fill={socialOpen ? 'currentColor' : 'none'} />{socialUnreadCount ? <i>{Math.min(99, socialUnreadCount)}</i> : null}</span><span>Sosyal</span></button>
         <button className={!socialOpen && requestedRoute === 'library' ? 'is-active' : ''} onClick={() => navigate('library')}><Library fill={!socialOpen && requestedRoute === 'library' ? 'currentColor' : 'none'} /><span>Kitaplık</span></button>
       </nav>
 

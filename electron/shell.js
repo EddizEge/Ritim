@@ -27,6 +27,13 @@ const listenButton = document.getElementById('listen-button')
 const blockButton = document.getElementById('block-button')
 const createRoomButton = document.getElementById('create-room-button')
 const roomsList = document.getElementById('rooms-list')
+const roomStatusNote = document.getElementById('room-status-note')
+const roomChat = document.getElementById('room-chat')
+const roomChatCount = document.getElementById('room-chat-count')
+const roomReactionStream = document.getElementById('room-reaction-stream')
+const roomMessageList = document.getElementById('room-message-list')
+const roomMessageForm = document.getElementById('room-message-form')
+const roomMessageInput = document.getElementById('room-message-input')
 
 let socialState = null
 let selectedUserId = ''
@@ -172,17 +179,61 @@ function renderRooms() {
   }
   for (const room of rooms) {
     const card = document.createElement('article')
-    card.className = 'room-card'
+    const unavailable = room.viewerPlaybackStatus === 'unavailable'
+    const ownerOffline = room.lifecycle === 'owner_offline'
+    card.className = `room-card${ownerOffline ? ' is-owner-offline' : ''}${unavailable ? ' is-unavailable' : ''}`
     const header = document.createElement('header')
     const live = document.createElement('span')
-    live.textContent = '● CANLI'
+    live.textContent = unavailable
+      ? '● PARÇA AÇILAMADI'
+      : ownerOffline
+        ? '● PC ÇEVRİMDIŞI'
+        : room.lifecycle === 'waiting' ? '● HAZIRLANIYOR' : '● CANLI'
     const members = document.createElement('small')
     members.textContent = `${room.memberCount} kişi`
     header.append(live, members)
     const title = document.createElement('b')
     title.textContent = room.title
-    card.append(header, title)
+    const playback = document.createElement('small')
+    playback.textContent = unavailable
+      ? 'Bu parça bu bilgisayarda açılamadı.'
+      : room.playback
+      ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
+      : ownerOffline ? 'Oda sahibi yeniden bağlanıyor' : 'Oynatma bekleniyor'
+    card.append(header, title, playback)
     roomsList.append(card)
+  }
+  const activeRoom = rooms.find((room) => room.id === socialState?.activeRoomId)
+  roomChat.hidden = !activeRoom
+  if (!activeRoom) return
+  roomChatCount.textContent = `${activeRoom.memberCount} kişi burada`
+  roomReactionStream.replaceChildren()
+  for (const item of (socialState.roomReactions?.[activeRoom.id] || []).filter((reaction) => reaction.expiresAt > Date.now()).slice(-8)) {
+    const reaction = document.createElement('span')
+    reaction.textContent = item.reaction
+    roomReactionStream.append(reaction)
+  }
+  roomMessageList.replaceChildren()
+  const messages = socialState.roomMessages?.[activeRoom.id] || []
+  if (!messages.length) {
+    const empty = document.createElement('p')
+    empty.className = 'room-chat-empty'
+    empty.textContent = 'İlk oda mesajını sen gönder.'
+    roomMessageList.append(empty)
+  } else {
+    for (const item of messages.slice(-20)) {
+      const message = document.createElement('article')
+      message.className = item.senderId === socialState.currentUser.id ? 'is-own' : ''
+      const sender = document.createElement('b')
+      sender.textContent = item.senderId === socialState.currentUser.id
+        ? 'Sen'
+        : socialState.users.find((user) => user.id === item.senderId)?.displayName || 'Oda üyesi'
+      const text = document.createElement('p')
+      text.textContent = item.text
+      message.append(sender, text)
+      roomMessageList.append(message)
+    }
+    roomMessageList.scrollTop = roomMessageList.scrollHeight
   }
 }
 
@@ -196,10 +247,13 @@ function render() {
   socialCount.hidden = online === 0
   socialCount.textContent = String(online)
   createRoomButton.classList.toggle('is-active', Boolean(socialState?.activeRoomId))
+  roomStatusNote.hidden = !socialState?.roomNotice
+  roomStatusNote.textContent = socialState?.roomNotice || ''
   const socialOnline = socialState?.connectionStatus === 'online'
   createRoomButton.disabled = !socialOnline
   listenButton.disabled = !socialOnline
   messageInput.disabled = !socialOnline
+  roomMessageInput.disabled = !socialOnline || !socialState?.activeRoomId
   const authentication = socialState?.authentication || {}
   const needsAuthentication = authentication.required && !authentication.authenticated
   createRoomButton.lastChild.textContent = socialState?.activeRoomId ? ' Odan hazır' : ' Dinleme odası oluştur'
@@ -261,6 +315,24 @@ messageForm.addEventListener('submit', (event) => {
   window.ritimShell?.sendSocialAction('message', { targetUserId: user.id, text })
   messageInput.value = ''
 })
+roomMessageForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  const roomId = socialState?.activeRoomId
+  const text = roomMessageInput.value.trim()
+  if (!roomId || !text) return
+  window.ritimShell?.sendSocialAction('room-message', {
+    roomId,
+    text,
+    clientMessageId: crypto.randomUUID(),
+  })
+  roomMessageInput.value = ''
+})
+for (const button of document.querySelectorAll('.room-reaction-actions button')) {
+  button.addEventListener('click', () => {
+    const roomId = socialState?.activeRoomId
+    if (roomId) window.ritimShell?.sendSocialAction('room-reaction', { roomId, reaction: button.dataset.reaction })
+  })
+}
 
 window.ritimShell?.onViewChanged(setView)
 window.ritimShell?.onSocialState((state) => {
