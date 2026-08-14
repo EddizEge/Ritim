@@ -55,8 +55,8 @@ docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
 Alpha.4 oda üyeliği geçişi:
 
 ```sh
-docker compose -f compose.alpha2.yml exec -T postgres \
-  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < postgres/init/050_alpha4_room_membership.sql
 ```
 
