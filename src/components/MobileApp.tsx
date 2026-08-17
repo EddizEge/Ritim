@@ -1,7 +1,7 @@
 import { FormEvent, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bug, ChevronDown, ChevronLeft, Compass, Download, Heart, Home, Library, ListMusic, ListPlus,
-  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, SkipForward, Trash2, UsersRound, Volume1, Volume2, Wifi, WifiOff, X,
+  MonitorSpeaker, MoreVertical, Pause, Play, RefreshCw, Save, Search, Settings, SkipForward, Trash2, UsersRound, Volume1, Volume2, Wifi, WifiOff, X,
 } from 'lucide-react'
 import { formatTime, getTrack } from '../data'
 import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem, MusicBrowseSection, MusicItemAction, PlayerActions, PlayerState, RelatedState, SyncHealth, Track } from '../types'
@@ -13,6 +13,8 @@ import { clearMobilePairing, isNativeMobile, readMobilePairing } from '../mobile
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
 import { MobileSocialHub } from './SocialHub'
 import type { SocialActions, SocialState } from '../social/types'
+import { MobileSettings } from './MobileSettings'
+import type { SocialAccountState } from '../hooks/useSocialAccount'
 
 type Props = {
   state: PlayerState
@@ -24,6 +26,13 @@ type Props = {
   syncHealth: SyncHealth
   socialState: SocialState
   socialActions: SocialActions
+  socialAccount: SocialAccountState
+  socialAccountActions: {
+    refresh: () => Promise<unknown>
+    revokeDevice: (deviceId: string) => Promise<void>
+    signOut: () => Promise<void>
+    reconnect: () => Promise<unknown>
+  }
 }
 
 type BrowseRoute = 'home' | 'explore' | 'library' | 'search' | 'detail'
@@ -260,7 +269,7 @@ function ConnectionCenterSheet({ health, connected, room, pairingError, onReconn
   )
 }
 
-export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth, socialState, socialActions }: Props) {
+export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth, socialState, socialActions, socialAccount, socialAccountActions }: Props) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
   const idle = track.id === 'ytmusic:idle'
@@ -271,6 +280,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [activeTab, setActiveTab] = useState<InfoTab>('queue')
   const [searchOpen, setSearchOpen] = useState(false)
   const [socialOpen, setSocialOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const socialUnreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
     + socialState.messageRequests.filter((request) => request.direction === 'incoming').length
   const [searchQuery, setSearchQuery] = useState('')
@@ -387,6 +397,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
 
   const navigate = (destination: 'home' | 'explore' | 'library') => {
     setSocialOpen(false)
+    setSettingsOpen(false)
     pendingNavigationRef.current = { route: destination, query: '' }
     setRequestedRoute(destination)
     setRequestedSearchQuery('')
@@ -407,6 +418,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     setNavigationError(false)
     setSearchOpen(false)
     setSocialOpen(false)
+    setSettingsOpen(false)
     actions.navigateMusic('search', query)
   }
 
@@ -516,13 +528,16 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         <div className="mobile-header-actions">
           <button onClick={() => { setSocialOpen(false); setSearchOpen(true) }} aria-label="Ara"><Search /></button>
           <button onClick={() => setFeedbackOpen(true)} aria-label="Hata bildir"><Bug /></button>
+          <button className={settingsOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setSocialOpen(false); setSettingsOpen((value) => !value) }} aria-label="Ayarlar"><Settings /></button>
           {isNativeMobile ? <button className={mobileUpdate.updateAvailable ? 'has-update' : ''} onClick={() => void handleMobileUpdate()} aria-label="Güncellemeleri kontrol et">{mobileUpdate.updateAvailable ? <Download /> : <RefreshCw />}</button> : null}
           <button className="mobile-device-button" onClick={() => setConnectionOpen(true)} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} /></button>
         </div>
       </header>
 
-      <main className={`mobile-browse-content ${socialOpen ? 'is-social' : ''}`}>
-        {socialOpen ? (
+      <main className={`mobile-browse-content ${socialOpen ? 'is-social' : ''} ${settingsOpen ? 'is-settings' : ''}`}>
+        {settingsOpen ? (
+          <><div className="mobile-settings-heading"><h1>Ayarlar</h1><p>Hesabın ve bu hesaba bağlı cihazlar.</p></div><MobileSettings account={socialAccount} onRefresh={socialAccountActions.refresh} onReconnect={socialAccountActions.reconnect} onRevokeDevice={socialAccountActions.revokeDevice} onSignOut={socialAccountActions.signOut} /></>
+        ) : socialOpen ? (
           <MobileSocialHub state={socialState} actions={socialActions} />
         ) : (
           <>
@@ -560,13 +575,13 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         </div>
       ) : null}
 
-      <nav className="ytm-bottom-nav mobile-main-nav" aria-label="Ritim gezinme">
+      {!settingsOpen ? <nav className="ytm-bottom-nav mobile-main-nav" aria-label="Ritim gezinme">
         <button className={!socialOpen && requestedRoute === 'home' ? 'is-active' : ''} onClick={() => navigate('home')}><Home fill={!socialOpen && requestedRoute === 'home' ? 'currentColor' : 'none'} /><span>Ana Sayfa</span></button>
         <button className={!socialOpen && requestedRoute === 'explore' ? 'is-active' : ''} onClick={() => navigate('explore')}><Compass /><span>Keşfet</span></button>
         <button className={!socialOpen && requestedRoute === 'search' ? 'is-active' : ''} onClick={() => { setSocialOpen(false); setSearchOpen(true) }}><Search /><span>Ara</span></button>
-        <button className={socialOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setPlayerOpen(false); setSocialOpen(true) }}><span className="mobile-nav-icon"><UsersRound fill={socialOpen ? 'currentColor' : 'none'} />{socialUnreadCount ? <i>{Math.min(99, socialUnreadCount)}</i> : null}</span><span>Sosyal</span></button>
+        <button className={socialOpen ? 'is-active' : ''} onClick={() => { setSearchOpen(false); setPlayerOpen(false); setSettingsOpen(false); setSocialOpen(true) }}><span className="mobile-nav-icon"><UsersRound fill={socialOpen ? 'currentColor' : 'none'} />{socialUnreadCount ? <i>{Math.min(99, socialUnreadCount)}</i> : null}</span><span>Sosyal</span></button>
         <button className={!socialOpen && requestedRoute === 'library' ? 'is-active' : ''} onClick={() => navigate('library')}><Library fill={!socialOpen && requestedRoute === 'library' ? 'currentColor' : 'none'} /><span>Kitaplık</span></button>
-      </nav>
+      </nav> : null}
 
       {searchOpen ? <div className="ytm-search-overlay"><form onSubmit={submitSearch}><button type="button" className="ytm-icon-button" onClick={() => setSearchOpen(false)} aria-label="Aramayı kapat"><X /></button><Search /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Şarkı, albüm veya sanatçı ara" /><button type="submit">ARA</button></form><p>Sonuçlar kendi YouTube Music hesabından Ritim PC aracılığıyla gelir.</p></div> : null}
       <FeedbackSheet open={feedbackOpen} onClose={() => setFeedbackOpen(false)} connected={connected} peerCount={peerCount} room={room} pairingError={pairingError} trackTitle={track.title} trackId={track.id} />

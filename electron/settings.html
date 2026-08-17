@@ -8,53 +8,76 @@
   </head>
   <body>
     <main class="settings-shell">
-      <header class="hero">
-        <div class="hero-mark">R</div>
-        <div><span class="eyebrow">RİTİM MASAÜSTÜ</span><h1>Ayarlar</h1><p>Telefon bağlantısı ve uygulama bilgileri.</p></div>
-        <span class="ready-pill"><i></i><span id="server-label">Bağlantı hazır</span></span>
-      </header>
+      <aside class="settings-sidebar">
+        <div class="sidebar-brand"><span>R</span><div><b>Ritim</b><small>Ayarlar</small></div></div>
+        <nav aria-label="Ayar bölümleri">
+          <button class="is-active" data-section="account"><span>●</span>Hesap</button>
+          <button data-section="devices"><span>▣</span>Cihazlar <em id="device-count">—</em></button>
+          <button data-section="connection"><span>⌁</span>Eşleme</button>
+          <button data-section="updates"><span>↻</span>Güncellemeler</button>
+          <button data-section="about"><span>i</span>Hakkında</button>
+        </nav>
+        <div class="sidebar-status"><i></i><span><b id="server-label">Bağlantı hazır</b><small>Sync V2 yerel bağlantı</small></span></div>
+      </aside>
 
-      <section class="card connection-card">
-        <div class="section-heading"><div><span class="eyebrow">TELEFON BAĞLANTISI</span><h2>Ritim’i telefondan kontrol et</h2></div><span class="room-badge" id="room">EDIZ-4821</span></div>
-        <div class="connection-grid">
-          <div class="steps">
-            <ol>
-              <li><b>Aynı Wi‑Fi’a bağlan</b><span>Telefon ve <strong id="computer-name">bu bilgisayar</strong> aynı yerel ağda olmalı.</span></li>
-              <li><b>Ritim Android’i aç</b><span>Uygulamadaki <strong>QR kodu tara</strong> düğmesine dokun.</span></li>
-              <li><b>QR kodu tara</b><span>Çalan parça, kuyruk ve kontroller telefonda anında görünür. İstersen bağlantıyı tarayıcıda da açabilirsin.</span></li>
-            </ol>
-            <label for="phone-url">Telefon bağlantısı</label>
-            <div class="url-row"><input id="phone-url" readonly value="Bağlantı hazırlanıyor…" /><button class="secondary" id="copy-button" type="button">Kopyala</button></div>
-            <p class="local-note">QR kod oturuma özel bir güvenlik anahtarı içerir. Google çerezlerin ve şifren telefona aktarılmaz; yalnızca parça bilgileri ve kontrol komutları paylaşılır.</p>
+      <div class="settings-content">
+        <header class="content-header"><div><h1 id="section-title">Hesap</h1><p id="section-description">Ritim kimliğin ve sosyal oturumun.</p></div><span class="version-pill">Beta 1</span></header>
+
+        <section class="settings-panel is-active" data-panel="account">
+          <div id="account-loading" class="state-card"><div class="loading-dots"><i></i><i></i><i></i></div><b>Hesap hazırlanıyor</b><p>Ritim kimliğin güvenli biçimde alınıyor.</p></div>
+          <div id="account-error" class="state-card is-error" hidden><span>!</span><b>Hesap bilgileri alınamadı</b><p id="account-error-message">Bağlantını kontrol edip tekrar dene.</p><button class="secondary" id="account-retry-button">Tekrar dene</button></div>
+          <div id="account-signed-out" class="state-card" hidden><span class="state-mark">R</span><b>Ritim Sosyal’e bağlı değilsin</b><p>Mesajlaşma ve birlikte dinleme için Google hesabınla güvenli biçimde bağlan.</p><button class="primary" id="social-sign-in-button">Google ile bağlan</button></div>
+          <div id="account-ready" hidden>
+            <article class="profile-card">
+              <span class="profile-avatar" id="account-avatar">R</span>
+              <div class="profile-copy"><h2 id="account-name">Ritim kullanıcısı</h2><p id="account-handle">@ritim</p></div>
+              <span class="online-badge"><i></i>Bağlı</span>
+            </article>
+            <div class="detail-list">
+              <div><span>Ritim kimliği</span><b class="mono" id="account-id">—</b></div>
+              <div><span>Oturum</span><b>Google ile doğrulandı</b></div>
+              <div><span>Bu cihaz</span><b id="current-device-name">Ritim PC</b></div>
+            </div>
+            <div class="danger-row"><div><b>Bu cihazdan çıkış yap</b><p>YouTube Music oturumun ve yerel telefon kumandan etkilenmez.</p></div><button class="danger" id="social-sign-out-button">Çıkış yap</button></div>
           </div>
-          <div class="qr-card">
-            <div class="qr-frame"><img id="qr-code" alt="Telefon bağlantısı QR kodu" hidden /><div id="qr-fallback" class="qr-fallback">QR</div></div>
-            <b>Ritim ile tara</b><span>Bağlantı güvenli biçimde kaydedilir</span>
+        </section>
+
+        <section class="settings-panel" data-panel="devices" hidden>
+          <div class="panel-intro"><div><h2>Bağlı cihazlar</h2><p>Aynı hesaba bağlı PC ve telefonların sosyal erişimini yönet.</p></div><button class="secondary compact" id="devices-refresh-button">Yenile</button></div>
+          <div class="device-list" id="device-list"></div>
+          <div class="state-card compact-state" id="device-empty" hidden><span>▣</span><b>Etkin cihaz yok</b><p>Hesabına bağlı cihazlar burada görünür.</p></div>
+          <p class="security-note">Bir cihazı kaldırdığında o cihazın Ritim Sosyal erişimi hemen kesilir. PC’deki YouTube Music oturumu ve yerel oynatma ayrı kalır.</p>
+        </section>
+
+        <section class="settings-panel" data-panel="connection" hidden>
+          <div class="panel-intro"><div><h2>Telefonunu bu PC’ye bağla</h2><p>Telefon ve <strong id="computer-name">bu bilgisayar</strong> aynı yerel ağda olmalı.</p></div><span class="room-badge" id="room">EDIZ-4821</span></div>
+          <div class="connection-grid">
+            <div class="connection-copy">
+              <ol><li><b>Ritim Android’i aç</b><span>Uygulamadaki QR kodu tara düğmesine dokun.</span></li><li><b>QR kodu tara</b><span>Çalan parça, sıra ve kontroller telefonda görünür.</span></li></ol>
+              <label for="phone-url">Telefon bağlantısı</label>
+              <div class="url-row"><input id="phone-url" readonly value="Bağlantı hazırlanıyor…" /><button class="secondary" id="copy-button">Kopyala</button></div>
+              <p class="security-note">QR kod oturuma özel anahtar içerir. Google çerezlerin ve şifren PC’den çıkmaz.</p>
+            </div>
+            <div class="qr-card"><div class="qr-frame"><img id="qr-code" alt="Telefon bağlantısı QR kodu" hidden /><div id="qr-fallback">QR</div></div><b>Ritim ile tara</b><span>Güvenli eşleme</span></div>
           </div>
-        </div>
-      </section>
+          <div class="restart-row"><div><b>Bağlantıyı yenile</b><p>Bağlantı takılırsa Ritim’i güvenli biçimde yeniden başlatır.</p></div><button class="secondary" id="restart-button">Yeniden başlat</button></div>
+        </section>
 
-      <section class="card system-card">
-        <div><span class="eyebrow">UYGULAMA</span><h2>Ritim’i yeniden başlat</h2><p>Bağlantı veya oynatma takılırsa uygulamayı güvenli biçimde kapatıp tekrar açar.</p></div>
-        <button class="primary" id="restart-button" type="button">Yeniden başlat</button>
-      </section>
+        <section class="settings-panel" data-panel="updates" hidden>
+          <div class="update-hero"><span>↻</span><div><h2>Ritim’i güncel tut</h2><p id="update-status">Güncellemeler GitHub Releases üzerinden denetlenir.</p></div></div>
+          <div class="update-progress" id="update-progress" hidden><i></i></div>
+          <div class="detail-list"><div><span>Yüklü sürüm</span><b id="app-version">—</b></div><div><span>Güncelleme kanalı</span><b>Beta</b></div></div>
+          <div class="update-actions"><button class="secondary" id="check-update-button">Güncellemeleri kontrol et</button><button class="primary" id="install-update-button" hidden>Yeniden başlat ve kur</button></div>
+        </section>
 
-      <section class="card update-card">
-        <div><span class="eyebrow">GÜNCELLEMELER</span><h2>Ritim’i güncel tut</h2><p id="update-status">Güncellemeler GitHub Releases üzerinden denetlenir.</p><div class="update-progress" id="update-progress" hidden><i></i></div></div>
-        <div class="update-actions"><button class="secondary" id="check-update-button" type="button">Güncellemeleri kontrol et</button><button class="primary" id="install-update-button" type="button" hidden>Yeniden başlat ve kur</button></div>
-      </section>
-
-      <section class="card about-card">
-        <div class="about-title"><div class="about-mark">R</div><div><span class="eyebrow">HAKKINDA</span><h2>Ritim</h2></div></div>
-        <dl>
-          <div><dt>Sürüm</dt><dd id="app-version">—</dd></div>
-          <div><dt>Electron</dt><dd id="electron-version">—</dd></div>
-          <div><dt>Müzik hizmeti</dt><dd>Resmî YouTube Music web uygulaması</dd></div>
-        </dl>
-        <p class="about-note">Ritim, YouTube Music arayüzünü değiştirmeden ayrı bir masaüstü penceresinde çalıştırır. Telefon düşük gecikmeli yerel kumanda olarak bağlanır; Google oturumu PC’de kalır.</p>
-      </section>
+        <section class="settings-panel" data-panel="about" hidden>
+          <div class="about-hero"><span>R</span><div><h2>Ritim</h2><p>Senkron masaüstü ve mobil müzik deneyimi.</p></div></div>
+          <div class="detail-list"><div><span>Sürüm</span><b id="about-app-version">—</b></div><div><span>Electron</span><b id="electron-version">—</b></div><div><span>Geliştirici</span><b>Ediz Ege Mercan</b></div><div><span>Müzik hizmeti</span><b>Resmî YouTube Music web uygulaması</b></div></div>
+          <p class="about-note">Ritim bağımsız bir projedir; Google veya YouTube tarafından bağlı ya da onaylı değildir. Telefon yalnızca PC’deki oturumun düşük gecikmeli kumandasıdır.</p>
+        </section>
+      </div>
     </main>
-    <div class="toast" id="toast" role="status" aria-live="polite">Bağlantı kopyalandı</div>
+    <div class="toast" id="toast" role="status" aria-live="polite">Tamamlandı</div>
     <script src="settings.js"></script>
   </body>
 </html>

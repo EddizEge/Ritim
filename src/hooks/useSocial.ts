@@ -162,7 +162,8 @@ function configuredSocialUrl() {
   }
 }
 
-const socialUrl = configuredSocialUrl()
+export const ritimSocialUrl = configuredSocialUrl()
+const socialUrl = ritimSocialUrl
 const socialSocket = io(socialUrl, {
   autoConnect: false,
   timeout: 3000,
@@ -278,6 +279,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       }
     }
     const onReconnectAttempt = () => setConnectionStatus('connecting')
+    const onSessionChanged = () => void connectSocial()
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
       setSnapshot((previous) => {
@@ -341,6 +343,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     socialSocket.on('social:error', onSocialError)
     socialSocket.on('social:report-saved', onReportSaved)
     socialSocket.io.on('reconnect_attempt', onReconnectAttempt)
+    window.addEventListener('ritim:social-session-changed', onSessionChanged)
     void connectSocial()
 
     return () => {
@@ -353,6 +356,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
       socialSocket.off('social:error', onSocialError)
       socialSocket.off('social:report-saved', onReportSaved)
       socialSocket.io.off('reconnect_attempt', onReconnectAttempt)
+      window.removeEventListener('ritim:social-session-changed', onSessionChanged)
       socialSocket.disconnect()
     }
   }, [isCompanion, joinSocialAccount])

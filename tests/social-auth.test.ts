@@ -120,6 +120,24 @@ function createFakeAuthDependencies() {
       deviceRevoked = true
       return true
     },
+    async listDevices() {
+      return [
+        {
+          id: baseIdentity.deviceId,
+          role: 'desktop' as const,
+          name: 'Ediz PC',
+          lastSeenAt: new Date(1_700_000_000_000).toISOString(),
+          createdAt: new Date(1_690_000_000_000).toISOString(),
+        },
+        {
+          id: '20000000-0000-4000-8000-000000000002',
+          role: 'companion' as const,
+          name: 'Ediz Telefon',
+          lastSeenAt: new Date(1_700_000_100_000).toISOString(),
+          createdAt: new Date(1_690_000_100_000).toISOString(),
+        },
+      ]
+    },
   }
 
   const google: GoogleIdentityProvider = {
@@ -223,6 +241,31 @@ test('cihaz iptali mevcut access tokenını hemen geçersiz kılar', async () =>
   await assert.rejects(
     service.verifyAccessToken(tokens.accessToken),
     /iptal edilmiş/,
+  )
+})
+
+test('hesap özeti yalnızca aynı hesaptaki cihazları döndürür ve diğer cihazı iptal eder', async () => {
+  const { repository, google } = createFakeAuthDependencies()
+  const revokedDeviceIds: string[] = []
+  repository.revokeDevice = async (_accountId, deviceId) => {
+    revokedDeviceIds.push(deviceId)
+    return true
+  }
+  const service = createSocialAuthService(authConfig, repository, google)
+  const tokens = await service.loginWithGoogleIdToken(loginInput)
+  const identity = await service.verifyAccessToken(tokens.accessToken)
+  const summary = await service.account(identity)
+
+  assert.equal(summary.user.id, tokens.user.id)
+  assert.equal(summary.currentDeviceId, tokens.device.id)
+  assert.equal(summary.devices.length, 2)
+  assert.equal(summary.devices[1].role, 'companion')
+
+  await service.revokeOtherDevice(identity, summary.devices[1].id)
+  assert.deepEqual(revokedDeviceIds, [summary.devices[1].id])
+  await assert.rejects(
+    service.revokeOtherDevice(identity, identity.deviceId),
+    /Bu cihazdan çıkmak/,
   )
 })
 

@@ -21,20 +21,28 @@ type StoredSocialSession = SocialTokenPair & {
   refreshExpiresAt: number
 }
 
-type EnsureOptions = {
+export type SocialAuthOptions = {
   socialUrl: string
   syncUrl: string
   pairingToken: string
   isCompanion: boolean
 }
 
-const secureStorage = registerPlugin<SecureStoragePlugin>('RitimSecureStorage')
+const secureStorageGlobal = globalThis as typeof globalThis & { __ritimSecureStorage?: SecureStoragePlugin }
+const secureStorage = secureStorageGlobal.__ritimSecureStorage
+  || registerPlugin<SecureStoragePlugin>('RitimSecureStorage')
+secureStorageGlobal.__ritimSecureStorage = secureStorage
 const SESSION_KEY = 'social.session.v1'
 const DEVICE_KEY = 'social.device.v1'
+const SIGNED_OUT_KEY = 'social.signed-out.v1'
 const WEB_DEVICE_KEY = 'ritim-social-device:v1'
 let memorySession: StoredSocialSession | null = null
 let loadedSession: Promise<StoredSocialSession | null> | undefined
 let ensurePromise: Promise<string> | undefined
+
+function notifySessionChanged() {
+  window.dispatchEvent(new CustomEvent('ritim:social-session-changed'))
+}
 
 function isNativeStorage() {
   return Capacitor.isNativePlatform()
@@ -56,6 +64,26 @@ async function loadSession() {
     })()
   }
   return loadedSession
+}
+
+async function readSignedOut() {
+  if (isNativeStorage()) {
+    const { value } = await secureStorage.get({ key: SIGNED_OUT_KEY }).catch(() => ({ value: null }))
+    return value === '1'
+  }
+  try { return localStorage.getItem(SIGNED_OUT_KEY) === '1' } catch { return false }
+}
+
+async function setSignedOut(value: boolean) {
+  if (isNativeStorage()) {
+    if (value) await secureStorage.set({ key: SIGNED_OUT_KEY, value: '1' })
+    else await secureStorage.remove({ key: SIGNED_OUT_KEY }).catch(() => {})
+    return
+  }
+  try {
+    if (value) localStorage.setItem(SIGNED_OUT_KEY, '1')
+    else localStorage.removeItem(SIGNED_OUT_KEY)
+  } catch {}
 }
 
 async function saveSession(server: string, tokens: SocialTokenPair) {
@@ -127,7 +155,7 @@ async function refreshSession(socialUrl: string, session: StoredSocialSession) {
   return saveSession(socialUrl, tokens)
 }
 
-async function enrollCompanion(options: EnsureOptions) {
+async function enrollCompanion(options: SocialAuthOptions) {
   const ticket = await jsonRequest<{ ticket: string }>(
     `${options.syncUrl}/social/session-ticket`,
     {
@@ -149,7 +177,8 @@ async function enrollCompanion(options: EnsureOptions) {
   return saveSession(options.socialUrl, tokens)
 }
 
-async function ensure(options: EnsureOptions) {
+async function ensure(options: SocialAuthOptions) {
+  if (await readSignedOut()) return ''
   let session = await loadSession()
   if (session?.server !== options.socialUrl) {
     await clearSocialSession()
@@ -170,7 +199,7 @@ async function ensure(options: EnsureOptions) {
   return (await enrollCompanion(options)).accessToken
 }
 
-export function ensureSocialAccessToken(options: EnsureOptions) {
+export function ensureSocialAccessToken(options: SocialAuthOptions) {
   if (!ensurePromise) {
     ensurePromise = ensure(options).finally(() => {
       ensurePromise = undefined
@@ -188,4 +217,52 @@ export async function invalidateSocialAccessToken() {
   if (isNativeStorage()) {
     await secureStorage.set({ key: SESSION_KEY, value: JSON.stringify(invalidated) })
   }
+}
+
+export async function getSocialAccount(options: SocialAuthOptions) {
+  const accessToken = await ensureSocialAccessToken(options)
+  if (!accessToken) {
+    return { authenticated: false, currentDeviceId: '', devices: [] }
+  }
+  return {
+    authenticated: true,
+    ...await jsonRequest<{
+      user: { id: string; displayName: string; handle: string; initials: string; avatarUrl?: string; avatarTone: number }
+      currentDeviceId: string
+      devices: Array<{ id: string; role: 'desktop' | 'companion'; name: string; lastSeenAt?: string; createdAt: string }>
+    }>(`${options.socialUrl}/auth/account`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    }),
+  }
+}
+
+export async function revokeSocialDevice(options: SocialAuthOptions, deviceId: string) {
+  const accessToken = await ensureSocialAccessToken(options)
+  if (!accessToken) throw new Error('Cihazı kaldırmak için Ritim Sosyal oturumu gerekli.')
+  await jsonRequest<never>(`${options.socialUrl}/auth/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+}
+
+export async function signOutSocialAccount(options: SocialAuthOptions) {
+  const accessToken = await ensureSocialAccessToken(options).catch(() => '')
+  if (accessToken) {
+    await fetch(`${options.socialUrl}/auth/logout`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(12_000),
+    }).catch(() => {})
+  }
+  await clearSocialSession()
+  await setSignedOut(true)
+  notifySessionChanged()
+}
+
+export async function resumeSocialAccount(options: SocialAuthOptions) {
+  await setSignedOut(false)
+  await clearSocialSession()
+  const token = await ensureSocialAccessToken(options)
+  notifySessionChanged()
+  return token
 }

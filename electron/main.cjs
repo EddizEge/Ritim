@@ -491,10 +491,10 @@ function createSettingsWindow() {
   }
   settingsWindow = new BrowserWindow({
     parent: mainWindow,
-    width: 680,
-    height: 760,
-    minWidth: 620,
-    minHeight: 680,
+    width: 920,
+    height: 720,
+    minWidth: 800,
+    minHeight: 620,
     resizable: true,
     backgroundColor: '#0b0c0d',
     title: 'Ritim Ayarları',
@@ -659,6 +659,13 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       width: 320,
       color: { dark: '#0a0b0c', light: '#ffffff' },
     })
+    const socialAccount = await socialAuth?.account().catch((error) => ({
+      authenticated: Boolean(socialAuthStatus?.authenticated),
+      user: socialAuthStatus?.user,
+      currentDeviceId: socialAuthStatus?.device?.id || '',
+      devices: [],
+      error: error?.message || 'Hesap bilgileri alınamadı.',
+    }))
     return {
       appVersion: app.getVersion(),
       computerName: os.hostname(),
@@ -669,7 +676,20 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       serverReady: Boolean(syncServer?.listening),
       updateStatus: updateController?.getStatus(),
       socialAuth: socialAuthStatus,
+      socialAccount,
     }
+  })
+  ipcMain.handle('settings:get-social-account', () => socialAuth?.account())
+  ipcMain.handle('settings:revoke-social-device', (_event, deviceId) => socialAuth?.revokeDevice(String(deviceId || '')))
+  ipcMain.handle('settings:social-sign-out', async () => {
+    socialAuthStatus = await socialAuth.signOut()
+    await startSocialClient()
+    return socialAuth.account()
+  })
+  ipcMain.handle('settings:social-sign-in', async () => {
+    socialAuthStatus = await socialAuth.signIn()
+    await startSocialClient()
+    return socialAuth.account()
   })
   ipcMain.handle('settings:copy-url', () => {
     clipboard.writeText(phoneUrl())
