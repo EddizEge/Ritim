@@ -1,6 +1,7 @@
 const { Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
+const { updateChannel } = require('./version-policy.cjs')
 
 function createUpdateController({ app, broadcast, beforeInstall }) {
   let installStarted = false
@@ -15,6 +16,9 @@ function createUpdateController({ app, broadcast, beforeInstall }) {
     return status
   }
   autoUpdater.logger = log
+  const updateChannelName = updateChannel(app.getVersion())
+  autoUpdater.channel = updateChannelName
+  autoUpdater.allowPrerelease = updateChannelName !== 'latest'
   autoUpdater.autoDownload = true
   // A normal app close must not race an already-started NSIS installer.
   // Updates are installed only through the explicit "restart and install" action.
