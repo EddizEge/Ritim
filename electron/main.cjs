@@ -382,7 +382,7 @@ async function startSocialClient({ forceRefresh = false } = {}) {
       socialAuth?.accessToken({ forceRefresh }),
     ])
     socialAuthStatus = status || socialAuthStatus
-    accessToken = token || ''
+    accessToken = status?.configured ? (token || '') : ''
   } catch (error) {
     console.warn('[Ritim Social] Oturum hazırlanamadı:', error?.message || error)
   }

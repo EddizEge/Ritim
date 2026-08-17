@@ -130,6 +130,8 @@ export type SocialAccountSummary = {
   user?: Pick<SocialUser, 'id' | 'displayName' | 'handle' | 'initials' | 'avatarUrl' | 'avatarTone'>
   currentDeviceId: string
   devices: SocialAccountDevice[]
+  limited?: boolean
+  warning?: string
 }
 
 export type SocialState = {

@@ -31,6 +31,7 @@ const byId = (id) => document.getElementById(id)
 const elements = {
   accountAvatar: byId('account-avatar'), accountError: byId('account-error'), accountErrorMessage: byId('account-error-message'),
   accountHandle: byId('account-handle'), accountId: byId('account-id'), accountLoading: byId('account-loading'), accountName: byId('account-name'),
+  accountWarning: byId('account-warning'),
   accountReady: byId('account-ready'), accountSignedOut: byId('account-signed-out'), aboutAppVersion: byId('about-app-version'),
   appVersion: byId('app-version'), checkUpdateButton: byId('check-update-button'), computerName: byId('computer-name'), copyButton: byId('copy-button'),
   currentDeviceName: byId('current-device-name'), deviceCount: byId('device-count'), deviceEmpty: byId('device-empty'), deviceList: byId('device-list'),
@@ -139,6 +140,8 @@ function renderAccount(account) {
   elements.accountId.textContent = account.user.id
   elements.accountAvatar.textContent = account.user.avatarUrl ? '' : account.user.initials || 'R'
   elements.accountAvatar.style.backgroundImage = account.user.avatarUrl ? `url(${account.user.avatarUrl})` : ''
+  elements.accountWarning.hidden = !account.warning
+  elements.accountWarning.textContent = account.warning || ''
   renderDevices(account)
 }
 

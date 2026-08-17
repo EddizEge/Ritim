@@ -12,6 +12,7 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
   let callbackRequest
   let logoutCalled = false
   let revokedDeviceId = ''
+  let accountAvailable = true
   const safeStorage = {
     isEncryptionAvailable: () => true,
     encryptString: (value) => Buffer.from([...value].reverse().join('')),
@@ -48,6 +49,9 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
     }
     if (pathname === '/auth/account') {
       assert.equal(init.headers.authorization, 'Bearer signed-access-token')
+      if (!accountAvailable) {
+        return Response.json({ error: 'auth_not_configured', message: 'Ritim kimlik servisi yapılandırılmamış.' }, { status: 503 })
+      }
       return Response.json({
         user: { id: 'account-id', displayName: 'Ediz Ege Mercan', handle: '@ediz_test', initials: 'EE' },
         currentDeviceId: 'device-id',
@@ -95,6 +99,11 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
   const afterRevoke = await client.revokeDevice('phone-id')
   assert.equal(revokedDeviceId, 'phone-id')
   assert.equal(afterRevoke.authenticated, true)
+  accountAvailable = false
+  const limitedAccount = await client.account()
+  assert.equal(limitedAccount.limited, true)
+  assert.equal(limitedAccount.devices.length, 1)
+  assert.equal(limitedAccount.devices[0].id, 'device-id')
   const encrypted = await fs.readFile(path.join(userDataPath, 'social-session.bin'))
   assert.equal(encrypted.subarray(0, 4).toString(), 'enc:')
   assert.equal(encrypted.includes(Buffer.from(refreshToken)), false)

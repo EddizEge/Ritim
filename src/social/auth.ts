@@ -11,7 +11,7 @@ type SocialTokenPair = {
   expiresIn: number
   refreshToken: string
   refreshExpiresIn: number
-  user: { id: string; displayName: string }
+  user: { id: string; displayName: string; handle?: string; initials?: string; avatarUrl?: string; avatarTone?: number }
   device: { id: string; role: 'desktop' | 'companion' }
 }
 
@@ -46,6 +46,10 @@ function notifySessionChanged() {
 
 function isNativeStorage() {
   return Capacitor.isNativePlatform()
+}
+
+function sessionInitials(displayName: string) {
+  return displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('tr') || 'R'
 }
 
 async function loadSession() {
@@ -224,15 +228,42 @@ export async function getSocialAccount(options: SocialAuthOptions) {
   if (!accessToken) {
     return { authenticated: false, currentDeviceId: '', devices: [] }
   }
-  return {
-    authenticated: true,
-    ...await jsonRequest<{
-      user: { id: string; displayName: string; handle: string; initials: string; avatarUrl?: string; avatarTone: number }
-      currentDeviceId: string
-      devices: Array<{ id: string; role: 'desktop' | 'companion'; name: string; lastSeenAt?: string; createdAt: string }>
-    }>(`${options.socialUrl}/auth/account`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-    }),
+  try {
+    return {
+      authenticated: true,
+      ...await jsonRequest<{
+        user: { id: string; displayName: string; handle: string; initials: string; avatarUrl?: string; avatarTone: number }
+        currentDeviceId: string
+        devices: Array<{ id: string; role: 'desktop' | 'companion'; name: string; lastSeenAt?: string; createdAt: string }>
+      }>(`${options.socialUrl}/auth/account`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    }
+  } catch (error) {
+    const status = (error as { status?: number }).status
+    if (![404, 503].includes(Number(status))) throw error
+    const session = await loadSession()
+    if (!session?.user || !session.device?.id) throw error
+    return {
+      authenticated: true,
+      user: {
+        id: session.user.id,
+        displayName: session.user.displayName,
+        handle: session.user.handle || '@ritim',
+        initials: session.user.initials || sessionInitials(session.user.displayName),
+        avatarUrl: session.user.avatarUrl,
+        avatarTone: Number(session.user.avatarTone) || 0,
+      },
+      currentDeviceId: session.device.id,
+      devices: [{
+        id: session.device.id,
+        role: session.device.role,
+        name: session.device.role === 'companion' ? 'Ritim Telefon' : 'Ritim PC',
+        createdAt: new Date().toISOString(),
+      }],
+      limited: true,
+      warning: 'Cihaz listesi sunucusu henüz hazır değil; bu cihazdaki güvenli oturum gösteriliyor.',
+    }
   }
 }
 
