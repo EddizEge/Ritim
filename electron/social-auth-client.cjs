@@ -277,6 +277,36 @@ function createSocialAuthClient({
     return status()
   }
 
+  async function account() {
+    const current = await readSession()
+    if (!current?.refreshToken) {
+      return {
+        authenticated: false,
+        user: undefined,
+        currentDeviceId: '',
+        devices: [],
+      }
+    }
+    const token = await accessToken()
+    if (!token) throw new Error('Ritim Social oturumu yenilenemedi.')
+    return {
+      authenticated: true,
+      ...await request('/auth/account', {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    }
+  }
+
+  async function revokeDevice(targetDeviceId) {
+    const token = await accessToken()
+    if (!token) throw new Error('Cihazı kaldırmak için Ritim Social oturumu gerekli.')
+    await request(`/auth/devices/${encodeURIComponent(targetDeviceId)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    return account()
+  }
+
   return {
     status,
     signIn,
@@ -284,6 +314,8 @@ function createSocialAuthClient({
     accessToken,
     invalidateAccessToken,
     createCompanionTicket,
+    account,
+    revokeDevice,
   }
 }
 

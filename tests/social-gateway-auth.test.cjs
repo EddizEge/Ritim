@@ -128,6 +128,28 @@ test('auth-required gateway token olmadan reddeder ve doğrulanmış kimliği ku
   assert.equal(linkedPhone.currentUser.id, expectedAccountId)
   assert.equal(linkedPhone.companionConnected, true)
 
+  const accountResponse = await fetch(`${gatewayUrl}/auth/account`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  assert.equal(accountResponse.status, 200)
+  const account = await accountResponse.json()
+  assert.match(account.currentDeviceId, /^[0-9a-f-]{36}$/i)
+  assert.ok(account.devices.some((device) => device.id === companionTokens.device.id && device.role === 'companion'))
+
+  const companionDisconnected = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Kaldırılan telefon socket bağlantısını korudu')), 5_000)
+    companion.once('disconnect', (reason) => {
+      clearTimeout(timer)
+      resolve(reason)
+    })
+  })
+  const removeCompanionResponse = await fetch(`${gatewayUrl}/auth/devices/${companionTokens.device.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  assert.equal(removeCompanionResponse.status, 204)
+  assert.equal(await companionDisconnected, 'io server disconnect')
+
   const revokeResponse = await fetch(`${gatewayUrl}/auth/device/current`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${accessToken}` },

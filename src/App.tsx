@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { DesktopApp } from './components/DesktopApp'
 import { MobileApp } from './components/MobileApp'
-import { usePlayerSync } from './hooks/usePlayerSync'
+import { ritimPairingToken, ritimSyncUrl, usePlayerSync } from './hooks/usePlayerSync'
 import { useNativeMediaSession } from './hooks/useNativeMediaSession'
 import { useYouTubeLibrary } from './hooks/useYouTubeLibrary'
 import { App as CapacitorApp } from '@capacitor/app'
 import { NativePairing } from './components/NativePairing'
 import { isNativeMobile, parsePairingLink, readMobilePairing, saveMobilePairing } from './mobileConfig'
 import { getTrack } from './data'
-import { useSocial } from './hooks/useSocial'
+import { ritimSocialUrl, useSocial } from './hooks/useSocial'
+import { useSocialAccount } from './hooks/useSocialAccount'
 
 function useCompanionMode() {
   const forced = new URLSearchParams(window.location.search).get('companion') === '1'
@@ -45,9 +46,15 @@ function RitimApp({ isCompanion }: { isCompanion: boolean }) {
       isPlaying: player.state.isPlaying,
     },
   })
+  const socialAccount = useSocialAccount({
+    socialUrl: ritimSocialUrl,
+    syncUrl: ritimSyncUrl,
+    pairingToken: ritimPairingToken,
+    isCompanion,
+  })
   const props = { ...player }
   return isCompanion
-    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} socialState={social.state} socialActions={social.actions} />
+    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} socialState={social.state} socialActions={social.actions} socialAccount={socialAccount.state} socialAccountActions={socialAccount.actions} />
     : <DesktopApp {...props} youtube={youtube} socialState={social.state} socialActions={social.actions} />
 }
 

@@ -117,6 +117,21 @@ export type SocialFeedback = {
   text: string
 }
 
+export type SocialAccountDevice = {
+  id: string
+  role: 'desktop' | 'companion'
+  name: string
+  lastSeenAt?: string
+  createdAt: string
+}
+
+export type SocialAccountSummary = {
+  authenticated: boolean
+  user?: Pick<SocialUser, 'id' | 'displayName' | 'handle' | 'initials' | 'avatarUrl' | 'avatarTone'>
+  currentDeviceId: string
+  devices: SocialAccountDevice[]
+}
+
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
   currentUser: SocialUser
