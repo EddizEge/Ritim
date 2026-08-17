@@ -289,11 +289,28 @@ function createSocialAuthClient({
     }
     const token = await accessToken()
     if (!token) throw new Error('Ritim Social oturumu yenilenemedi.')
-    return {
-      authenticated: true,
-      ...await request('/auth/account', {
-        headers: { authorization: `Bearer ${token}` },
-      }),
+    try {
+      return {
+        authenticated: true,
+        ...await request('/auth/account', {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      }
+    } catch (error) {
+      if (![404, 503].includes(error.status)) throw error
+      return {
+        authenticated: true,
+        user: current.user,
+        currentDeviceId: current.device?.id || '',
+        devices: current.device?.id ? [{
+          id: current.device.id,
+          role: current.device.role === 'companion' ? 'companion' : 'desktop',
+          name: current.device.role === 'companion' ? 'Ritim Telefon' : `Ritim PC • ${os.hostname()}`,
+          createdAt: new Date().toISOString(),
+        }] : [],
+        limited: true,
+        warning: 'Cihaz listesi sunucusu henüz hazır değil; bu cihazdaki güvenli oturum gösteriliyor.',
+      }
     }
   }
 

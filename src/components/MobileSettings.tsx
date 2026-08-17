@@ -93,6 +93,8 @@ export function MobileSettings({ account, onRefresh, onReconnect, onRevokeDevice
         })}</div> : <div className="mobile-device-empty">Bu hesaba bağlı etkin cihaz bulunamadı.</div>}
       </section>
 
+      {account.warning ? <p className="mobile-settings-warning">{account.warning}</p> : null}
+
       {actionError ? <p className="mobile-settings-error" role="alert">{actionError}</p> : null}
       <button className="mobile-signout-button" disabled={busyDeviceId === 'signout'} onClick={() => {
         if (window.confirm('Bu telefondaki Ritim Sosyal oturumu kapatılsın mı? Müzik kumandası çalışmaya devam eder.')) {
