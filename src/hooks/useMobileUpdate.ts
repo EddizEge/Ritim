@@ -2,21 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { isNativeMobile } from '../mobileConfig'
+import { acceptsPrereleaseUpdates, compareRitimVersions, isNewerRitimVersion, parseRitimVersion } from '../versioning'
 
 const repository = import.meta.env.VITE_GITHUB_REPOSITORY || 'EddizEge/Ritim'
 
-function versionParts(value: string) {
-  return value.replace(/^v/i, '').split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
-}
-
-function isNewerVersion(latest: string, current: string) {
-  const left = versionParts(latest)
-  const right = versionParts(current)
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if ((left[index] || 0) > (right[index] || 0)) return true
-    if ((left[index] || 0) < (right[index] || 0)) return false
-  }
-  return false
+type GitHubRelease = {
+  tag_name?: string
+  html_url?: string
+  draft?: boolean
+  prerelease?: boolean
+  assets?: Array<{ name: string; browser_download_url: string }>
 }
 
 export function useMobileUpdate() {
@@ -30,19 +25,33 @@ export function useMobileUpdate() {
     setChecking(true)
     try {
       const appInfo = await CapacitorApp.getInfo()
-      const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+      const response = await fetch(`https://api.github.com/repos/${repository}/releases?per_page=20`, { headers: { Accept: 'application/vnd.github+json' } })
       if (!response.ok) throw new Error(`GitHub ${response.status}`)
-      const release = await response.json() as { tag_name?: string; html_url?: string; assets?: Array<{ name: string; browser_download_url: string }> }
-      const latest = String(release.tag_name || '').replace(/^v/i, '')
-      if (!latest || !isNewerVersion(latest, appInfo.version)) {
+      const allowPrerelease = acceptsPrereleaseUpdates(appInfo.version)
+      const releases = await response.json() as GitHubRelease[]
+      const release = releases
+        .filter((candidate) => {
+          const version = String(candidate.tag_name || '').replace(/^v/i, '')
+          return !candidate.draft
+            && Boolean(parseRitimVersion(version))
+            && (!candidate.prerelease || allowPrerelease)
+            && isNewerRitimVersion(version, appInfo.version)
+        })
+        .sort((left, right) => {
+          const leftVersion = String(left.tag_name || '').replace(/^v/i, '')
+          const rightVersion = String(right.tag_name || '').replace(/^v/i, '')
+          return -compareRitimVersions(leftVersion, rightVersion)
+        })[0]
+      const latest = String(release?.tag_name || '').replace(/^v/i, '')
+      if (!latest) {
         setDownloadUrl('')
         setAvailableVersion('')
         const nextMessage = `Ritim ${appInfo.version} güncel.`
         setMessage(nextMessage)
         return nextMessage
       }
-      const apk = release.assets?.find((asset) => asset.name.toLocaleLowerCase('tr').endsWith('.apk'))
-      setDownloadUrl(apk?.browser_download_url || release.html_url || '')
+      const apk = release?.assets?.find((asset) => asset.name.toLocaleLowerCase('tr').endsWith('.apk'))
+      setDownloadUrl(apk?.browser_download_url || release?.html_url || '')
       setAvailableVersion(latest)
       const nextMessage = `Ritim ${latest} Android güncellemesi hazır.`
       setMessage(nextMessage)

@@ -98,8 +98,9 @@ Temel ürün kuralları:
 
 - Ana sürüm: `package.json` içindeki `version`
 - Lock sürümü: `package-lock.json` içindeki kök ve ana paket sürümleri
-- Android `versionName` ve `versionCode`: `android/app/build.gradle` tarafından `package.json` semver değerinden üretilir.
-- Kod formülü: `major * 10000 + minor * 100 + patch`
+- Android `versionName` ve `versionCode`: `android/app/build.gradle` tarafından `package.json` Ritim semver değerinden üretilir.
+- Desteklenen sürüm biçimi `major.minor.patch` veya `major.minor.patch-(alpha|beta|rc).N` şeklindedir.
+- Android kod formülü `major * 1000000 + minor * 10000 + patch * 100 + stage` şeklindedir. `stage`; alpha için `1..39`, beta için `41..79`, rc için `81..98`, kararlı sürüm için `99` olur.
 - Windows paket ayarı: `electron-builder.config.cjs`
 - Uygulama ikonu: `build/icon.png` (512x512), `build/icon.ico`, `build/icon.svg`
 - Release workflow: `.github/workflows/release.yml`
@@ -186,7 +187,7 @@ npm run dist:win
 - Tag push `.github/workflows/release.yml` workflow'unu tetikler.
 - Workflow tamamen başarılı olmadan release'i tamamlanmış sayma.
 - Release varlıkları şunları içermelidir:
-  - `latest.yml`
+- kararlı sürümde `latest.yml`, prerelease sürümde kanal adıyla `alpha.yml`, `beta.yml` veya `rc.yml`
   - `Ritim-Setup-X.Y.Z.exe`
   - `Ritim-Setup-X.Y.Z.exe.blockmap`
   - `Ritim-Android-vX.Y.Z.apk`
