@@ -364,6 +364,136 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
   })
 })
 
+test('Beta 1 ayar snapshotı hesap tercihlerini ve çevrimdışı moderasyon özetini güvenle eşitler', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${httpServer.address().port}`
+  const states = new Map()
+  const clients = []
+
+  context.after(async () => {
+    clients.forEach((client) => client.disconnect())
+    hub.close()
+    await io.close()
+    await new Promise((resolve) => httpServer.close(resolve))
+  })
+
+  const connect = async (name, accountId, deviceRole) => {
+    const client = createClient(url, { transports: ['websocket'] })
+    clients.push(client)
+    client.on('social:state', (state) => states.set(name, state))
+    await new Promise((resolve) => client.once('connect', resolve))
+    client.emit('social:join', {
+      accountId,
+      deviceId: `${name}-device`,
+      deviceRole,
+      profile: profile(accountId, name, deviceRole),
+    })
+    return client
+  }
+
+  const waitFor = async (name, predicate, timeout = 2_000) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeout) {
+      const state = states.get(name)
+      if (state && predicate(state)) return state
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`${name} için Beta 1 ayar durumu gelmedi`)
+  }
+
+  const viewerDesktop = await connect('Beta Ayar PC', 'beta-settings-viewer', 'desktop')
+  const viewerPhone = await connect('Beta Ayar Telefon', 'beta-settings-viewer', 'companion')
+  const target = await connect('Beta Hedef', 'beta-settings-target', 'desktop')
+  await waitFor('Beta Ayar PC', (state) => state.currentDeviceCount === 2 && state.users.length === 1)
+
+  viewerDesktop.emit('social:message', {
+    targetUserId: 'beta-settings-target',
+    text: 'Sessize alma ilişkisi için istek',
+    clientMessageId: '80000000-0000-4000-8000-000000000001',
+  })
+  await waitFor('Beta Hedef', (state) => state.messageRequests[0]?.userId === 'beta-settings-viewer')
+  target.emit('social:request-response', { requesterUserId: 'beta-settings-viewer', action: 'accept' })
+  await waitFor('Beta Ayar PC', (state) => state.messageRequests.length === 0)
+
+  viewerPhone.emit('social:notification-preferences', {
+    messagesEnabled: false,
+    reactionsEnabled: true,
+    deviceEnabled: true,
+  })
+  const desktopPreferences = await waitFor('Beta Ayar PC', (state) => (
+    state.notificationPreferences?.messagesEnabled === false
+    && state.notificationPreferences?.deviceEnabled === false
+  ))
+  const phonePreferences = await waitFor('Beta Ayar Telefon', (state) => (
+    state.notificationPreferences?.messagesEnabled === false
+    && state.notificationPreferences?.deviceEnabled === false
+  ))
+  assert.deepEqual(desktopPreferences.notificationPreferences, {
+    messagesEnabled: false,
+    reactionsEnabled: true,
+    deviceEnabled: false,
+  })
+  assert.deepEqual(phonePreferences.notificationPreferences, desktopPreferences.notificationPreferences)
+
+  viewerPhone.emit('social:mute', { targetUserId: 'beta-settings-target' })
+  const mutedState = await waitFor('Beta Ayar PC', (state) => (
+    state.mutedUserIds.includes('beta-settings-target')
+    && state.mutedUsers?.[0]?.id === 'beta-settings-target'
+  ))
+  assert.equal(mutedState.mutedUsers[0].displayName, 'Beta Hedef')
+
+  viewerDesktop.emit('social:block', { targetUserId: 'beta-settings-target' })
+  await waitFor('Beta Ayar Telefon', (state) => state.blockedUsers?.[0]?.id === 'beta-settings-target')
+
+  const reportSaved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Beta 1 şikâyet özeti kaydedilmedi')), 2_000)
+    viewerPhone.once('social:report-saved', (result) => {
+      clearTimeout(timer)
+      resolve(result)
+    })
+  })
+  viewerPhone.emit('social:report', {
+    targetUserId: 'beta-settings-target',
+    reason: 'Spam',
+    detail: 'Snapshot içinde görünmemesi gereken özel açıklama',
+  })
+  assert.deepEqual(await reportSaved, { targetUserId: 'beta-settings-target' })
+  const reportState = await waitFor('Beta Ayar PC', (state) => state.reportSummary?.total === 1)
+  const recentReport = reportState.reportSummary.recent[0]
+  assert.deepEqual(Object.keys(recentReport).sort(), [
+    'createdAt',
+    'displayName',
+    'reason',
+    'status',
+    'targetUserId',
+  ])
+  assert.equal(recentReport.targetUserId, 'beta-settings-target')
+  assert.equal(recentReport.displayName, 'Beta Hedef')
+  assert.equal(recentReport.reason, 'Spam')
+  assert.equal(recentReport.status, 'received')
+  assert.equal(recentReport.createdAt > 0, true)
+  await waitFor('Beta Ayar Telefon', (state) => state.reportSummary?.total === 1)
+  await waitFor('Beta Hedef', (state) => state.reportSummary?.total === 0)
+
+  target.disconnect()
+  const offlineState = await waitFor('Beta Ayar PC', (state) => (
+    state.blockedUsers?.[0]?.presence === 'offline'
+    && state.mutedUsers?.[0]?.presence === 'offline'
+  ))
+  assert.equal(offlineState.blockedUsers[0].id, 'beta-settings-target')
+  assert.equal(offlineState.mutedUsers[0].id, 'beta-settings-target')
+  assert.equal(offlineState.reportSummary.recent[0].displayName, 'Beta Hedef')
+
+  viewerDesktop.emit('social:block', { targetUserId: 'beta-settings-target' })
+  await waitFor('Beta Ayar PC', (state) => state.blockedUsers.length === 0)
+  viewerPhone.emit('social:mute', { targetUserId: 'beta-settings-target' })
+  await waitFor('Beta Ayar Telefon', (state) => state.mutedUsers.length === 0)
+})
+
 test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hataları güvenle yönetilir', async (context) => {
   const httpServer = createServer()
   const io = new Server(httpServer, { cors: { origin: true } })

@@ -15,13 +15,27 @@ const fallbackData = {
       { id: 'phone-preview', role: 'companion', name: 'Ritim Telefon', lastSeenAt: new Date(Date.now() - 240000).toISOString(), createdAt: new Date().toISOString() },
     ],
   },
+  socialState: {
+    connectionStatus: 'online',
+    privacy: { profileVisibility: 'everyone', listeningVisibility: 'everyone' },
+    notificationPreferences: { messagesEnabled: true, reactionsEnabled: true, deviceEnabled: false },
+    mutedUsers: [],
+    blockedUsers: [],
+    reportSummary: { total: 0, recent: [] },
+  },
+  devicePreferences: { socialNotificationsEnabled: false },
 }
 
 const settingsApi = window.ritimSettings
 let accountState
+let socialState = fallbackData.socialState
+let desktopNotifications = false
 const sectionCopy = {
   account: ['Hesap', 'Ritim kimliğin ve sosyal oturumun.'],
   devices: ['Cihazlar', 'Aynı hesaba bağlı PC ve telefonlar.'],
+  social: ['Sosyal', 'Profil ve dinleme görünürlüğünü yönet.'],
+  notifications: ['Bildirimler', 'Mesaj, tepki ve cihaz bildirimlerini yönet.'],
+  safety: ['Güvenlik', 'Sessize alma, engelleme ve şikâyet özetin.'],
   connection: ['Eşleme', 'Telefonunu bu bilgisayara bağla.'],
   updates: ['Güncellemeler', 'Sürümünü ve Beta kanalını yönet.'],
   about: ['Hakkında', 'Ritim sürümü ve proje bilgileri.'],
@@ -39,6 +53,10 @@ const elements = {
   qrFallback: byId('qr-fallback'), restartButton: byId('restart-button'), room: byId('room'), sectionDescription: byId('section-description'),
   sectionTitle: byId('section-title'), serverLabel: byId('server-label'), sidebarStatus: document.querySelector('.sidebar-status'), toast: byId('toast'),
   updateProgress: byId('update-progress'), updateStatus: byId('update-status'),
+  profileVisibility: byId('profile-visibility'), listeningVisibility: byId('listening-visibility'), messagesEnabled: byId('messages-enabled'),
+  reactionsEnabled: byId('reactions-enabled'), deviceNotificationsButton: byId('device-notifications-button'), mutedCount: byId('muted-count'),
+  mutedList: byId('muted-list'), mutedEmpty: byId('muted-empty'), blockedCount: byId('blocked-count'), blockedList: byId('blocked-list'),
+  blockedEmpty: byId('blocked-empty'), reportCount: byId('report-count'), reportList: byId('report-list'), reportEmpty: byId('report-empty'),
 }
 
 function showToast(message) {
@@ -145,6 +163,76 @@ function renderAccount(account) {
   renderDevices(account)
 }
 
+function desktopNotificationsEnabled() {
+  return desktopNotifications
+}
+
+function renderModerationList(container, empty, users, actionType) {
+  container.replaceChildren()
+  container.hidden = !users.length
+  empty.hidden = Boolean(users.length)
+  for (const user of users) {
+    const row = document.createElement('article')
+    row.className = 'moderation-row'
+    const copy = document.createElement('span')
+    const name = document.createElement('b')
+    name.textContent = user.displayName || 'Ritim kullanıcısı'
+    const handle = document.createElement('small')
+    handle.textContent = user.handle || user.id || ''
+    copy.append(name, handle)
+    const button = document.createElement('button')
+    button.textContent = actionType === 'mute' ? 'Sesi aç' : 'Engeli kaldır'
+    button.addEventListener('click', () => settingsApi?.sendSocialAction(actionType, { targetUserId: user.id }))
+    row.append(copy, button)
+    container.append(row)
+  }
+}
+
+function renderSocialState(next) {
+  socialState = {
+    ...fallbackData.socialState,
+    ...(next || {}),
+    privacy: { ...fallbackData.socialState.privacy, ...(next?.privacy || {}) },
+    notificationPreferences: {
+      ...fallbackData.socialState.notificationPreferences,
+      ...(next?.notificationPreferences || {}),
+      deviceEnabled: desktopNotificationsEnabled(),
+    },
+    reportSummary: { total: 0, recent: [], ...(next?.reportSummary || {}) },
+  }
+  elements.profileVisibility.value = socialState.privacy.profileVisibility
+  elements.listeningVisibility.value = socialState.privacy.listeningVisibility
+  elements.messagesEnabled.checked = socialState.notificationPreferences.messagesEnabled !== false
+  elements.reactionsEnabled.checked = socialState.notificationPreferences.reactionsEnabled !== false
+  elements.deviceNotificationsButton.textContent = socialState.notificationPreferences.deviceEnabled ? 'Açık · Kapat' : 'Aç'
+  elements.deviceNotificationsButton.classList.toggle('is-enabled', socialState.notificationPreferences.deviceEnabled)
+  const mutedUsers = socialState.mutedUsers || []
+  const blockedUsers = socialState.blockedUsers || []
+  elements.mutedCount.textContent = String(mutedUsers.length)
+  elements.blockedCount.textContent = String(blockedUsers.length)
+  renderModerationList(elements.mutedList, elements.mutedEmpty, mutedUsers, 'mute')
+  renderModerationList(elements.blockedList, elements.blockedEmpty, blockedUsers, 'block')
+  const reports = socialState.reportSummary.recent || []
+  elements.reportCount.textContent = `${socialState.reportSummary.total || 0} kayıt`
+  elements.reportList.replaceChildren()
+  elements.reportList.hidden = !reports.length
+  elements.reportEmpty.hidden = Boolean(reports.length)
+  for (const report of reports) {
+    const row = document.createElement('article')
+    row.className = 'report-row'
+    const copy = document.createElement('span')
+    const name = document.createElement('b')
+    name.textContent = report.displayName || 'Ritim kullanıcısı'
+    const detail = document.createElement('small')
+    detail.textContent = `${report.reason} · ${new Date(report.createdAt).toLocaleDateString('tr-TR')}`
+    const status = document.createElement('small')
+    status.textContent = 'Alındı'
+    copy.append(name, detail)
+    row.append(copy, status)
+    elements.reportList.append(row)
+  }
+}
+
 async function refreshAccount() {
   elements.accountLoading.hidden = false
   elements.accountError.hidden = true
@@ -179,7 +267,9 @@ async function loadSettings() {
   elements.serverLabel.textContent = data.serverReady ? 'Bağlantı hazır' : 'Sunucu bekleniyor'
   elements.sidebarStatus.classList.toggle('is-offline', !data.serverReady)
   renderUpdateStatus(data.updateStatus)
+  desktopNotifications = data.devicePreferences?.socialNotificationsEnabled === true
   renderAccount(data.socialAccount || { authenticated: false, currentDeviceId: '', devices: [] })
+  renderSocialState(data.socialState)
   if (data.qrDataUrl) {
     elements.qrCode.src = data.qrDataUrl
     elements.qrCode.hidden = false
@@ -199,6 +289,33 @@ elements.checkUpdateButton.addEventListener('click', async () => {
   renderUpdateStatus(await settingsApi.checkUpdates())
 })
 elements.installUpdateButton.addEventListener('click', () => settingsApi?.installUpdate())
+function sendPrivacy() {
+  settingsApi?.sendSocialAction('privacy', {
+    profileVisibility: elements.profileVisibility.value,
+    listeningVisibility: elements.listeningVisibility.value,
+  })
+}
+elements.profileVisibility.addEventListener('change', sendPrivacy)
+elements.listeningVisibility.addEventListener('change', sendPrivacy)
+function sendNotificationPreferences() {
+  settingsApi?.sendSocialAction('notification-preferences', {
+    messagesEnabled: elements.messagesEnabled.checked,
+    reactionsEnabled: elements.reactionsEnabled.checked,
+  })
+}
+elements.messagesEnabled.addEventListener('change', sendNotificationPreferences)
+elements.reactionsEnabled.addEventListener('change', sendNotificationPreferences)
+elements.deviceNotificationsButton.addEventListener('click', async () => {
+  const requested = !desktopNotificationsEnabled()
+  const result = settingsApi
+    ? await settingsApi.setDeviceNotifications(requested)
+    : { socialNotificationsEnabled: requested, supported: true }
+  desktopNotifications = result.socialNotificationsEnabled === true
+  renderSocialState(socialState)
+  showToast(!result.supported
+    ? 'Windows sistem bildirimlerini desteklemiyor'
+    : desktopNotifications ? 'Bu PC’de sistem bildirimleri açıldı' : 'Bu PC’de sistem bildirimleri kapatıldı')
+})
 byId('account-retry-button').addEventListener('click', () => void refreshAccount())
 byId('devices-refresh-button').addEventListener('click', () => void refreshAccount())
 byId('social-sign-in-button').addEventListener('click', async () => {
@@ -215,6 +332,7 @@ byId('social-sign-out-button').addEventListener('click', async () => {
   } catch (error) { showToast(error?.message || 'Oturum kapatılamadı') }
 })
 settingsApi?.onUpdateStatus(renderUpdateStatus)
+settingsApi?.onSocialState(renderSocialState)
 
 void loadSettings().catch((error) => {
   elements.serverLabel.textContent = 'Bilgiler alınamadı'

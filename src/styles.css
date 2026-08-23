@@ -696,7 +696,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-settings-heading h1 { margin: 0; font-size: 30px; letter-spacing: -.8px; }
 .mobile-settings-heading p { margin: 5px 0 0; color: #929292; font-size: 13px; }
 .mobile-settings-page { display: grid; gap: 14px; }
-.mobile-account-card, .mobile-device-section { border: 1px solid #292929; border-radius: 18px; background: #121212; }
+.mobile-account-card, .mobile-device-section, .mobile-settings-section { border: 1px solid #292929; border-radius: 18px; background: #121212; }
 .mobile-account-card { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 17px; }
 .mobile-account-avatar { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 50%; color: #fff; background-color: #733246; background-position: center; background-size: cover; font-size: 17px; font-weight: 800; }
 .mobile-account-card h2 { overflow: hidden; margin: 0; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
@@ -724,6 +724,38 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-device-list article em { padding: 5px 8px; border-radius: 999px; color: #ff8ca0; background: #321820; font-size: 9px; font-style: normal; font-weight: 800; }
 .mobile-device-list article button { min-height: 32px; padding: 0 10px; border: 1px solid #493039; border-radius: 9px; color: #ff94a5; background: transparent; font-size: 10px; font-weight: 700; }
 .mobile-device-empty { padding: 22px 17px; color: #8f8f8f; font-size: 12px; text-align: center; }
+.mobile-settings-section { overflow: hidden; }
+.mobile-settings-section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 17px; border-bottom: 1px solid #292929; }
+.mobile-settings-section > header > div { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.mobile-settings-section > header svg { flex: 0 0 auto; width: 19px; color: #ff6078; }
+.mobile-settings-section > header span { min-width: 0; }
+.mobile-settings-section > header h2 { margin: 0; font-size: 15px; }
+.mobile-settings-section > header p { margin: 4px 0 0; color: #8f8f8f; font-size: 10px; line-height: 1.4; }
+.mobile-settings-section > header em { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #3f3034; border-radius: 999px; color: #ff90a2; background: #24161a; font-size: 8px; font-style: normal; font-weight: 800; }
+.mobile-settings-section > label { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 63px; padding: 11px 17px; border-bottom: 1px solid #242424; }
+.mobile-settings-section > label > span { min-width: 0; }
+.mobile-settings-section > label b, .mobile-settings-section > label small { display: block; }
+.mobile-settings-section > label b { font-size: 12px; }
+.mobile-settings-section > label small { margin-top: 4px; color: #858585; font-size: 9px; line-height: 1.35; }
+.mobile-settings-section > label select { flex: 0 1 128px; min-width: 0; min-height: 35px; padding: 0 28px 0 10px; border: 1px solid #393939; border-radius: 10px; color: #eee; background: #1d1d1d; font-size: 10px; }
+.mobile-settings-section > label input[type='checkbox'] { flex: 0 0 auto; width: 19px; height: 19px; accent-color: #ff3155; }
+.mobile-settings-section > button { display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - 28px); min-height: 41px; margin: 14px; border: 1px solid #41383a; border-radius: 12px; color: #d6d6d6; background: #202020; font-size: 10px; font-weight: 800; }
+.mobile-settings-section > button svg { width: 16px; }
+.mobile-settings-section > button.is-enabled { color: #bdebc9; border-color: #315f3e; background: #172a1c; }
+.mobile-moderation-group, .mobile-report-summary { padding: 14px 17px; border-bottom: 1px solid #242424; }
+.mobile-moderation-group > h3, .mobile-report-summary > h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 11px; }
+.mobile-moderation-group > h3 svg { width: 15px; color: #a8a8a8; }
+.mobile-moderation-group > h3 span, .mobile-report-summary > h3 span { margin-left: auto; color: #8d8d8d; font-size: 9px; }
+.mobile-moderation-group > p, .mobile-report-summary > p { margin: 0; color: #7f7f7f; font-size: 10px; }
+.mobile-moderation-group > article, .mobile-report-summary > article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #232323; }
+.mobile-moderation-group > article span, .mobile-report-summary > article span { min-width: 0; }
+.mobile-moderation-group > article b, .mobile-moderation-group > article small, .mobile-report-summary > article b, .mobile-report-summary > article small { display: block; }
+.mobile-moderation-group > article b, .mobile-report-summary > article b { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-moderation-group > article small, .mobile-report-summary > article small { margin-top: 3px; color: #858585; font-size: 9px; }
+.mobile-moderation-group > article button { flex: 0 0 auto; min-height: 30px; padding: 0 9px; border: 1px solid #493039; border-radius: 9px; color: #ff94a5; background: transparent; font-size: 9px; font-weight: 750; }
+.mobile-report-summary { border-bottom: 0; }
+.mobile-report-summary > article em { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; color: #adddb9; background: #1b3020; font-size: 8px; font-style: normal; font-weight: 800; }
+.mobile-report-summary > small { display: block; margin-top: 10px; color: #666; font-size: 8px; line-height: 1.45; }
 .mobile-settings-state { display: grid; justify-items: center; gap: 7px; min-height: 270px; align-content: center; padding: 28px; border: 1px solid #292929; border-radius: 18px; background: #121212; text-align: center; }
 .mobile-settings-state > svg { width: 38px; height: 38px; margin-bottom: 7px; color: #ff6c83; }
 .mobile-settings-state > i { display: inline-block; width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: #ff4058; animation: mobile-loading-dot 1s ease-in-out infinite alternate; }

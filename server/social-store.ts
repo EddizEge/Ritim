@@ -65,6 +65,30 @@ type NotificationPreferences = {
   deviceEnabled: boolean
 }
 
+type StoredSocialUser = {
+  id: string
+  displayName: string
+  handle: string
+  initials: string
+  avatarUrl?: string
+  avatarTone: number
+  presence: 'offline'
+  currentTrack?: undefined
+  reactionCount: number
+  lastReaction?: undefined
+}
+
+type ReportSummary = {
+  total: number
+  recent: Array<{
+    targetUserId: string
+    displayName: string
+    reason: string
+    createdAt: number
+    status: 'received'
+  }>
+}
+
 type StoredRoom = {
   id: string
   ownerId: string
@@ -655,13 +679,11 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       account_key: string
       messages_enabled: boolean
       reactions_enabled: boolean
-      device_enabled: boolean
     }>(
       `select
          coalesce(encode(app_user.legacy_account_id_hash, 'hex'), app_user.public_id::text) as account_key,
          preferences.messages_enabled,
-         preferences.reactions_enabled,
-         preferences.device_enabled
+         preferences.reactions_enabled
        from ritim.notification_preferences preferences
        join ritim.users app_user on app_user.id = preferences.user_id
        where coalesce(encode(app_user.legacy_account_id_hash, 'hex'), app_user.public_id::text) = any($1::text[])`,
@@ -673,7 +695,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       selected.set(accountId, {
         messagesEnabled: row.messages_enabled,
         reactionsEnabled: row.reactions_enabled,
-        deviceEnabled: row.device_enabled,
+        deviceEnabled: false,
       })
     }
     return selected
@@ -685,18 +707,16 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       if (!userId) throw new Error('Bildirim ayarı için kullanıcı bulunamadı.')
       await client.query(
         `insert into ritim.notification_preferences (
-           user_id, messages_enabled, reactions_enabled, device_enabled
-         ) values ($1, $2, $3, $4)
+           user_id, messages_enabled, reactions_enabled
+         ) values ($1, $2, $3)
          on conflict (user_id) do update set
            messages_enabled = excluded.messages_enabled,
            reactions_enabled = excluded.reactions_enabled,
-           device_enabled = excluded.device_enabled,
            updated_at = now()`,
         [
           userId,
           preferences.messagesEnabled,
           preferences.reactionsEnabled,
-          preferences.deviceEnabled,
         ],
       )
     })
@@ -705,21 +725,37 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
   async function loadModerationState(accountIds: string[]) {
     const muted = new Map<string, Set<string>>()
     const blocked = new Map<string, Set<string>>()
+    const mutedUsers = new Map<string, StoredSocialUser[]>()
+    const blockedUsers = new Map<string, StoredSocialUser[]>()
     for (const accountId of accountIds) {
       muted.set(accountId, new Set())
       blocked.set(accountId, new Set())
+      mutedUsers.set(accountId, [])
+      blockedUsers.set(accountId, [])
     }
-    if (accountIds.length < 2) return { muted, blocked }
+    if (!accountIds.length) return { muted, blocked, mutedUsers, blockedUsers }
     const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
     const keys = [...accountByKey.keys()]
     const result = await pool.query<{
       viewer_key: string
       target_key: string
+      target_public_id: string
+      target_display_name: string
+      target_handle: string
+      target_initials: string
+      target_avatar_url: string | null
+      target_avatar_tone: number
       kind: 'mute' | 'block'
     }>(
       `select
          coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) as viewer_key,
          coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text) as target_key,
+         target.public_id::text as target_public_id,
+         target.display_name as target_display_name,
+         target.handle as target_handle,
+         target.initials as target_initials,
+         target.avatar_url as target_avatar_url,
+         target.avatar_tone as target_avatar_tone,
          'mute'::text as kind
        from ritim.conversation_members viewer_member
        join ritim.users viewer on viewer.id = viewer_member.user_id
@@ -732,27 +768,49 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         and request.status = 'accepted'
        where viewer_member.muted_until > now()
          and coalesce(encode(viewer.legacy_account_id_hash, 'hex'), viewer.public_id::text) = any($1::text[])
-         and coalesce(encode(target.legacy_account_id_hash, 'hex'), target.public_id::text) = any($1::text[])
        union all
        select
          coalesce(encode(blocker.legacy_account_id_hash, 'hex'), blocker.public_id::text) as viewer_key,
          coalesce(encode(blocked_user.legacy_account_id_hash, 'hex'), blocked_user.public_id::text) as target_key,
+         blocked_user.public_id::text as target_public_id,
+         blocked_user.display_name as target_display_name,
+         blocked_user.handle as target_handle,
+         blocked_user.initials as target_initials,
+         blocked_user.avatar_url as target_avatar_url,
+         blocked_user.avatar_tone as target_avatar_tone,
          'block'::text as kind
        from ritim.blocks block
        join ritim.users blocker on blocker.id = block.blocker_id
        join ritim.users blocked_user on blocked_user.id = block.blocked_id
        where coalesce(encode(blocker.legacy_account_id_hash, 'hex'), blocker.public_id::text) = any($1::text[])
-         and coalesce(encode(blocked_user.legacy_account_id_hash, 'hex'), blocked_user.public_id::text) = any($1::text[])`,
+       order by kind, target_display_name, target_public_id`,
       [keys],
     )
     for (const row of result.rows) {
       const viewerId = accountByKey.get(row.viewer_key)
-      const targetId = accountByKey.get(row.target_key)
+      const targetId = accountByKey.get(row.target_key) || row.target_public_id
       if (!viewerId || !targetId) continue
-      if (row.kind === 'mute') muted.get(viewerId)?.add(targetId)
-      else blocked.get(viewerId)?.add(targetId)
+      const user: StoredSocialUser = {
+        id: targetId,
+        displayName: row.target_display_name,
+        handle: row.target_handle,
+        initials: row.target_initials,
+        avatarUrl: row.target_avatar_url || undefined,
+        avatarTone: Number(row.target_avatar_tone) || 0,
+        presence: 'offline',
+        currentTrack: undefined,
+        reactionCount: 0,
+        lastReaction: undefined,
+      }
+      if (row.kind === 'mute') {
+        muted.get(viewerId)?.add(targetId)
+        mutedUsers.get(viewerId)?.push(user)
+      } else {
+        blocked.get(viewerId)?.add(targetId)
+        blockedUsers.get(viewerId)?.push(user)
+      }
     }
-    return { muted, blocked }
+    return { muted, blocked, mutedUsers, blockedUsers }
   }
 
   async function toggleMute(accountId: string, peerAccountId: string) {
@@ -816,6 +874,59 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         [reporterId, targetId, messageId || null, reason, detail || null],
       )
     })
+  }
+
+  async function loadReportSummaries(accountIds: string[]) {
+    const summaries = new Map<string, ReportSummary>()
+    for (const accountId of accountIds) summaries.set(accountId, { total: 0, recent: [] })
+    if (!accountIds.length) return summaries
+    const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const result = await pool.query<{
+      reporter_key: string
+      target_user_id: string
+      display_name: string
+      reason: string
+      created_at: Date
+      total: string
+    }>(
+      `with report_rows as (
+         select
+           coalesce(encode(reporter.legacy_account_id_hash, 'hex'), reporter.public_id::text) as reporter_key,
+           reported_user.public_id::text as target_user_id,
+           reported_user.display_name,
+           report.reason,
+           report.created_at,
+           count(*) over (partition by report.reporter_id) as total,
+           row_number() over (
+             partition by report.reporter_id
+             order by report.created_at desc, report.reported_user_id
+           ) as recent_rank
+         from ritim.reports report
+         join ritim.users reporter on reporter.id = report.reporter_id
+         join ritim.users reported_user on reported_user.id = report.reported_user_id
+         where coalesce(encode(reporter.legacy_account_id_hash, 'hex'), reporter.public_id::text) = any($1::text[])
+       )
+       select reporter_key, target_user_id, display_name, reason, created_at, total
+       from report_rows
+       where recent_rank <= 20
+       order by reporter_key, created_at desc, target_user_id`,
+      [[...accountByKey.keys()]],
+    )
+    for (const row of result.rows) {
+      const reporterId = accountByKey.get(row.reporter_key)
+      if (!reporterId) continue
+      const summary = summaries.get(reporterId)
+      if (!summary) continue
+      summary.total = Math.max(summary.total, Number(row.total) || 0)
+      summary.recent.push({
+        targetUserId: row.target_user_id,
+        displayName: row.display_name,
+        reason: row.reason,
+        createdAt: row.created_at.getTime(),
+        status: 'received',
+      })
+    }
+    return summaries
   }
 
   async function loadUnreadCounts(accountIds: string[]) {
@@ -1737,6 +1848,7 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     loadModerationState,
     toggleMute,
     saveReport,
+    loadReportSummaries,
     loadMessageRequests,
     respondToMessageRequest,
     loadUnreadCounts,

@@ -111,6 +111,17 @@ export type SocialNotificationPreferences = {
   deviceEnabled: boolean
 }
 
+export type SocialReportSummary = {
+  total: number
+  recent: Array<{
+    targetUserId: string
+    displayName: string
+    reason: string
+    createdAt: number
+    status: 'received'
+  }>
+}
+
 export type SocialFeedback = {
   id: string
   tone: 'success' | 'info' | 'error'
@@ -150,7 +161,9 @@ export type SocialState = {
   notifications: SocialNotification[]
   notificationPreferences: SocialNotificationPreferences
   mutedUserIds: string[]
+  mutedUsers: SocialUser[]
   blockedUsers: SocialUser[]
+  reportSummary: SocialReportSummary
   feedback?: SocialFeedback
   selectedUserId: string
   listeningWithUserId?: string

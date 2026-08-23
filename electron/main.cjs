@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Notification, safeStorage, shell } = require('electron')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -6,6 +6,7 @@ const path = require('node:path')
 const QRCode = require('qrcode')
 const { io } = require('socket.io-client')
 const { createDiscordPresence } = require('./discord-presence.cjs')
+const { createDevicePreferences } = require('./device-preferences.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
@@ -44,6 +45,7 @@ let socialClockPingInFlight = false
 let socialClockTimer
 let expectedSocialRoomExitUntil = 0
 let updateController
+let devicePreferences
 let isShuttingDown = false
 let activeShellView = 'music'
 
@@ -355,6 +357,18 @@ function broadcastSocialState(status, incomingState) {
     roomMessages: previous?.roomMessages || {},
     roomReactions: previous?.roomReactions || {},
     conversations: previous?.conversations || {},
+    unreadCounts: previous?.unreadCounts || {},
+    messageRequests: previous?.messageRequests || [],
+    notifications: previous?.notifications || [],
+    notificationPreferences: previous?.notificationPreferences || {
+      messagesEnabled: true,
+      reactionsEnabled: true,
+      deviceEnabled: false,
+    },
+    mutedUserIds: previous?.mutedUserIds || [],
+    mutedUsers: previous?.mutedUsers || [],
+    blockedUsers: previous?.blockedUsers || [],
+    reportSummary: previous?.reportSummary || { total: 0, recent: [] },
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
     activeRoomId: previous?.activeRoomId,
@@ -364,7 +378,40 @@ function broadcastSocialState(status, incomingState) {
     authentication: socialAuthStatus,
     connectionStatus: status,
   }
+  if (incomingState) deliverDesktopSocialNotifications(previousState, latestSocialState)
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', latestSocialState)
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:social-state', latestSocialState)
+}
+
+function deliverDesktopSocialNotifications(previousState, nextState) {
+  const preferences = devicePreferences?.read()
+  if (!preferences?.socialNotificationsEnabled || !Notification.isSupported()) return
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused() && activeShellView === 'social') return
+  const delivered = new Set(preferences.deliveredSocialNotificationIds)
+  const previousIds = new Set((previousState?.notifications || []).map((notification) => notification.id))
+  let changed = false
+  for (const notification of nextState.notifications || []) {
+    if (notification.read || delivered.has(notification.id)) continue
+    if (previousState && previousIds.has(notification.id)) continue
+    if (notification.kind === 'reaction' && nextState.notificationPreferences?.reactionsEnabled === false) continue
+    if (notification.kind !== 'reaction' && nextState.notificationPreferences?.messagesEnabled === false) continue
+    const actor = nextState.users?.find((user) => user.id === notification.actorId)
+    const actorName = actor?.displayName || 'Bir Ritim kullanıcısı'
+    const title = notification.kind === 'reaction'
+      ? `${actorName} mesajına tepki verdi`
+      : notification.kind === 'message_request'
+        ? `${actorName} mesaj isteği gönderdi`
+        : `${actorName} sana yazdı`
+    new Notification({
+      title,
+      body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+    }).show()
+    delivered.add(notification.id)
+    changed = true
+  }
+  if (changed) {
+    devicePreferences.update({ deliveredSocialNotificationIds: [...delivered].slice(-100) })
+  }
 }
 
 async function startSocialClient({ forceRefresh = false } = {}) {
@@ -547,6 +594,7 @@ function createWindow() {
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  devicePreferences = createDevicePreferences(app.getPath('userData'))
   const activePairingToken = getPairingToken()
   socialAuth = createSocialAuthClient({
     baseUrl: SOCIAL_URL,
@@ -579,26 +627,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
   })
 
-  ipcMain.on('settings:open', createSettingsWindow)
-  ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
-  ipcMain.handle('shell:get-social-state', () => latestSocialState || {
-    currentUser: desktopSocialProfile(),
-    privacy: {
-      profileVisibility: 'everyone',
-      listeningVisibility: 'everyone',
-    },
-    currentDeviceCount: 1,
-    companionConnected: false,
-    users: [],
-    rooms: [],
-    roomMessages: {},
-    roomReactions: {},
-    conversations: {},
-    selectedUserId: '',
-    authentication: socialAuthStatus,
-    connectionStatus: socialConnectionStatus,
-  })
-  ipcMain.on('shell:social-action', (_event, action = {}) => {
+  const handleSocialAction = (action = {}) => {
     if (action.type === 'reconnect') {
       broadcastSocialState('connecting')
       if (socialSocket?.connected) publishDesktopSocialProfile()
@@ -631,6 +660,9 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (action.type === 'room-reaction') socialSocket.emit('social:room-reaction', payload)
     if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
     if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
+    if (action.type === 'notification-preferences') socialSocket.emit('social:notification-preferences', payload)
+    if (action.type === 'mute') socialSocket.emit('social:mute', payload)
+    if (action.type === 'report') socialSocket.emit('social:report', payload)
     if (action.type === 'block') socialSocket.emit('social:block', payload)
     if (action.type === 'listening') {
       if (latestSocialState?.listeningWithUserId === payload.targetUserId) {
@@ -649,7 +681,37 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
         cover: track?.cover || 0,
       })
     }
+  }
+
+  ipcMain.on('settings:open', createSettingsWindow)
+  ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
+  ipcMain.handle('shell:get-social-state', () => latestSocialState || {
+    currentUser: desktopSocialProfile(),
+    privacy: {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
+    currentDeviceCount: 1,
+    companionConnected: false,
+    users: [],
+    rooms: [],
+    roomMessages: {},
+    roomReactions: {},
+    conversations: {},
+    unreadCounts: {},
+    messageRequests: [],
+    notifications: [],
+    notificationPreferences: { messagesEnabled: true, reactionsEnabled: true, deviceEnabled: false },
+    mutedUserIds: [],
+    mutedUsers: [],
+    blockedUsers: [],
+    reportSummary: { total: 0, recent: [] },
+    selectedUserId: '',
+    authentication: socialAuthStatus,
+    connectionStatus: socialConnectionStatus,
   })
+  ipcMain.on('shell:social-action', (_event, action = {}) => handleSocialAction(action))
+  ipcMain.on('settings:social-action', (_event, action = {}) => handleSocialAction(action))
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const url = phoneUrl()
@@ -677,6 +739,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       updateStatus: updateController?.getStatus(),
       socialAuth: socialAuthStatus,
       socialAccount,
+      socialState: latestSocialState,
+      devicePreferences: {
+        socialNotificationsEnabled: devicePreferences.read().socialNotificationsEnabled,
+      },
     }
   })
   ipcMain.handle('settings:get-social-account', () => socialAuth?.account())
@@ -702,6 +768,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   })
   ipcMain.handle('settings:check-updates', () => updateController?.check())
   ipcMain.handle('settings:install-update', () => updateController?.install() || false)
+  ipcMain.handle('settings:set-device-notifications', (_event, enabled) => {
+    const supported = Notification.isSupported()
+    const next = devicePreferences.update({ socialNotificationsEnabled: supported && enabled === true })
+    return { socialNotificationsEnabled: next.socialNotificationsEnabled, supported }
+  })
 
   createWindow()
   void startSocialClient()

@@ -72,6 +72,23 @@ docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
 Gateway imajını yenilemeden önce bir kez uygulanmalıdır; Cloudflare ayarında
 değişiklik gerektirmez.
 
+Beta 1 Ayarlar güvenli şikâyet özeti geçişi:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/070_beta1_settings.sql
+```
+
+`070` geçişi önce eski tablo düzeyi okuma yetkisini geri alır, ardından
+`ritim_app` rolüne yalnız şikâyet sahibini, hedefi, nedeni ve oluşturulma
+zamanını okuyacak sütun izinlerini verir. Şikâyet açıklaması,
+ileti bağlamı, iç moderasyon durumu ve dahili kimlikler uygulama rolüne
+açılmaz. Betik idempotenttir; Beta 1 gateway imajından önce bir kez
+uygulanmalıdır. Sistem bildirimi izni cihaz yerelinde tutulur; veritabanındaki
+eski `device_enabled` sütunu Beta 1 gateway'i tarafından okunmaz veya
+güncellenmez.
+
 Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları
 silmez veya yeniden yazmaz. Betik tekrar çalıştırılabilir.
 

@@ -26,6 +26,15 @@ type SocialSnapshot = Omit<SocialState, 'connectionStatus'>
 
 const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
 const DELIVERED_NOTIFICATION_IDS_KEY = 'ritim-social-delivered-notifications-v1'
+const DEVICE_NOTIFICATIONS_KEY = 'ritim-social-device-notifications-v1'
+
+function deviceNotificationsEnabled() {
+  return localStorage.getItem(DEVICE_NOTIFICATIONS_KEY) === 'enabled'
+}
+
+function saveDeviceNotifications(enabled: boolean) {
+  localStorage.setItem(DEVICE_NOTIFICATIONS_KEY, enabled ? 'enabled' : 'disabled')
+}
 
 function deliveredNotificationIds() {
   try {
@@ -208,10 +217,12 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
     notificationPreferences: {
       messagesEnabled: true,
       reactionsEnabled: true,
-      deviceEnabled: false,
+      deviceEnabled: deviceNotificationsEnabled(),
     },
     mutedUserIds: [],
+    mutedUsers: [],
     blockedUsers: [],
+    reportSummary: { total: 0, recent: [] },
     selectedUserId: '',
   }))
   const selectedUserIdRef = useRef('')
@@ -294,6 +305,13 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
         if (lostActiveRoom && !expectedExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
         return {
           ...next,
+          notificationPreferences: {
+            messagesEnabled: next.notificationPreferences?.messagesEnabled !== false,
+            reactionsEnabled: next.notificationPreferences?.reactionsEnabled !== false,
+            deviceEnabled: notificationPreferencesRef.current.deviceEnabled,
+          },
+          mutedUsers: next.mutedUsers || [],
+          reportSummary: next.reportSummary || { total: 0, recent: [] },
           feedback: lostActiveRoom && !expectedExit
             ? {
                 id: crypto.randomUUID(),
@@ -503,8 +521,12 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
   }, [])
 
   const updateNotificationPreferences = useCallback((preferences: SocialNotificationPreferences) => {
+    saveDeviceNotifications(preferences.deviceEnabled)
     setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
-    if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
+    if (socialSocket.connected) socialSocket.emit('social:notification-preferences', {
+      messagesEnabled: preferences.messagesEnabled,
+      reactionsEnabled: preferences.reactionsEnabled,
+    })
   }, [])
 
   const requestDeviceNotifications = useCallback(() => {
@@ -526,6 +548,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
         ...notificationPreferencesRef.current,
         deviceEnabled: granted,
       }
+      saveDeviceNotifications(granted)
       setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
       setSnapshot((current) => ({
         ...current,
@@ -535,7 +558,6 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion }:
           text: granted ? 'Sistem bildirimleri açıldı.' : 'Sistem bildirimi izni verilmedi.',
         },
       }))
-      if (socialSocket.connected) socialSocket.emit('social:notification-preferences', preferences)
     })()
   }, [])
 

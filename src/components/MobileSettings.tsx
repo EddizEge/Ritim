@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { AlertCircle, Laptop, LogOut, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react'
+import { AlertCircle, Bell, Eye, Laptop, LogOut, RefreshCw, ShieldCheck, Smartphone, UserRoundX, VolumeX } from 'lucide-react'
 import type { SocialAccountState } from '../hooks/useSocialAccount'
+import type { SocialActions, SocialState } from '../social/types'
 
 type Props = {
   account: SocialAccountState
@@ -8,6 +9,8 @@ type Props = {
   onReconnect: () => Promise<unknown>
   onRevokeDevice: (deviceId: string) => Promise<void>
   onSignOut: () => Promise<void>
+  social: SocialState
+  socialActions: SocialActions
 }
 
 function lastSeenLabel(value?: string) {
@@ -21,7 +24,7 @@ function lastSeenLabel(value?: string) {
   return new Date(timestamp).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })
 }
 
-export function MobileSettings({ account, onRefresh, onReconnect, onRevokeDevice, onSignOut }: Props) {
+export function MobileSettings({ account, onRefresh, onReconnect, onRevokeDevice, onSignOut, social, socialActions }: Props) {
   const [busyDeviceId, setBusyDeviceId] = useState('')
   const [actionError, setActionError] = useState('')
 
@@ -91,6 +94,26 @@ export function MobileSettings({ account, onRefresh, onReconnect, onRevokeDevice
             </article>
           )
         })}</div> : <div className="mobile-device-empty">Bu hesaba bağlı etkin cihaz bulunamadı.</div>}
+      </section>
+
+      <section className="mobile-settings-section">
+        <header><div><Eye /><span><h2>Sosyal görünürlük</h2><p>Aynı hesaptaki bütün cihazlara uygulanır.</p></span></div><em>Hesap</em></header>
+        <label><span><b>Profil görünürlüğü</b><small>Adın, avatarın ve çevrimiçi durumun.</small></span><select value={social.privacy.profileVisibility} onChange={(event) => socialActions.updatePrivacy({ ...social.privacy, profileVisibility: event.target.value as SocialState['privacy']['profileVisibility'] })}><option value="everyone">Herkes</option><option value="contacts">Mesajlaştıklarım</option><option value="hidden">Gizli</option></select></label>
+        <label><span><b>Dinleme görünürlüğü</b><small>Çalan parça ve oda erişimin.</small></span><select value={social.privacy.listeningVisibility} onChange={(event) => socialActions.updatePrivacy({ ...social.privacy, listeningVisibility: event.target.value as SocialState['privacy']['listeningVisibility'] })}><option value="everyone">Herkes</option><option value="contacts">Mesajlaştıklarım</option><option value="hidden">Gizli</option></select></label>
+      </section>
+
+      <section className="mobile-settings-section">
+        <header><div><Bell /><span><h2>Bildirimler</h2><p>Mesaj ve tepki ayarları hesapta saklanır.</p></span></div><em>Hesap + cihaz</em></header>
+        <label><span><b>Mesajlar</b><small>Mesajlar ve yeni mesaj istekleri.</small></span><input type="checkbox" checked={social.notificationPreferences.messagesEnabled} onChange={(event) => socialActions.updateNotificationPreferences({ ...social.notificationPreferences, messagesEnabled: event.target.checked })} /></label>
+        <label><span><b>Tepkiler</b><small>Mesajlarına gelen sosyal tepkiler.</small></span><input type="checkbox" checked={social.notificationPreferences.reactionsEnabled} onChange={(event) => socialActions.updateNotificationPreferences({ ...social.notificationPreferences, reactionsEnabled: event.target.checked })} /></label>
+        <button className={social.notificationPreferences.deviceEnabled ? 'is-enabled' : ''} onClick={socialActions.requestDeviceNotifications}><Bell />{social.notificationPreferences.deviceEnabled ? 'Bu telefonda sistem bildirimleri açık' : 'Bu telefonda sistem bildirimlerini aç'}</button>
+      </section>
+
+      <section className="mobile-settings-section mobile-moderation-section">
+        <header><div><ShieldCheck /><span><h2>Güvenlik</h2><p>Sessize alma, engelleme ve şikâyet özetin.</p></span></div><em>Hesap</em></header>
+        <div className="mobile-moderation-group"><h3><VolumeX />Sessize alınanlar <span>{social.mutedUsers.length}</span></h3>{social.mutedUsers.length ? social.mutedUsers.map((user) => <article key={user.id}><span><b>{user.displayName}</b><small>{user.handle}</small></span><button onClick={() => socialActions.toggleMute(user.id)}>Sesi aç</button></article>) : <p>Henüz sessize alınan kullanıcı yok.</p>}</div>
+        <div className="mobile-moderation-group"><h3><UserRoundX />Engellenenler <span>{social.blockedUsers.length}</span></h3>{social.blockedUsers.length ? social.blockedUsers.map((user) => <article key={user.id}><span><b>{user.displayName}</b><small>{user.handle}</small></span><button onClick={() => socialActions.blockUser(user.id)}>Engeli kaldır</button></article>) : <p>Henüz engellenen kullanıcı yok.</p>}</div>
+        <div className="mobile-report-summary"><h3>Şikâyet geçmişi <span>{social.reportSummary.total}</span></h3>{social.reportSummary.recent.length ? social.reportSummary.recent.map((report, index) => <article key={`${report.targetUserId}-${report.createdAt}-${index}`}><span><b>{report.displayName}</b><small>{report.reason} · {new Date(report.createdAt).toLocaleDateString('tr-TR')}</small></span><em>Alındı</em></article>) : <p>Gönderilmiş şikâyet bulunmuyor.</p>}<small>İnceleme notları ve iç ayrıntılar gösterilmez.</small></div>
       </section>
 
       {account.warning ? <p className="mobile-settings-warning">{account.warning}</p> : null}
