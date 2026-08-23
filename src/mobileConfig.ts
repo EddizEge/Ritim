@@ -18,6 +18,13 @@ export type MobilePairingConfig = {
   pairedAt: number
 }
 
+export type MobilePairingChange =
+  | 'initial_pairing'
+  | 'unchanged'
+  | 'endpoint_refresh'
+  | 'same_computer_reauthorization'
+  | 'switch_computer'
+
 type StoredPairingMetadata = Omit<MobilePairingConfig, 'token'> & { transactionId?: string }
 type SecurePairingRecord = {
   storageVersion: 1
@@ -120,6 +127,25 @@ export function normalizeComputerName(value?: string | null) {
     .trim()
     .slice(0, 80)
   return normalized || 'Ritim PC'
+}
+
+export function classifyMobilePairingChange(
+  current: MobilePairingConfig | null,
+  incoming: MobilePairingConfig,
+): MobilePairingChange {
+  if (!current) return 'initial_pairing'
+  if (current.installationId !== incoming.installationId) return 'switch_computer'
+  if (current.token !== incoming.token || current.room !== incoming.room) {
+    return 'same_computer_reauthorization'
+  }
+  if (
+    current.syncUrl !== incoming.syncUrl
+    || current.computerName !== incoming.computerName
+    || current.pairedAt !== incoming.pairedAt
+  ) {
+    return 'endpoint_refresh'
+  }
+  return 'unchanged'
 }
 
 function normalizePairing(config: Partial<MobilePairingConfig>): MobilePairingConfig {

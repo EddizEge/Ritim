@@ -17,6 +17,7 @@ import { MobileAppearanceSettings, MobileSettings, MobileUpdateAboutSettings } f
 import type { SocialAccountState } from '../hooks/useSocialAccount'
 import { useMobileArtwork } from '../appearanceContext'
 import { visibleArtworkUrl, type AppearanceArtwork } from '../appearancePreferences'
+import { scanMobilePairingQr } from '../mobilePairingScanner'
 
 type Props = {
   state: PlayerState
@@ -30,6 +31,7 @@ type Props = {
   socialActions: SocialActions
   socialAccount: SocialAccountState
   pairing: MobilePairingConfig
+  onRefreshPairing: (pairing: MobilePairingConfig) => Promise<MobilePairingConfig | null>
   onRemovePairing: () => Promise<void>
   socialAccountActions: {
     refresh: () => Promise<unknown>
@@ -286,7 +288,7 @@ function ConnectionCenterSheet({ health, connected, room, pairingError, computer
   )
 }
 
-export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth, socialState, socialActions, socialAccount, socialAccountActions, pairing, onRemovePairing }: Props) {
+export function MobileApp({ state, actions, connected, peerCount, room, pairingError = '', syncHealth, socialState, socialActions, socialAccount, socialAccountActions, pairing, onRefreshPairing, onRemovePairing }: Props) {
   const track = getTrack(state)
   const liked = state.liked.includes(track.id)
   const idle = track.id === 'ytmusic:idle'
@@ -310,6 +312,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [queueMenuTrack, setQueueMenuTrack] = useState<Track | null>(null)
   const [connectionOpen, setConnectionOpen] = useState(false)
   const [pairingResetting, setPairingResetting] = useState(false)
+  const [pairingRefreshing, setPairingRefreshing] = useState(false)
   const mobileUpdate = useMobileUpdate()
   const homeBootstrapRef = useRef(false)
   const pendingNavigationRef = useRef<{ route: BrowseRoute; query: string } | null>(null)
@@ -500,6 +503,19 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     setNotice(message)
   }
 
+  const refreshPairingQr = async () => {
+    if (pairingRefreshing || pairingResetting) return
+    setPairingRefreshing(true)
+    try {
+      const saved = await onRefreshPairing(await scanMobilePairingQr())
+      setNotice(saved ? 'PC bağlantısı güncellendi.' : 'Eşleme değişikliği iptal edildi.')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : 'QR tarama iptal edildi veya kamera açılamadı.')
+    } finally {
+      setPairingRefreshing(false)
+    }
+  }
+
   const switchComputer = async () => {
     if (pairingResetting) return
     const confirmed = window.confirm(`${pairing.computerName} eşlemesi kaldırılsın mı? Bu telefondaki Ritim oturumu ve çevrimdışı müzik önbelleği temizlenecek.`)
@@ -622,7 +638,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         <div className="ytm-offline-banner">
           <i />
           <span>{pairingError || `${pairing.computerName} bağlantısı bekleniyor`}<small>{pairing.syncUrl.replace(/^https?:\/\//, '')}</small></span>
-          {isNativeMobile ? <button onClick={() => void switchComputer()} disabled={pairingResetting}>{pairingResetting ? 'Kaldırılıyor…' : 'QR’ı yenile'}</button> : null}
+          {isNativeMobile ? <button onClick={() => void refreshPairingQr()} disabled={pairingRefreshing || pairingResetting}>{pairingRefreshing ? 'QR açılıyor…' : 'QR’ı yenile'}</button> : null}
         </div>
       ) : null}
       {notice ? <div className="ytm-toast" role="status">{notice}</div> : null}

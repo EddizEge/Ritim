@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  classifyMobilePairingChange,
   createMobilePairingPersistence,
   createPairingMutationQueue,
   normalizeComputerName,
@@ -82,6 +83,37 @@ test('pairing parser rejects unsafe or incomplete links', () => {
   assert.throws(() => parsePairingLink(`https://example.test/?room=room&token=pairing_token_123456789012345678901234&installationId=wrong`), /PC kimliği/i)
 })
 
+test('aynı PC ve güvenlik bağlamındaki IP değişikliği yalnız endpoint yenilemesidir', () => {
+  const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=same_pc_pairing_token_123456789012345&installationId=ritim-pc123&computerName=Eski-PC')
+  const refreshed = {
+    ...current,
+    syncUrl: 'http://192.168.1.51:8787',
+    computerName: 'Yeni-PC',
+    pairedAt: current.pairedAt + 1,
+  }
+
+  assert.equal(classifyMobilePairingChange(current, refreshed), 'endpoint_refresh')
+  assert.equal(classifyMobilePairingChange(current, current), 'unchanged')
+  assert.equal(classifyMobilePairingChange(null, refreshed), 'initial_pairing')
+})
+
+test('PC, token ve oda değişiklikleri sessiz endpoint yenilemesi sayılmaz', () => {
+  const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=current_pairing_token_12345678901234567&installationId=ritim-pc123')
+
+  assert.equal(classifyMobilePairingChange(current, {
+    ...current,
+    installationId: 'ritim-otherpc',
+  }), 'switch_computer')
+  assert.equal(classifyMobilePairingChange(current, {
+    ...current,
+    token: 'rotated_pairing_token_12345678901234567',
+  }), 'same_computer_reauthorization')
+  assert.equal(classifyMobilePairingChange(current, {
+    ...current,
+    room: 'OTHER-ROOM',
+  }), 'same_computer_reauthorization')
+})
+
 test('legacy web pairing migrates once and reset clears account-scoped cache', async () => {
   const storage = new MemoryStorage()
   const persistence = createMobilePairingPersistence({ native: false, local: storage })
@@ -137,6 +169,53 @@ test('Android pairing stores one authoritative encrypted record and no local raw
   assert.equal(JSON.parse(metadata).transactionId, 'transaction-a')
   assert.equal(JSON.parse(protectedRecord).pairing.token, pairing.token)
   assert.deepEqual(await persistence.read(), pairing)
+})
+
+test('Android aynı PC endpoint yenilemesi hesap, cihaz ve çevrimdışı cacheleri korur', async () => {
+  const local = new MemoryStorage()
+  const secure = new MemorySecureStorage()
+  const transactionIds = ['transaction-old-endpoint', 'transaction-new-endpoint']
+  const persistence = createMobilePairingPersistence({
+    native: true,
+    local,
+    secure,
+    nextTransactionId: () => transactionIds.shift() || 'unexpected',
+  })
+  const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=preserved_pairing_token_123456789012345&installationId=ritim-pc123&computerName=Ediz-PC')
+  await persistence.save(current)
+
+  const preservedLocalValues = new Map([
+    ['ritim-player-cache-v2', '{"version":2,"state":{"trackId":"cached-track"}}'],
+    ['ritim-social-delivered-notifications-v1', '["message-1"]'],
+    ['ritim-social-phone-id', 'phone-id'],
+    ['ritim-social-phone-id:account-1', 'scoped-phone-id'],
+    ['ritim-social-web-id:account-1', 'scoped-web-id'],
+  ])
+  for (const [key, value] of preservedLocalValues) local.setItem(key, value)
+  const preservedSecureValues = new Map([
+    ['social.session.v1', '{"accessToken":"opaque-session"}'],
+    ['social.device.v1', 'opaque-device-identity'],
+  ])
+  for (const [key, value] of preservedSecureValues) secure.values.set(key, value)
+
+  const refreshed = {
+    ...current,
+    syncUrl: 'http://192.168.1.51:8787',
+    computerName: 'Ediz-PC-LAN',
+    pairedAt: current.pairedAt + 1,
+  }
+  assert.equal(classifyMobilePairingChange(current, refreshed), 'endpoint_refresh')
+  await persistence.save(refreshed)
+
+  assert.deepEqual(await persistence.read(), refreshed)
+  for (const [key, value] of preservedLocalValues) assert.equal(local.getItem(key), value)
+  for (const [key, value] of preservedSecureValues) assert.equal(secure.values.get(key), value)
+  const metadata = local.getItem('ritim-mobile-pairing-v2') || ''
+  assert.equal(metadata.includes(current.token), false)
+  assert.equal(JSON.parse(metadata).syncUrl, refreshed.syncUrl)
+  const protectedPairing = JSON.parse(secure.values.get('pairing.token.v2') || '{}')
+  assert.equal(protectedPairing.transactionId, 'transaction-new-endpoint')
+  assert.equal(protectedPairing.pairing.token, current.token)
 })
 
 test('Android legacy token is removed only after protected migration succeeds', async () => {
