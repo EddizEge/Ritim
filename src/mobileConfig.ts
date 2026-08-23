@@ -134,18 +134,29 @@ export function classifyMobilePairingChange(
   incoming: MobilePairingConfig,
 ): MobilePairingChange {
   if (!current) return 'initial_pairing'
-  if (current.installationId !== incoming.installationId) return 'switch_computer'
-  if (current.token !== incoming.token || current.room !== incoming.room) {
+
+  // Early Beta records derived installationId from the pairing token because
+  // older QR links did not carry the desktop's persistent installation id.
+  // Possession of the same validated high-entropy token in the same room is
+  // the stronger continuity proof, so let that legacy id migrate without
+  // clearing the account or offline cache.
+  const samePairingAuthority = current.token === incoming.token && current.room === incoming.room
+  if (samePairingAuthority) {
+    if (
+      current.syncUrl !== incoming.syncUrl
+      || current.installationId !== incoming.installationId
+      || current.computerName !== incoming.computerName
+      || current.pairedAt !== incoming.pairedAt
+    ) {
+      return 'endpoint_refresh'
+    }
+    return 'unchanged'
+  }
+
+  if (current.installationId === incoming.installationId) {
     return 'same_computer_reauthorization'
   }
-  if (
-    current.syncUrl !== incoming.syncUrl
-    || current.computerName !== incoming.computerName
-    || current.pairedAt !== incoming.pairedAt
-  ) {
-    return 'endpoint_refresh'
-  }
-  return 'unchanged'
+  return 'switch_computer'
 }
 
 function normalizePairing(config: Partial<MobilePairingConfig>): MobilePairingConfig {
