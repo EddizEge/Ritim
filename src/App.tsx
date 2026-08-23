@@ -10,6 +10,7 @@ import { NativePairing } from './components/NativePairing'
 import {
   clearMobilePairing,
   clearMobilePairingCaches,
+  classifyMobilePairingChange,
   createPairingMutationQueue,
   isNativeMobile,
   parsePairingLink,
@@ -39,9 +40,10 @@ function useCompanionMode() {
   return forced || isNarrow
 }
 
-function RitimApp({ isCompanion, pairing, onRemovePairing }: {
+function RitimApp({ isCompanion, pairing, onRefreshPairing, onRemovePairing }: {
   isCompanion: boolean
   pairing: MobilePairingConfig
+  onRefreshPairing: (pairing: MobilePairingConfig) => Promise<MobilePairingConfig | null>
   onRemovePairing: () => Promise<void>
 }) {
   const player = usePlayerSync(isCompanion, pairing)
@@ -74,7 +76,7 @@ function RitimApp({ isCompanion, pairing, onRemovePairing }: {
   })
   const props = { ...player }
   return isCompanion
-    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} socialState={social.state} socialActions={social.actions} socialAccount={socialAccount.state} socialAccountActions={socialAccount.actions} pairing={pairing} onRemovePairing={onRemovePairing} />
+    ? <MobileApp state={player.state} actions={player.actions} connected={player.connected} peerCount={player.peerCount} room={player.room} pairingError={player.pairingError} syncHealth={player.syncHealth} socialState={social.state} socialActions={social.actions} socialAccount={socialAccount.state} socialAccountActions={socialAccount.actions} pairing={pairing} onRefreshPairing={onRefreshPairing} onRemovePairing={onRemovePairing} />
     : <DesktopApp {...props} youtube={youtube} socialState={social.state} socialActions={social.actions} />
 }
 
@@ -93,6 +95,41 @@ export default function App() {
     setAppearance((current) => writeAppearancePreferences({ ...current, ...patch }))
   }, [])
 
+  const applyIncomingPairing = useCallback(async (
+    incoming: MobilePairingConfig,
+    canUpdateState: () => boolean = () => true,
+  ): Promise<MobilePairingConfig | null> => {
+    let current: MobilePairingConfig | null = null
+    try {
+      current = await readMobilePairing()
+      const change = classifyMobilePairingChange(current, incoming)
+      if (change === 'unchanged') return current
+
+      if (change === 'switch_computer') {
+        const confirmed = window.confirm(`${current?.computerName || 'Mevcut PC'} eşlemesi kaldırılıp ${incoming.computerName} bağlansın mı? Eski Ritim oturumu ve çevrimdışı müzik önbelleği temizlenecek.`)
+        if (!confirmed) return null
+      } else if (change === 'same_computer_reauthorization') {
+        const confirmed = window.confirm(`${current?.computerName || incoming.computerName} eşleme anahtarı veya oda bilgisi değişmiş. Bu PC ile güvenli bağlantı yenilensin mi? Ritim hesabın ve çevrimdışı müzik önbelleğin korunacak.`)
+        if (!confirmed) return null
+      }
+
+      const saved = await saveMobilePairing(incoming)
+      if (change === 'switch_computer') {
+        if (canUpdateState()) flushSync(() => setPairing(undefined))
+        void signOutExistingSocialSession({
+          socialUrl: configuredSocialUrl(current?.syncUrl || incoming.syncUrl),
+        }).catch((error) => console.warn('[Ritim] Eski PC sosyal oturumu kapatılamadı:', error))
+        clearMobilePairingCaches()
+        await clearSocialIdentityForPairingReset()
+      }
+      if (canUpdateState()) setPairing(saved)
+      return saved
+    } catch (error) {
+      if (canUpdateState() && current) setPairing(current)
+      throw error
+    }
+  }, [])
+
   useEffect(() => {
     const root = document.documentElement
     root.dataset.ritimTheme = companion ? appearance.theme : 'system'
@@ -108,49 +145,30 @@ export default function App() {
     let disposed = false
     const processUrl = async (value?: string) => {
       if (!value) return null
-      let current: MobilePairingConfig | null = null
       try {
         const incoming = parsePairingLink(value)
-        current = await readMobilePairing()
-        const switchingComputer = Boolean(current && current.installationId !== incoming.installationId)
-        if (switchingComputer) {
-          const confirmed = window.confirm(`${current?.computerName || 'Mevcut PC'} eşlemesi kaldırılıp ${incoming.computerName} bağlansın mı? Eski Ritim oturumu ve çevrimdışı müzik önbelleği temizlenecek.`)
-          if (!confirmed) return null
-        }
-        const saved = await saveMobilePairing(incoming)
-        if (switchingComputer) {
-          if (!disposed) flushSync(() => setPairing(undefined))
-          void signOutExistingSocialSession({
-            socialUrl: configuredSocialUrl(current?.syncUrl || incoming.syncUrl),
-          }).catch((error) => console.warn('[Ritim] Eski PC sosyal oturumu kapatılamadı:', error))
-          clearMobilePairingCaches()
-          await clearSocialIdentityForPairingReset()
-        }
-        if (!disposed) setPairing(saved)
-        return saved
+        return await enqueuePairingMutation(() => applyIncomingPairing(incoming, () => !disposed))
       } catch (error) {
         console.warn('[Ritim] Telefon eşlemesi değiştirilemedi:', error)
-        if (!disposed && current) setPairing(current)
         return null
       }
     }
-    const acceptUrl = (value?: string) => enqueuePairingMutation(() => processUrl(value))
     let removeListener: (() => Promise<void>) | undefined
-    void enqueuePairingMutation(async () => {
+    void (async () => {
       let initial: MobilePairingConfig | null = null
       if (isNativeMobile) {
         const launch = await CapacitorApp.getLaunchUrl().catch(() => undefined)
         initial = await processUrl(launch?.url)
       }
-      if (!initial) initial = await readMobilePairing()
+      if (!initial) initial = await enqueuePairingMutation(() => readMobilePairing())
       if (!initial && !isNativeMobile) initial = webDevelopmentPairing()
       if (!disposed) setPairing(initial)
-    }).catch((error) => {
+    })().catch((error) => {
       console.warn('[Ritim] Kayıtlı telefon eşlemesi okunamadı:', error)
       if (!disposed) setPairing(null)
     })
     if (isNativeMobile) {
-      void CapacitorApp.addListener('appUrlOpen', ({ url }) => { void acceptUrl(url) })
+      void CapacitorApp.addListener('appUrlOpen', ({ url }) => { void processUrl(url) })
         .then((handle) => {
           if (disposed) void handle.remove()
           else removeListener = () => handle.remove()
@@ -161,13 +179,11 @@ export default function App() {
       disposed = true
       void removeListener?.()
     }
-  }, [enqueuePairingMutation])
+  }, [applyIncomingPairing, enqueuePairingMutation])
 
-  const acceptPairing = async (next: MobilePairingConfig) => {
-    await enqueuePairingMutation(async () => {
-      setPairing(await saveMobilePairing(next))
-    })
-  }
+  const acceptPairing = useCallback((next: MobilePairingConfig) => (
+    enqueuePairingMutation(() => applyIncomingPairing(next))
+  ), [applyIncomingPairing, enqueuePairingMutation])
 
   const removePairing = async () => {
     await enqueuePairingMutation(async () => {
@@ -197,7 +213,7 @@ export default function App() {
   const pairingKey = `${pairing.syncUrl}|${pairing.room}|${pairing.token}|${pairing.installationId}`
   return (
     <AppearanceProvider active={companion} preferences={appearance} update={updateAppearance}>
-      <RitimApp key={pairingKey} isCompanion={companion} pairing={pairing} onRemovePairing={removePairing} />
+      <RitimApp key={pairingKey} isCompanion={companion} pairing={pairing} onRefreshPairing={acceptPairing} onRemovePairing={removePairing} />
     </AppearanceProvider>
   )
 }
