@@ -2,27 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
 import { io } from 'socket.io-client'
 import { getTrack, initialPlayerState } from '../data'
-import { isNativeMobile } from '../mobileConfig'
+import { isNativeMobile, type MobilePairingConfig } from '../mobileConfig'
 import type { PlayerActions, PlayerState, RepeatMode, SyncCommand, SyncCommandAck, SyncHealth, Track } from '../types'
 
-const roomFromUrl = new URLSearchParams(window.location.search).get('room')
-const ROOM = roomFromUrl || localStorage.getItem('ritim-room') || 'EDIZ-4821'
-localStorage.setItem('ritim-room', ROOM)
-const tokenFromUrl = new URLSearchParams(window.location.search).get('token')
-const PAIRING_TOKEN = tokenFromUrl || localStorage.getItem('ritim-pairing-token') || ''
-if (tokenFromUrl) localStorage.setItem('ritim-pairing-token', tokenFromUrl)
-
-const savedSyncUrl = localStorage.getItem('ritim-sync-url')
-const syncUrl = import.meta.env.VITE_SYNC_URL || savedSyncUrl || `${window.location.protocol}//${window.location.hostname}:8787`
-export const ritimSyncUrl = syncUrl
-export const ritimSocket = io(syncUrl, {
-  autoConnect: false,
-  timeout: 2500,
-  reconnectionDelay: 800,
-  auth: { token: PAIRING_TOKEN },
-})
-export const ritimRoom = ROOM
-export const ritimPairingToken = PAIRING_TOKEN
 const VOLUME_ACK_TIMEOUT_MS = 6000
 const PLAYER_CACHE_KEY = 'ritim-player-cache-v2'
 const COMMAND_TIMEOUT_MS = 20000
@@ -60,7 +42,14 @@ function createCommand(type: string, value?: number | string): SyncCommand {
   return { id: `${Date.now().toString(36)}-${(++commandSequence).toString(36)}`, type, value, issuedAt: Date.now() }
 }
 
-export function usePlayerSync(isCompanion: boolean) {
+export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig) {
+  const { room, syncUrl, token } = pairing
+  const socket = useMemo(() => io(syncUrl, {
+    autoConnect: false,
+    timeout: 2500,
+    reconnectionDelay: 800,
+    auth: { token },
+  }), [syncUrl, token])
   const [state, setState] = useState<PlayerState>(() => isCompanion ? readCachedPlayerState() || initialPlayerState : initialPlayerState)
   const [connected, setConnected] = useState(false)
   const [peerCount, setPeerCount] = useState(1)
@@ -92,13 +81,13 @@ export function usePlayerSync(isCompanion: boolean) {
     const onConnect = () => {
       setConnected(true)
       setPairingError('')
-      ritimSocket.emit('room:join', {
-        room: ROOM,
+      socket.emit('room:join', {
+        room,
         role: isCompanion ? 'companion' : 'desktop',
         state: initialPlayerState,
-        token: PAIRING_TOKEN,
+        token: token,
       })
-      ritimSocket.emit('room:request-state', { room: ROOM })
+      socket.emit('room:request-state', { room })
     }
     const onDisconnect = () => {
       const hadPendingCommands = pendingCommandsRef.current.size > 0 || deferredCommandsRef.current.size > 0
@@ -189,7 +178,7 @@ export function usePlayerSync(isCompanion: boolean) {
       if (ack.status === 'failed') {
         pendingTrackRef.current = null
         pendingVolumeRef.current = null
-        ritimSocket.emit('room:request-state', { room: ROOM })
+        socket.emit('room:request-state', { room })
       }
       setState((current) => ({
         ...current,
@@ -212,67 +201,70 @@ export function usePlayerSync(isCompanion: boolean) {
       setPairingError(message)
       setConnected(false)
     }
-    ritimSocket.on('connect', onConnect)
-    ritimSocket.on('connect_error', onConnectError)
-    ritimSocket.on('disconnect', onDisconnect)
-    ritimSocket.on('player:state', onState)
-    ritimSocket.on('room:peers', onPeers)
-    ritimSocket.on('room:status', onRoomStatus)
-    ritimSocket.on('player:command:ack', onCommandAck)
-    ritimSocket.on('pairing:error', onPairingError)
-    ritimSocket.connect()
-    if (ritimSocket.connected) onConnect()
+    socket.on('connect', onConnect)
+    socket.on('connect_error', onConnectError)
+    socket.on('disconnect', onDisconnect)
+    socket.on('player:state', onState)
+    socket.on('room:peers', onPeers)
+    socket.on('room:status', onRoomStatus)
+    socket.on('player:command:ack', onCommandAck)
+    socket.on('pairing:error', onPairingError)
+    socket.connect()
+    if (socket.connected) onConnect()
 
     return () => {
-      ritimSocket.off('connect', onConnect)
-      ritimSocket.off('connect_error', onConnectError)
-      ritimSocket.off('disconnect', onDisconnect)
-      ritimSocket.off('player:state', onState)
-      ritimSocket.off('room:peers', onPeers)
-      ritimSocket.off('room:status', onRoomStatus)
-      ritimSocket.off('player:command:ack', onCommandAck)
-      ritimSocket.off('pairing:error', onPairingError)
+      socket.off('connect', onConnect)
+      socket.off('connect_error', onConnectError)
+      socket.off('disconnect', onDisconnect)
+      socket.off('player:state', onState)
+      socket.off('room:peers', onPeers)
+      socket.off('room:status', onRoomStatus)
+      socket.off('player:command:ack', onCommandAck)
+      socket.off('pairing:error', onPairingError)
       for (const pending of pendingCommandsRef.current.values()) window.clearTimeout(pending.timer)
       pendingCommandsRef.current.clear()
       for (const timer of deferredCommandsRef.current.values()) window.clearTimeout(timer)
       deferredCommandsRef.current.clear()
-      ritimSocket.disconnect()
+      socket.disconnect()
     }
-  }, [isCompanion])
+  }, [isCompanion, room, socket, token])
 
   useEffect(() => {
     if (!isCompanion || !isNativeMobile) return
+    let disposed = false
     let removeListener: (() => Promise<void>) | undefined
     void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) return
       latestRevisionRef.current = 0
-      if (ritimSocket.connected) {
-        ritimSocket.emit('room:request-state', { room: ROOM })
+      if (socket.connected) {
+        socket.emit('room:request-state', { room })
       } else {
-        ritimSocket.connect()
+        socket.connect()
       }
     }).then((handle) => {
-      removeListener = () => handle.remove()
-    })
+      if (disposed) void handle.remove()
+      else removeListener = () => handle.remove()
+    }).catch(() => {})
     return () => {
+      disposed = true
       void removeListener?.()
     }
-  }, [isCompanion])
+  }, [isCompanion, room, socket])
 
   const commit = useCallback((producer: (previous: PlayerState) => PlayerState) => {
     setState((previous) => {
       const next = { ...producer(previous), updatedAt: Date.now() }
-      if (!isCompanion) ritimSocket.emit('player:update', { room: ROOM, state: next })
+      if (!isCompanion) socket.emit('player:update', { room, state: next })
       return next
     })
-  }, [isCompanion])
+  }, [isCompanion, room, socket])
 
   const emitMusicCommand = useCallback((type: string, value?: number | string) => {
     if (!isCompanion) {
       window.ritimDesktop?.music.command({ type, value })
       return true
     }
-    if (!ritimSocket.connected) {
+    if (!socket.connected) {
       setSyncHealth((current) => ({ ...current, desktopOnline: false }))
       setState((current) => ({
         ...current,
@@ -282,7 +274,7 @@ export function usePlayerSync(isCompanion: boolean) {
           message: 'PC bağlantısı yok; yeniden bağlanılıyor',
         },
       }))
-      ritimSocket.connect()
+      socket.connect()
       return false
     }
     const signature = `${type}\u0000${String(value ?? '')}`
@@ -308,17 +300,17 @@ export function usePlayerSync(isCompanion: boolean) {
         actionFeedback: { id: `sync-${command.id}`, status: 'error', message: ack.message || 'Komut zaman aşımına uğradı' },
       }))
       setSyncHealth((current) => ({ ...current, pendingCommands: pendingCommandsRef.current.size }))
-      if (ritimSocket.connected) ritimSocket.emit('room:request-state', { room: ROOM })
+      if (socket.connected) socket.emit('room:request-state', { room })
     }, COMMAND_TIMEOUT_MS)
     pendingCommandsRef.current.set(command.id, { type, value, signature, sentAt: Date.now(), timer })
     setSyncHealth((current) => ({ ...current, pendingCommands: pendingCommandsRef.current.size }))
-    ritimSocket.emit('player:command', { room: ROOM, command })
+    socket.emit('player:command', { room, command })
     return true
-  }, [isCompanion])
+  }, [isCompanion, room, socket])
 
   const sendMusicCommand = useCallback((type: string, value?: number | string) => {
     if (!isCompanion || !REPLACEABLE_COMMANDS.has(type)) return emitMusicCommand(type, value)
-    if (!ritimSocket.connected) return emitMusicCommand(type, value)
+    if (!socket.connected) return emitMusicCommand(type, value)
     const existingTimer = deferredCommandsRef.current.get(type)
     if (existingTimer) window.clearTimeout(existingTimer)
     const timer = window.setTimeout(() => {
@@ -490,8 +482,8 @@ export function usePlayerSync(isCompanion: boolean) {
       setPairingError('')
       setSyncHealth((current) => ({ ...current, desktopOnline: false }))
       latestRevisionRef.current = 0
-      if (ritimSocket.connected) ritimSocket.disconnect()
-      ritimSocket.connect()
+      if (socket.connected) socket.disconnect()
+      socket.connect()
     },
     openMusicFilter: (filter) => {
       if (filter.href) sendMusicCommand('navigateUrl', filter.href)
@@ -527,7 +519,7 @@ export function usePlayerSync(isCompanion: boolean) {
       }
     }),
     syncFromMedia: (patch) => commit((previous) => ({ ...previous, ...patch })),
-  }), [commit, isYouTubeMusic, sendMusicCommand])
+  }), [commit, isYouTubeMusic, sendMusicCommand, socket])
 
   useEffect(() => {
     const track = getTrack(state)
@@ -540,5 +532,5 @@ export function usePlayerSync(isCompanion: boolean) {
     })
   }, [state.isPlaying, state.position, state.trackId, state.catalog])
 
-  return { state, actions, connected, peerCount, room: ROOM, pairingError, syncHealth }
+  return { state, actions, connected, peerCount, room, pairingError, syncHealth }
 }

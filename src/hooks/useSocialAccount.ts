@@ -6,6 +6,7 @@ import {
   signOutSocialAccount,
   type SocialAuthOptions,
 } from '../social/auth'
+import type { MobilePairingConfig } from '../mobileConfig'
 import type { SocialAccountSummary } from '../social/types'
 
 export type SocialAccountState = SocialAccountSummary & {
@@ -19,12 +20,21 @@ const emptyAccount: SocialAccountSummary = {
   devices: [],
 }
 
-export function useSocialAccount(options: SocialAuthOptions) {
-  const stableOptions = useMemo(() => options, [
-    options.isCompanion,
-    options.pairingToken,
-    options.socialUrl,
-    options.syncUrl,
+export function useSocialAccount({ pairing, socialUrl, isCompanion }: {
+  pairing: MobilePairingConfig
+  socialUrl: string
+  isCompanion: boolean
+}) {
+  const stableOptions = useMemo<SocialAuthOptions>(() => ({
+    isCompanion,
+    pairingToken: pairing.token,
+    socialUrl,
+    syncUrl: pairing.syncUrl,
+  }), [
+    isCompanion,
+    pairing.syncUrl,
+    pairing.token,
+    socialUrl,
   ])
   const [state, setState] = useState<SocialAccountState>({ ...emptyAccount, status: 'loading' })
 

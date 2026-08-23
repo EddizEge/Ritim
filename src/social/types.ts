@@ -43,9 +43,17 @@ export type SocialRoom = {
   lifecycle: 'waiting' | 'live' | 'owner_offline'
   viewerPlaybackStatus: 'idle' | 'ready' | 'unavailable'
   viewerPlaybackError?: string
+  syncSummary?: SocialRoomSyncSummary
   memberInitials: string[]
   viewerRole?: 'owner' | 'listener'
   playback?: SocialRoomPlayback
+}
+
+export type SocialRoomSyncSummary = {
+  status: 'waiting' | 'synced' | 'corrected' | 'unavailable'
+  roundTripMs?: number
+  driftMs?: number
+  measuredAt?: number
 }
 
 export type SocialRoomPlayback = {
