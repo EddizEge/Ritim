@@ -2,11 +2,16 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('ritimSettings', {
   getData: () => ipcRenderer.invoke('settings:get-data'),
-  copyUrl: () => ipcRenderer.invoke('settings:copy-url'),
+  revealPairing: () => ipcRenderer.invoke('settings:reveal-pairing'),
+  copyUrl: (revealSessionId) => ipcRenderer.invoke('settings:copy-url', revealSessionId),
+  hidePairing: () => ipcRenderer.invoke('settings:hide-pairing'),
+  rotatePairing: () => ipcRenderer.invoke('settings:rotate-pairing'),
   restart: () => ipcRenderer.send('settings:restart'),
   checkUpdates: () => ipcRenderer.invoke('settings:check-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('settings:download-update'),
   installUpdate: () => ipcRenderer.invoke('settings:install-update'),
   setDeviceNotifications: (enabled) => ipcRenderer.invoke('settings:set-device-notifications', enabled),
+  setAppearance: (preferences) => ipcRenderer.invoke('settings:set-appearance', preferences),
   getSocialAccount: () => ipcRenderer.invoke('settings:get-social-account'),
   revokeSocialDevice: (deviceId) => ipcRenderer.invoke('settings:revoke-social-device', deviceId),
   signOutSocial: () => ipcRenderer.invoke('settings:social-sign-out'),
@@ -21,5 +26,10 @@ contextBridge.exposeInMainWorld('ritimSettings', {
     const handler = (_event, status) => listener(status)
     ipcRenderer.on('settings:update-status', handler)
     return () => ipcRenderer.removeListener('settings:update-status', handler)
+  },
+  onAppearance: (listener) => {
+    const handler = (_event, preferences) => listener(preferences)
+    ipcRenderer.on('settings:appearance', handler)
+    return () => ipcRenderer.removeListener('settings:appearance', handler)
   },
 })

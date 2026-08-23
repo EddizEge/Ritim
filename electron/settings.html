@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="tr" data-theme="system" data-resolved-theme="dark" data-density="comfortable" data-motion="system" data-artwork="full">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,6 +13,7 @@
         <nav aria-label="Ayar bölümleri">
           <button class="is-active" data-section="account"><span>●</span>Hesap</button>
           <button data-section="devices"><span>▣</span>Cihazlar <em id="device-count">—</em></button>
+          <button data-section="appearance"><span>◐</span>Görünüm</button>
           <button data-section="social"><span>◎</span>Sosyal</button>
           <button data-section="notifications"><span>◌</span>Bildirimler</button>
           <button data-section="safety"><span>◇</span>Güvenlik</button>
@@ -53,6 +54,17 @@
           <p class="security-note">Bir cihazı kaldırdığında o cihazın Ritim Sosyal erişimi hemen kesilir. PC’deki YouTube Music oturumu ve yerel oynatma ayrı kalır.</p>
         </section>
 
+        <section class="settings-panel" data-panel="appearance" hidden>
+          <div class="panel-intro"><div><h2>Ritim görünümü</h2><p>Ana pencereyi ve bu ayarlar ekranını cihazına göre düzenle.</p></div><span class="scope-pill">Bu cihaz</span></div>
+          <div class="preference-list appearance-preferences">
+            <label><span><b>Tema</b><small>Sistem görünümünü izle, koyu temayı sabitle veya tam siyah kullan.</small></span><select id="appearance-theme"><option value="system">Sistem ayarı</option><option value="dark">Koyu</option><option value="black">Siyah</option></select></label>
+            <label><span><b>Yerleşim yoğunluğu</b><small>Kart ve liste aralıklarını rahat ya da kompakt göster.</small></span><select id="appearance-density"><option value="comfortable">Rahat</option><option value="compact">Kompakt</option></select></label>
+            <label><span><b>Hareket</b><small>Windows tercihini izle veya Ritim animasyonlarını azalt.</small></span><select id="appearance-motion"><option value="system">Sistem ayarı</option><option value="reduced">Azaltılmış</option></select></label>
+            <label><span><b>Kapak görselleri</b><small>Ritim sosyal kartlarındaki albüm görsellerini tam, azaltılmış ya da gizli göster.</small></span><select id="appearance-artwork"><option value="full">Tam</option><option value="reduced">Azaltılmış</option><option value="hidden">Gizli</option></select></label>
+          </div>
+          <p class="security-note">Bu tercihler yalnızca bu PC’de saklanır. YouTube Music sayfasının içeriği ve diğer cihazların görünümü değiştirilmez.</p>
+        </section>
+
         <section class="settings-panel" data-panel="social" hidden>
           <div class="panel-intro"><div><h2>Sosyal görünürlük</h2><p>Profilini ve dinlediğin parçayı kimlerin görebileceğini seç.</p></div><span class="scope-pill">Hesap ayarı</span></div>
           <div class="preference-list">
@@ -87,25 +99,40 @@
             <div class="connection-copy">
               <ol><li><b>Ritim Android’i aç</b><span>Uygulamadaki QR kodu tara düğmesine dokun.</span></li><li><b>QR kodu tara</b><span>Çalan parça, sıra ve kontroller telefonda görünür.</span></li></ol>
               <label for="phone-url">Telefon bağlantısı</label>
-              <div class="url-row"><input id="phone-url" readonly value="Bağlantı hazırlanıyor…" /><button class="secondary" id="copy-button">Kopyala</button></div>
-              <p class="security-note">QR kod oturuma özel anahtar içerir. Google çerezlerin ve şifren PC’den çıkmaz.</p>
+              <div class="url-row"><input id="phone-url" readonly value="Eşleme bağlantısı gizli" /><button class="primary" id="reveal-pairing-button">Göster</button><button class="secondary" id="copy-button" disabled>Kopyala</button></div>
+              <p class="security-note" id="pairing-reveal-status">QR kodu ve bağlantıyı görmek için önce güvenlik uyarısını onayla. Gösterim 60 saniye sonra otomatik kapanır.</p>
             </div>
-            <div class="qr-card"><div class="qr-frame"><img id="qr-code" alt="Telefon bağlantısı QR kodu" hidden /><div id="qr-fallback">QR</div></div><b>Ritim ile tara</b><span>Güvenli eşleme</span></div>
+            <div class="qr-card is-masked" id="qr-card"><div class="qr-frame"><img id="qr-code" alt="Telefon bağlantısı QR kodu" hidden /><div id="qr-fallback">Gizli</div></div><b>Ritim ile tara</b><span id="qr-caption">Onaydan sonra gösterilir</span></div>
           </div>
+          <div class="danger-row pairing-rotate-row"><div><b>Eşleme anahtarını yenile</b><p>Eski QR kodlarını geçersiz kılar ve bağlı telefonların bağlantısını keser.</p></div><button class="danger" id="rotate-pairing-button">Anahtarı yenile</button></div>
           <div class="restart-row"><div><b>Bağlantıyı yenile</b><p>Bağlantı takılırsa Ritim’i güvenli biçimde yeniden başlatır.</p></div><button class="secondary" id="restart-button">Yeniden başlat</button></div>
         </section>
 
         <section class="settings-panel" data-panel="updates" hidden>
           <div class="update-hero"><span>↻</span><div><h2>Ritim’i güncel tut</h2><p id="update-status">Güncellemeler GitHub Releases üzerinden denetlenir.</p></div></div>
           <div class="update-progress" id="update-progress" hidden><i></i></div>
-          <div class="detail-list"><div><span>Yüklü sürüm</span><b id="app-version">—</b></div><div><span>Güncelleme kanalı</span><b>Beta</b></div></div>
-          <div class="update-actions"><button class="secondary" id="check-update-button">Güncellemeleri kontrol et</button><button class="primary" id="install-update-button" hidden>Yeniden başlat ve kur</button></div>
+          <div class="detail-list update-details">
+            <div><span>Yüklü sürüm</span><b id="app-version">—</b></div>
+            <div><span>Bulunan sürüm</span><b id="available-version">—</b></div>
+            <div><span>Güncelleme kanalı</span><b id="update-channel">Beta</b></div>
+            <div><span>Son denetim</span><b id="update-last-checked">Henüz denetlenmedi</b></div>
+            <div><span>İndirme</span><b id="update-transfer">—</b></div>
+          </div>
+          <p class="security-note">İndirme yalnız sen başlattığında yapılır. Kurulumdan önce Ritim; telefon köprüsünü, Discord bağlantısını ve pencerelerini kontrollü biçimde kapatır.</p>
+          <div class="update-actions"><button class="secondary" id="check-update-button">Güncellemeleri kontrol et</button><button class="secondary" id="download-update-button" hidden>Güncellemeyi indir</button><button class="primary" id="install-update-button" hidden>Yeniden başlat ve kur</button></div>
         </section>
 
         <section class="settings-panel" data-panel="about" hidden>
-          <div class="about-hero"><span>R</span><div><h2>Ritim</h2><p>Senkron masaüstü ve mobil müzik deneyimi.</p></div></div>
-          <div class="detail-list"><div><span>Sürüm</span><b id="about-app-version">—</b></div><div><span>Electron</span><b id="electron-version">—</b></div><div><span>Geliştirici</span><b>Ediz Ege Mercan</b></div><div><span>Müzik hizmeti</span><b>Resmî YouTube Music web uygulaması</b></div></div>
-          <p class="about-note">Ritim bağımsız bir projedir; Google veya YouTube tarafından bağlı ya da onaylı değildir. Telefon yalnızca PC’deki oturumun düşük gecikmeli kumandasıdır.</p>
+          <div class="about-hero"><span>R</span><div><h2 id="product-name">Ritim</h2><p id="product-description">Senkron masaüstü ve mobil müzik deneyimi.</p></div></div>
+          <div class="detail-list"><div><span>Sürüm</span><b id="about-app-version">—</b></div><div><span>Electron</span><b id="electron-version">—</b></div><div><span>Geliştirici</span><b id="product-developer">Ediz Ege Mercan</b></div><div><span>Proje lisansı</span><b id="product-license">Tüm hakları saklıdır</b></div></div>
+          <p class="about-note" id="product-disclaimer">Ritim bağımsız bir projedir; Google veya YouTube ile bağlantılı ya da onlar tarafından onaylı değildir.</p>
+          <nav class="about-links" aria-label="Ritim proje bağlantıları">
+            <a id="about-github" href="https://github.com/EddizEge/Ritim" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a id="about-releases" href="https://github.com/EddizEge/Ritim/releases" target="_blank" rel="noopener noreferrer">Sürüm notları</a>
+            <a id="about-privacy" href="https://github.com/EddizEge/Ritim/blob/main/docs/PRIVACY.md" target="_blank" rel="noopener noreferrer">Gizlilik</a>
+            <a id="about-notices" href="https://github.com/EddizEge/Ritim/blob/main/docs/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Lisanslar</a>
+            <a id="about-feedback" href="https://github.com/EddizEge/Ritim/issues/new" target="_blank" rel="noopener noreferrer">Geri bildirim</a>
+          </nav>
         </section>
       </div>
     </main>

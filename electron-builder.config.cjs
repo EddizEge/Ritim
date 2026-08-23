@@ -7,7 +7,7 @@ module.exports = {
   appId: 'app.ritim.desktop',
   productName: 'Ritim',
   artifactName: 'Ritim-Setup-${version}.${ext}',
-  files: ['dist/**/*', 'electron/**/*', 'package.json'],
+  files: ['dist/**/*', 'electron/**/*', 'shared/**/*', 'package.json'],
   directories: { output: process.env.RITIM_RELEASE_DIR || 'release' },
   win: { target: 'nsis', icon: 'build/icon.ico' },
   nsis: {

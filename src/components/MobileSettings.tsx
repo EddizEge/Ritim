@@ -1,7 +1,12 @@
 import { useState } from 'react'
-import { AlertCircle, Bell, Eye, Laptop, LogOut, RefreshCw, ShieldCheck, Smartphone, UserRoundX, VolumeX } from 'lucide-react'
+import { AlertCircle, Bell, Download, ExternalLink, Eye, Images, Info, Laptop, LogOut, Palette, RefreshCw, ShieldCheck, Smartphone, UserRoundX, VolumeX } from 'lucide-react'
+import { Browser } from '@capacitor/browser'
 import type { SocialAccountState } from '../hooks/useSocialAccount'
 import type { SocialActions, SocialState } from '../social/types'
+import { useAppearance } from '../appearanceContext'
+import type { AppearanceArtwork, AppearanceDensity, AppearanceMotion, AppearanceTheme } from '../appearancePreferences'
+import { isNativeMobile } from '../mobileConfig'
+import productInfo from '../../shared/product-info.json'
 
 type Props = {
   account: SocialAccountState
@@ -13,6 +18,23 @@ type Props = {
   socialActions: SocialActions
 }
 
+type MobileUpdateView = {
+  checking: boolean
+  status: string
+  message: string
+  currentVersion: string
+  availableVersion: string
+  channel: string
+  lastCheckedAt: string
+  percent: number
+  downloadedBytes: number
+  totalBytes: number
+  updateAvailable: boolean
+  downloadManagedByAndroid: boolean
+  check: () => Promise<string>
+  openUpdate: () => Promise<string>
+}
+
 function lastSeenLabel(value?: string) {
   if (!value) return 'Henüz çevrimiçi görülmedi'
   const timestamp = new Date(value).getTime()
@@ -22,6 +44,92 @@ function lastSeenLabel(value?: string) {
   if (elapsedMinutes < 60) return `${elapsedMinutes} dk önce görüldü`
   if (elapsedMinutes < 1_440) return `${Math.round(elapsedMinutes / 60)} sa önce görüldü`
   return new Date(timestamp).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })
+}
+
+export function MobileAppearanceSettings() {
+  const { preferences, update } = useAppearance()
+  return (
+    <section className="mobile-settings-section mobile-appearance-section">
+      <header><div><Palette /><span><h2>Görünüm</h2><p>Tema, yerleşim ve kapak tercihleri yalnızca bu telefonda saklanır.</p></span></div><em>Bu cihaz</em></header>
+      <label><span><b>Tema</b><small>Sistem ayarını izle veya sabit bir koyu görünüm seç.</small></span><select aria-label="Mobil tema" value={preferences.theme} onChange={(event) => update({ theme: event.target.value as AppearanceTheme })}><option value="system">Sistemle aynı</option><option value="dark">Koyu</option><option value="black">OLED siyah</option></select></label>
+      <label><span><b>Yoğunluk</b><small>Listeler ve kartlar arasındaki boşluk.</small></span><select aria-label="Mobil görünüm yoğunluğu" value={preferences.density} onChange={(event) => update({ density: event.target.value as AppearanceDensity })}><option value="comfortable">Rahat</option><option value="compact">Kompakt</option></select></label>
+      <label><span><b>Hareket</b><small>Geçişleri sistemden al veya en aza indir.</small></span><select aria-label="Mobil hareket ayarı" value={preferences.motion} onChange={(event) => update({ motion: event.target.value as AppearanceMotion })}><option value="system">Sistemle aynı</option><option value="reduced">Azaltılmış</option></select></label>
+      <label><span><b>Kapaklar</b><small>Albüm görsellerinin boyutunu ve yüklenmesini yönet.</small></span><select aria-label="Mobil kapak görünümü" value={preferences.artwork} onChange={(event) => update({ artwork: event.target.value as AppearanceArtwork })}><option value="full">Tam</option><option value="reduced">Küçük</option><option value="hidden">Gizli</option></select></label>
+      <div className="mobile-appearance-note"><Images /><span><b>Kapaklar gizliyken</b><small>Uzak kapak adresleri mümkün olduğunca arayüze bağlanmaz ve veri kullanımı azalır.</small></span></div>
+    </section>
+  )
+}
+
+async function openProductLink(url: string) {
+  const target = new URL(url)
+  if (target.protocol !== 'https:' || target.hostname !== 'github.com') throw new Error('Bu bağlantı güvenli değil.')
+  if (isNativeMobile) await Browser.open({ url: target.toString() })
+  else window.open(target.toString(), '_blank', 'noopener,noreferrer')
+}
+
+export function MobileUpdateAboutSettings({ update }: { update: MobileUpdateView }) {
+  const [notice, setNotice] = useState('')
+  const channelLabels: Record<string, string> = { alpha: 'Alpha', beta: 'Beta', rc: 'RC', latest: 'Kararlı' }
+  const lastChecked = update.lastCheckedAt
+    ? new Date(update.lastCheckedAt).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })
+    : 'Henüz denetlenmedi'
+  const runUpdate = async () => {
+    try {
+      setNotice(update.updateAvailable ? await update.openUpdate() : await update.check())
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Güncelleme işlemi açılamadı.')
+    }
+  }
+  const formatBytes = (value: number) => {
+    if (!value) return '0 MB'
+    return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`
+  }
+  const runProductLink = async (url: string) => {
+    try { await openProductLink(url) }
+    catch (error) { setNotice(error instanceof Error ? error.message : 'Bağlantı açılamadı.') }
+  }
+  const links = [
+    ['GitHub', productInfo.links.github],
+    ['Sürüm notları', productInfo.links.releases],
+    ['Gizlilik', productInfo.links.privacy],
+    ['Lisanslar', productInfo.links.thirdPartyNotices],
+    ['Geri bildirim', productInfo.links.feedback],
+  ] as const
+
+  return (
+    <>
+      <section className="mobile-settings-section mobile-update-section">
+        <header><div><RefreshCw /><span><h2>Güncellemeler</h2><p>Android paketi GitHub Releases üzerinden güvenli biçimde denetlenir.</p></span></div><em>Bu cihaz</em></header>
+        <dl className="mobile-update-details">
+          <div><dt>Yüklü sürüm</dt><dd>{update.currentVersion}</dd></div>
+          <div><dt>Bulunan sürüm</dt><dd>{update.availableVersion || '—'}</dd></div>
+          <div><dt>Kanal</dt><dd>{channelLabels[update.channel] || update.channel}</dd></div>
+          <div><dt>Son denetim</dt><dd>{lastChecked}</dd></div>
+        </dl>
+        {update.status === 'downloading' ? <div className="mobile-update-progress" role="progressbar" aria-label="APK indirme ilerlemesi" aria-valuemin={0} aria-valuemax={100} aria-valuenow={update.percent}><span style={{ width: `${update.percent}%` }} /><small>{update.percent}% · {formatBytes(update.downloadedBytes)}{update.totalBytes ? ` / ${formatBytes(update.totalBytes)}` : ''}</small></div> : null}
+        <button onClick={() => void runUpdate()} disabled={update.checking || update.status === 'downloading' || update.status === 'installing'}>
+          {update.updateAvailable ? <Download /> : <RefreshCw />}
+          {update.checking ? 'Kontrol ediliyor…'
+            : update.status === 'downloading' ? 'Android indiriyor…'
+            : update.status === 'installing' ? 'Kurulum açılıyor…'
+            : update.status === 'downloaded' ? 'Kurulum ekranını aç'
+            : update.updateAvailable ? `${update.availableVersion} sürümünü indir` : 'Güncellemeleri kontrol et'}
+        </button>
+        {update.message || notice ? <p className="mobile-update-message" role="status">{notice || update.message}</p> : null}
+        <p className="mobile-settings-note">APK indirmesini Android indirme yöneticisi yürütür; kurulum her zaman senin onayınla açılır. Uygulama mevcut Ritim verilerini kendiliğinden silmez.</p>
+      </section>
+
+      <section className="mobile-settings-section mobile-about-section">
+        <header><div><Info /><span><h2>{productInfo.name} hakkında</h2><p>{productInfo.developer} tarafından geliştirildi.</p></span></div><em>Beta 1</em></header>
+        <p className="mobile-about-description">{productInfo.descriptionTr}</p>
+        <p className="mobile-about-disclaimer">{productInfo.disclaimerTr}</p>
+        <div className="mobile-about-links">
+          {links.map(([label, url]) => <button key={label} onClick={() => void runProductLink(url)}><ExternalLink />{label}</button>)}
+        </div>
+        <p className="mobile-settings-note">{productInfo.projectLicense}</p>
+      </section>
+    </>
+  )
 }
 
 export function MobileSettings({ account, onRefresh, onReconnect, onRevokeDevice, onSignOut, social, socialActions }: Props) {

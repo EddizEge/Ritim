@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { Bug, ExternalLink, X } from 'lucide-react'
-import { isNativeMobile, readMobilePairing } from '../mobileConfig'
+import { isNativeMobile } from '../mobileConfig'
 
 type Props = {
   open: boolean
@@ -11,6 +11,8 @@ type Props = {
   peerCount: number
   room: string
   pairingError: string
+  computerName?: string
+  syncUrl?: string
   trackTitle: string
   trackId: string
 }
@@ -22,7 +24,7 @@ async function openExternal(url: string) {
   else window.open(url, '_blank', 'noopener,noreferrer')
 }
 
-export function FeedbackSheet({ open, onClose, connected, peerCount, room, pairingError, trackTitle, trackId }: Props) {
+export function FeedbackSheet({ open, onClose, connected, peerCount, room, pairingError, computerName = 'Ritim PC', syncUrl = '', trackTitle, trackId }: Props) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
@@ -39,13 +41,13 @@ export function FeedbackSheet({ open, onClose, connected, peerCount, room, pairi
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!title.trim() || !description.trim()) return
-    const paired = readMobilePairing()
     const diagnostics = [
       `- Ritim sürümü: ${version}`,
       `- Platform: ${isNativeMobile ? 'Android' : 'Web'}`,
       `- PC bağlantısı: ${connected ? `Bağlı (${peerCount} cihaz)` : `Çevrimdışı${pairingError ? ` — ${pairingError}` : ''}`}`,
+      `- PC adı: ${computerName}`,
       `- Oda: ${room}`,
-      `- PC adresi: ${paired?.syncUrl || 'Web önizleme'}`,
+      `- PC adresi: ${syncUrl || 'Web önizleme'}`,
       `- Parça: ${trackTitle} (${trackId})`,
       `- Ekran: ${window.innerWidth}x${window.innerHeight}`,
       `- Kullanıcı aracısı: ${navigator.userAgent}`,

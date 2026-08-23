@@ -1,16 +1,19 @@
-const { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Notification, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Notification, safeStorage, shell } = require('electron')
 const crypto = require('node:crypto')
-const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const QRCode = require('qrcode')
 const { io } = require('socket.io-client')
+const { createAppearanceStore, normalizeAppearancePreferences } = require('./appearance-store.cjs')
 const { createDiscordPresence } = require('./discord-presence.cjs')
 const { createDevicePreferences } = require('./device-preferences.cjs')
+const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData } = require('./pairing-security.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
+const productInfo = require('../shared/product-info.json')
 
 const APP_BAR_HEIGHT = 52
 const ROOM = process.env.RITIM_ROOM || 'EDIZ-4821'
@@ -18,7 +21,8 @@ const DISCORD_CLIENT_ID = process.env.RITIM_DISCORD_CLIENT_ID || '15281222775000
 const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
 const LOCAL_SOCIAL_URL = 'http://127.0.0.1:8790'
 const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || (app.isPackaged ? PUBLIC_SOCIAL_URL : LOCAL_SOCIAL_URL)
-let pairingToken = process.env.RITIM_PAIRING_TOKEN || ''
+const SETTINGS_PAGE_URL = pathToFileURL(path.join(__dirname, 'settings.html')).toString()
+const pairingRevealStore = createPairingRevealStore({ ttlMs: 60_000 })
 let mainWindow
 let musicView
 let settingsWindow
@@ -46,6 +50,8 @@ let socialClockTimer
 let expectedSocialRoomExitUntil = 0
 let updateController
 let devicePreferences
+let appearanceStore
+let pairingSecurity
 let isShuttingDown = false
 let activeShellView = 'music'
 
@@ -81,16 +87,17 @@ function stopRuntime() {
 }
 
 async function prepareForUpdate() {
-  isShuttingDown = true
-  stopRuntime()
+  // Keep the running app intact until electron-updater actually begins quitting.
+  // The normal before-quit handler stops Ritim's local services safely.
+  pairingRevealStore.invalidateAll()
+}
 
-  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.destroy()
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy()
-
-  app.releaseSingleInstanceLock()
-  // Let Chromium child processes and the local phone server finish exiting before
-  // electron-updater starts NSIS and asks the Electron main process to quit.
-  await new Promise((resolve) => setTimeout(resolve, 250))
+function isTrustedSettingsSender(event) {
+  if (!settingsWindow || settingsWindow.isDestroyed()) return false
+  const senderFrame = event?.senderFrame
+  return event.sender === settingsWindow.webContents
+    && senderFrame === event.sender.mainFrame
+    && senderFrame?.url === SETTINGS_PAGE_URL
 }
 
 function isMusicAuthUrl(value) {
@@ -115,32 +122,12 @@ function findLanAddress() {
   return preferred?.address || candidates[0]?.address || '127.0.0.1'
 }
 
-function getPairingToken() {
-  if (pairingToken) return pairingToken
-
-  const tokenPath = path.join(app.getPath('userData'), 'pairing-token')
-  try {
-    const savedToken = fs.readFileSync(tokenPath, 'utf8').trim()
-    if (/^[A-Za-z0-9_-]{32,128}$/.test(savedToken)) pairingToken = savedToken
-  } catch (error) {
-    if (error?.code !== 'ENOENT') console.warn('[Ritim] Kayitli telefon anahtari okunamadi:', error)
-  }
-
-  if (!pairingToken) {
-    pairingToken = crypto.randomBytes(24).toString('base64url')
-    try {
-      fs.mkdirSync(path.dirname(tokenPath), { recursive: true })
-      fs.writeFileSync(tokenPath, `${pairingToken}\n`, { encoding: 'utf8', mode: 0o600 })
-    } catch (error) {
-      console.warn('[Ritim] Telefon anahtari kalici olarak kaydedilemedi:', error)
-    }
-  }
-
-  return pairingToken
+function phoneUrl() {
+  return `http://${findLanAddress()}:8787/?companion=1&room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(pairingSecurity.getPairingToken())}&installationId=${encodeURIComponent(pairingSecurity.getInstallationId())}&computerName=${encodeURIComponent(os.hostname())}`
 }
 
-function phoneUrl() {
-  return `http://${findLanAddress()}:8787/?companion=1&room=${encodeURIComponent(ROOM)}&token=${encodeURIComponent(getPairingToken())}`
+function maskedPhoneUrl() {
+  return `http://${findLanAddress()}:8787/…?room=${encodeURIComponent(ROOM)}&token=••••••••`
 }
 
 function resizeMusicView() {
@@ -161,19 +148,18 @@ function setShellView(nextView) {
   return activeShellView
 }
 
-function stableSocialAccountId(seed) {
-  let hash = 2166136261
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
+function broadcastAppearancePreferences(preferences = appearanceStore?.read()) {
+  if (!preferences) return
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('shell:appearance', preferences)
   }
-  return `ritim-${(hash >>> 0).toString(36)}`
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.webContents.send('settings:appearance', preferences)
+  }
 }
 
 function desktopSocialIdentity() {
-  // The pairing token is the account identity shared by this PC and its phone.
-  // Using the room in development made the companion appear as another person.
-  const accountId = stableSocialAccountId(getPairingToken())
+  const accountId = pairingSecurity.socialAccountId()
   return {
     accountId,
     deviceId: `desktop-${accountId}`,
@@ -553,12 +539,27 @@ function createSettingsWindow() {
       preload: path.join(__dirname, 'settings-preload.cjs'),
     },
   })
+  const settingsWebContentsId = settingsWindow.webContents.id
   settingsWindow.setMenuBarVisibility(false)
   settingsWindow.once('ready-to-show', () => settingsWindow.show())
-  settingsWindow.on('closed', () => { settingsWindow = null })
+  settingsWindow.on('closed', () => {
+    pairingRevealStore.invalidateOwner(settingsWebContentsId)
+    settingsWindow = null
+  })
   settingsWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    try {
+      const target = new URL(url)
+      if (target.protocol === 'https:' && target.hostname === 'github.com') void shell.openExternal(target.toString())
+    } catch {
+      // Invalid and non-web targets stay inside the denied renderer request.
+    }
     return { action: 'deny' }
+  })
+  settingsWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== SETTINGS_PAGE_URL) event.preventDefault()
+  })
+  settingsWindow.webContents.on('will-redirect', (event, url) => {
+    if (url !== SETTINGS_PAGE_URL) event.preventDefault()
   })
   void settingsWindow.loadFile(path.join(__dirname, 'settings.html'))
 }
@@ -595,7 +596,13 @@ function createWindow() {
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   devicePreferences = createDevicePreferences(app.getPath('userData'))
-  const activePairingToken = getPairingToken()
+  appearanceStore = createAppearanceStore(app.getPath('userData'))
+  pairingSecurity = createPairingSecurity({
+    userDataPath: app.getPath('userData'),
+    environmentToken: process.env.RITIM_PAIRING_TOKEN,
+  })
+  const activePairingToken = pairingSecurity.getPairingToken()
+  pairingSecurity.getInstallationId()
   socialAuth = createSocialAuthClient({
     baseUrl: SOCIAL_URL,
     userDataPath: app.getPath('userData'),
@@ -685,6 +692,12 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
   ipcMain.on('settings:open', createSettingsWindow)
   ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
+  ipcMain.handle('shell:get-appearance', (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('Görünüm tercihleri yalnızca Ritim ana penceresinden okunabilir.')
+    }
+    return appearanceStore.read()
+  })
   ipcMain.handle('shell:get-social-state', () => latestSocialState || {
     currentUser: desktopSocialProfile(),
     privacy: {
@@ -714,13 +727,6 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.on('settings:social-action', (_event, action = {}) => handleSocialAction(action))
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
-    const url = phoneUrl()
-    const qrDataUrl = await QRCode.toDataURL(url, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 320,
-      color: { dark: '#0a0b0c', light: '#ffffff' },
-    })
     const socialAccount = await socialAuth?.account().catch((error) => ({
       authenticated: Boolean(socialAuthStatus?.authenticated),
       user: socialAuthStatus?.user,
@@ -728,12 +734,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       devices: [],
       error: error?.message || 'Hesap bilgileri alınamadı.',
     }))
-    return {
+    return createSafeSettingsData({
       appVersion: app.getVersion(),
       computerName: os.hostname(),
       electronVersion: process.versions.electron,
-      phoneUrl: url,
-      qrDataUrl,
       room: ROOM,
       serverReady: Boolean(syncServer?.listening),
       updateStatus: updateController?.getStatus(),
@@ -742,8 +746,23 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       socialState: latestSocialState,
       devicePreferences: {
         socialNotificationsEnabled: devicePreferences.read().socialNotificationsEnabled,
+        appearance: appearanceStore.read(),
       },
+      pairing: {
+        maskedUrl: maskedPhoneUrl(),
+        revealDurationMs: pairingRevealStore.ttlMs,
+        rotationAllowed: pairingSecurity.isRotationAllowed(),
+      },
+      productInfo,
+    })
+  })
+  ipcMain.handle('settings:set-appearance', (event, preferences = {}) => {
+    if (!settingsWindow || settingsWindow.isDestroyed() || event.sender !== settingsWindow.webContents) {
+      throw new Error('Görünüm tercihleri yalnızca Ayarlar penceresinden değiştirilebilir.')
     }
+    const next = appearanceStore.update(normalizeAppearancePreferences(preferences))
+    broadcastAppearancePreferences(next)
+    return next
   })
   ipcMain.handle('settings:get-social-account', () => socialAuth?.account())
   ipcMain.handle('settings:revoke-social-device', (_event, deviceId) => socialAuth?.revokeDevice(String(deviceId || '')))
@@ -757,17 +776,103 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     await startSocialClient()
     return socialAuth.account()
   })
-  ipcMain.handle('settings:copy-url', () => {
-    clipboard.writeText(phoneUrl())
+  ipcMain.handle('settings:reveal-pairing', async (event) => {
+    if (!settingsWindow || settingsWindow.isDestroyed() || event.sender !== settingsWindow.webContents) {
+      return { ok: false, reason: 'forbidden', message: 'Eşleme bilgisi yalnızca Ayarlar penceresinden gösterilebilir.' }
+    }
+    const { response } = await dialog.showMessageBox(settingsWindow, {
+      type: 'warning',
+      title: 'Telefon eşleme bağlantısını göster',
+      message: 'Bu bağlantıyı yalnızca bağlamak istediğin telefonda kullan.',
+      detail: 'QR kodu ve bağlantı, bu bilgisayarı uzaktan kontrol etmeye yarayan gizli bir anahtar içerir. Ekranını paylaşırken gösterme.',
+      buttons: ['60 saniye göster', 'Vazgeç'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    })
+    if (response !== 0) return { ok: false, reason: 'cancelled' }
+
+    const url = phoneUrl()
+    const session = pairingRevealStore.create(event.sender.id, url)
+    try {
+      const qrDataUrl = await QRCode.toDataURL(url, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 320,
+        color: { dark: '#0a0b0c', light: '#ffffff' },
+      })
+      return { ok: true, ...session, phoneUrl: url, qrDataUrl }
+    } catch (error) {
+      pairingRevealStore.invalidateOwner(event.sender.id)
+      return { ok: false, reason: 'failed', message: error?.message || 'QR kodu hazırlanamadı.' }
+    }
+  })
+  ipcMain.handle('settings:hide-pairing', (event) => {
+    pairingRevealStore.invalidateOwner(event.sender.id)
     return true
+  })
+  ipcMain.handle('settings:copy-url', (event, revealSessionId) => {
+    const url = pairingRevealStore.resolve(revealSessionId, event.sender.id)
+    if (!url) return { ok: false, reason: 'expired', message: 'Gösterim süresi doldu. Bağlantıyı yeniden göster.' }
+    clipboard.writeText(url)
+    return { ok: true }
+  })
+  ipcMain.handle('settings:rotate-pairing', async (event) => {
+    if (!settingsWindow || settingsWindow.isDestroyed() || event.sender !== settingsWindow.webContents) {
+      return { ok: false, reason: 'forbidden', message: 'Eşleme anahtarı yalnızca Ayarlar penceresinden yenilenebilir.' }
+    }
+    if (!pairingSecurity.isRotationAllowed()) {
+      return {
+        ok: false,
+        reason: 'managed',
+        message: 'Eşleme anahtarı sistem yöneticisi tarafından yönetiliyor; uygulama içinden yenilenemez.',
+      }
+    }
+    const { response } = await dialog.showMessageBox(settingsWindow, {
+      type: 'warning',
+      title: 'İkinci onay: eşleme anahtarını yenile',
+      message: 'Bağlı tüm telefonların bağlantısı hemen kesilecek.',
+      detail: 'Eski QR kodları ve bağlantılar kalıcı olarak geçersiz olur. Telefonları yeni QR koduyla tekrar eşlemen gerekir.',
+      buttons: ['Anahtarı yenile', 'Vazgeç'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    })
+    if (response !== 0) return { ok: false, reason: 'cancelled' }
+
+    try {
+      const nextToken = pairingSecurity.rotatePairingToken()
+      syncServer?.rotatePairingToken(nextToken)
+      pairingRevealStore.invalidateAll()
+      return {
+        ok: true,
+        pairing: {
+          maskedUrl: maskedPhoneUrl(),
+          revealDurationMs: pairingRevealStore.ttlMs,
+          rotationAllowed: pairingSecurity.isRotationAllowed(),
+        },
+      }
+    } catch (error) {
+      return { ok: false, reason: error?.code || 'failed', message: error?.message || 'Eşleme anahtarı yenilenemedi.' }
+    }
   })
   ipcMain.on('settings:restart', () => {
     isShuttingDown = true
     app.relaunch()
     app.quit()
   })
-  ipcMain.handle('settings:check-updates', () => updateController?.check())
-  ipcMain.handle('settings:install-update', () => updateController?.install() || false)
+  ipcMain.handle('settings:check-updates', (event) => {
+    if (!isTrustedSettingsSender(event)) throw new Error('Yetkisiz güncelleme denetimi isteği.')
+    return updateController?.check()
+  })
+  ipcMain.handle('settings:download-update', (event) => {
+    if (!isTrustedSettingsSender(event)) throw new Error('Yetkisiz güncelleme indirme isteği.')
+    return updateController?.download()
+  })
+  ipcMain.handle('settings:install-update', (event) => {
+    if (!isTrustedSettingsSender(event)) throw new Error('Yetkisiz güncelleme kurma isteği.')
+    return updateController?.install() || false
+  })
   ipcMain.handle('settings:set-device-notifications', (_event, enabled) => {
     const supported = Notification.isSupported()
     const next = devicePreferences.update({ socialNotificationsEnabled: supported && enabled === true })
