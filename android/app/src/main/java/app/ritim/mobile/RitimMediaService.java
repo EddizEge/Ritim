@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.os.IBinder;
 
 import androidx.annotation.Nullable;
@@ -46,10 +47,12 @@ public class RitimMediaService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Ritim oynatma", NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Ritim PC üzerindeki YouTube Music oynatıcısı");
-        manager.createNotificationChannel(channel);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Ritim oynatma", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Ritim PC üzerindeki YouTube Music oynatıcısı");
+            manager.createNotificationChannel(channel);
+        }
 
         mediaSession = new MediaSessionCompat(this, "RitimMediaSession");
         mediaSession.setCallback(new MediaSessionCompat.Callback() {

@@ -208,3 +208,105 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .social-workspace { grid-template-columns: 280px minmax(380px, 1fr); }
   .rooms-panel { display: none; }
 }
+
+:root[data-density="compact"] .appbar { gap: 9px; padding-inline: 12px; }
+:root[data-density="compact"] .nav-button { min-width: 76px; padding-inline: 11px; }
+:root[data-density="compact"] .social-panel { padding: 24px clamp(18px, 3vw, 44px) 30px; }
+:root[data-density="compact"] .social-hero { margin-bottom: 12px; }
+:root[data-density="compact"] .social-workspace { min-height: 470px; }
+:root[data-density="compact"] .people-panel,
+:root[data-density="compact"] .rooms-panel { padding: 16px; }
+:root[data-density="compact"] .person-card { padding: 8px; }
+:root[data-density="compact"] .chat-panel { min-height: 470px; }
+:root[data-density="compact"] .chat-header { min-height: 62px; padding-block: 10px; }
+:root[data-density="compact"] .message-list { padding: 13px; }
+:root[data-density="compact"] .room-card { padding: 10px; }
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  scroll-behavior: auto !important;
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="system"] *,
+  :root[data-motion="system"] *::before,
+  :root[data-motion="system"] *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+:root[data-artwork="reduced"] .track-cover { filter: saturate(.45); opacity: .7; }
+:root[data-artwork="hidden"] .track-cover { display: none; }
+:root[data-artwork="hidden"] .chat-track { grid-template-columns: minmax(0, 1fr); }
+
+:root[data-resolved-theme="black"] {
+  color-scheme: dark;
+  background: #000;
+  --surface: #050505;
+  --surface-2: #090909;
+  --line: #202020;
+  --muted: #888;
+}
+:root[data-resolved-theme="black"] body,
+:root[data-resolved-theme="black"] .social-panel { background: #000; }
+:root[data-resolved-theme="black"] .appbar { border-color: #1d1d1d; background: rgba(0, 0, 0, .98); }
+:root[data-resolved-theme="black"] .status,
+:root[data-resolved-theme="black"] .settings-button,
+:root[data-resolved-theme="black"] .social-service-note,
+:root[data-resolved-theme="black"] .social-workspace,
+:root[data-resolved-theme="black"] .chat-panel,
+:root[data-resolved-theme="black"] .chat-track,
+:root[data-resolved-theme="black"] .room-card,
+:root[data-resolved-theme="black"] .room-chat { background: #050505; }
+:root[data-resolved-theme="black"] .person-card:hover,
+:root[data-resolved-theme="black"] .person-card.is-active,
+:root[data-resolved-theme="black"] .message-form input,
+:root[data-resolved-theme="black"] .people-search,
+:root[data-resolved-theme="black"] .room-chat-form { background: #080808; }
+
+:root[data-resolved-theme="light"] {
+  color-scheme: light;
+  color: #17191c;
+  background: #f4f5f6;
+  --surface: #fff;
+  --surface-2: #f2f3f5;
+  --line: #d7dadd;
+  --muted: #687078;
+}
+:root[data-resolved-theme="light"] body { color: #17191c; background: #f4f5f6; }
+:root[data-resolved-theme="light"] .appbar { border-color: #d7dadd; background: rgba(255, 255, 255, .98); }
+:root[data-resolved-theme="light"] .nav-button { color: #626970; }
+:root[data-resolved-theme="light"] .nav-button:hover { color: #1d2024; background: rgba(0, 0, 0, .035); }
+:root[data-resolved-theme="light"] .nav-button.is-active { color: #17191c; }
+:root[data-resolved-theme="light"] .status,
+:root[data-resolved-theme="light"] .settings-button,
+:root[data-resolved-theme="light"] .empty-state button,
+:root[data-resolved-theme="light"] .listen-button { color: #272b30; background: #f0f1f3; }
+:root[data-resolved-theme="light"] .social-panel { background: radial-gradient(circle at 14% 0%, rgba(255, 51, 83, .11), transparent 27%), radial-gradient(circle at 90% 17%, rgba(117, 71, 255, .07), transparent 25%), #f4f5f6; }
+:root[data-resolved-theme="light"] .social-service-note,
+:root[data-resolved-theme="light"] .social-workspace,
+:root[data-resolved-theme="light"] .chat-panel,
+:root[data-resolved-theme="light"] .chat-track,
+:root[data-resolved-theme="light"] .room-card,
+:root[data-resolved-theme="light"] .room-chat { background: #fff; }
+:root[data-resolved-theme="light"] .people-search,
+:root[data-resolved-theme="light"] .person-card:hover,
+:root[data-resolved-theme="light"] .person-card.is-active,
+:root[data-resolved-theme="light"] .message-bubble,
+:root[data-resolved-theme="light"] .message-form input,
+:root[data-resolved-theme="light"] .room-chat-form,
+:root[data-resolved-theme="light"] .room-chat-messages article { color: #202328; background: #eef0f2; }
+:root[data-resolved-theme="light"] .message-bubble.is-own,
+:root[data-resolved-theme="light"] .room-chat-messages article.is-own { color: #fff; background: #7a2d42; }
+:root[data-resolved-theme="light"] .people-search input,
+:root[data-resolved-theme="light"] .message-form input,
+:root[data-resolved-theme="light"] .room-chat-form input,
+:root[data-resolved-theme="light"] .social-privacy-toolbar select { color: #24282c; }
+:root[data-resolved-theme="light"] .social-privacy-toolbar select { background: #fff; }
+:root[data-resolved-theme="light"] .empty-icon,
+:root[data-resolved-theme="light"] .reaction-button,
+:root[data-resolved-theme="light"] .room-reaction-actions button { background: #eef0f2; }

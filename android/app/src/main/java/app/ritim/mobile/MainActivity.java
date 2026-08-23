@@ -8,6 +8,7 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(RitimMediaPlugin.class);
         registerPlugin(RitimSecureStoragePlugin.class);
+        registerPlugin(RitimUpdatePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

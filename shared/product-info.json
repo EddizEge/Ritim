@@ -1,0 +1,16 @@
+{
+  "name": "Ritim",
+  "developer": "Ediz Ege Mercan",
+  "descriptionTr": "Ritim, Windows'taki resmi YouTube Music oturumunu Android telefondan yönetmeyi ve kullanıcıların sosyal müzik özellikleriyle etkileşmesini sağlayan bağımsız bir projedir.",
+  "descriptionEn": "Ritim is an independent project for controlling the official YouTube Music session on Windows from an Android phone and interacting through social music features.",
+  "disclaimerTr": "Ritim; Google veya YouTube ile bağlantılı, onlar tarafından onaylanmış ya da desteklenmiş değildir. YouTube ve YouTube Music, Google LLC'nin ticari markalarıdır.",
+  "disclaimerEn": "Ritim is not affiliated with, endorsed by, or sponsored by Google or YouTube. YouTube and YouTube Music are trademarks of Google LLC.",
+  "projectLicense": "Tüm hakları saklıdır / All rights reserved",
+  "links": {
+    "github": "https://github.com/EddizEge/Ritim",
+    "releases": "https://github.com/EddizEge/Ritim/releases",
+    "privacy": "https://github.com/EddizEge/Ritim/blob/main/docs/PRIVACY.md",
+    "thirdPartyNotices": "https://github.com/EddizEge/Ritim/blob/main/docs/THIRD_PARTY_NOTICES.md",
+    "feedback": "https://github.com/EddizEge/Ritim/issues/new"
+  }
+}
