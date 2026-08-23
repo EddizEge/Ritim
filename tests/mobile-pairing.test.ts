@@ -97,13 +97,22 @@ test('aynı PC ve güvenlik bağlamındaki IP değişikliği yalnız endpoint ye
   assert.equal(classifyMobilePairingChange(null, refreshed), 'initial_pairing')
 })
 
-test('PC, token ve oda değişiklikleri sessiz endpoint yenilemesi sayılmaz', () => {
+test('legacy türetilmiş PC kimliği aynı güçlü token ve oda ile gerçek kimliğe taşınır', () => {
+  const token = 'legacy_actual_migration_token_123456789012'
+  const legacy = parsePairingLink(`http://172.16.20.63:8787/?room=EDIZ-4821&token=${token}&computerName=Eski-PC`)
+  const actual = parsePairingLink(`http://192.168.1.51:8787/?room=EDIZ-4821&token=${token}&installationId=ritim-realpc01&computerName=Mercan-PC`)
+
+  assert.notEqual(legacy.installationId, actual.installationId)
+  assert.equal(classifyMobilePairingChange(legacy, actual), 'endpoint_refresh')
+})
+
+test('kimlik ve güvenlik bağlamı birlikte değişirse sessiz endpoint yenilemesi yapılmaz', () => {
   const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=current_pairing_token_12345678901234567&installationId=ritim-pc123')
 
   assert.equal(classifyMobilePairingChange(current, {
     ...current,
     installationId: 'ritim-otherpc',
-  }), 'switch_computer')
+  }), 'endpoint_refresh')
   assert.equal(classifyMobilePairingChange(current, {
     ...current,
     token: 'rotated_pairing_token_12345678901234567',
@@ -112,6 +121,16 @@ test('PC, token ve oda değişiklikleri sessiz endpoint yenilemesi sayılmaz', (
     ...current,
     room: 'OTHER-ROOM',
   }), 'same_computer_reauthorization')
+  assert.equal(classifyMobilePairingChange(current, {
+    ...current,
+    installationId: 'ritim-otherpc',
+    token: 'other_pairing_token_1234567890123456789',
+  }), 'switch_computer')
+  assert.equal(classifyMobilePairingChange(current, {
+    ...current,
+    installationId: 'ritim-otherpc',
+    room: 'OTHER-ROOM',
+  }), 'switch_computer')
 })
 
 test('legacy web pairing migrates once and reset clears account-scoped cache', async () => {
@@ -171,7 +190,7 @@ test('Android pairing stores one authoritative encrypted record and no local raw
   assert.deepEqual(await persistence.read(), pairing)
 })
 
-test('Android aynı PC endpoint yenilemesi hesap, cihaz ve çevrimdışı cacheleri korur', async () => {
+test('Android legacy kimlikten gerçek kimliğe endpoint yenilemesi hesap, cihaz ve çevrimdışı cacheleri korur', async () => {
   const local = new MemoryStorage()
   const secure = new MemorySecureStorage()
   const transactionIds = ['transaction-old-endpoint', 'transaction-new-endpoint']
@@ -181,7 +200,7 @@ test('Android aynı PC endpoint yenilemesi hesap, cihaz ve çevrimdışı cachel
     secure,
     nextTransactionId: () => transactionIds.shift() || 'unexpected',
   })
-  const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=preserved_pairing_token_123456789012345&installationId=ritim-pc123&computerName=Ediz-PC')
+  const current = parsePairingLink('http://172.16.20.63:8787/?room=EDIZ-4821&token=preserved_pairing_token_123456789012345&computerName=Ediz-PC')
   await persistence.save(current)
 
   const preservedLocalValues = new Map([
@@ -201,9 +220,11 @@ test('Android aynı PC endpoint yenilemesi hesap, cihaz ve çevrimdışı cachel
   const refreshed = {
     ...current,
     syncUrl: 'http://192.168.1.51:8787',
+    installationId: 'ritim-realpc01',
     computerName: 'Ediz-PC-LAN',
     pairedAt: current.pairedAt + 1,
   }
+  assert.notEqual(current.installationId, refreshed.installationId)
   assert.equal(classifyMobilePairingChange(current, refreshed), 'endpoint_refresh')
   await persistence.save(refreshed)
 
@@ -216,6 +237,7 @@ test('Android aynı PC endpoint yenilemesi hesap, cihaz ve çevrimdışı cachel
   const protectedPairing = JSON.parse(secure.values.get('pairing.token.v2') || '{}')
   assert.equal(protectedPairing.transactionId, 'transaction-new-endpoint')
   assert.equal(protectedPairing.pairing.token, current.token)
+  assert.equal(protectedPairing.pairing.installationId, refreshed.installationId)
 })
 
 test('Android legacy token is removed only after protected migration succeeds', async () => {
