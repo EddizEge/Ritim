@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
 const test = require('node:test')
 const {
   androidVersionCode,
@@ -40,4 +42,14 @@ test('yayın etiketi paket sürümüyle birebir eşleşmelidir', () => {
 test('desteklenmeyen prerelease biçimleri reddedilir', () => {
   assert.throws(() => parseVersion('0.9.1-preview.1'))
   assert.throws(() => androidVersionCode('0.9.1-beta.40'))
+})
+
+test('Windows legacy kurulum geçişi modern sürümlerin kayıt akışını atlamaz', () => {
+  const installerInclude = fs.readFileSync(path.join(__dirname, '..', 'build', 'installer.nsh'), 'utf8')
+
+  assert.match(installerInclude, /\$R8 == "0\.7\.0"/)
+  assert.match(installerInclude, /\$R8 == "0\.7\.1"/)
+  assert.match(installerInclude, /\$R8 == "0\.7\.2"/)
+  assert.doesNotMatch(installerInclude, /\$R8 != ""/)
+  assert.match(installerInclude, /registryAddInstallInfo/)
 })
