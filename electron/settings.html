@@ -13,6 +13,9 @@
         <nav aria-label="Ayar bölümleri">
           <button class="is-active" data-section="account"><span>●</span>Hesap</button>
           <button data-section="devices"><span>▣</span>Cihazlar <em id="device-count">—</em></button>
+          <button data-section="social"><span>◎</span>Sosyal</button>
+          <button data-section="notifications"><span>◌</span>Bildirimler</button>
+          <button data-section="safety"><span>◇</span>Güvenlik</button>
           <button data-section="connection"><span>⌁</span>Eşleme</button>
           <button data-section="updates"><span>↻</span>Güncellemeler</button>
           <button data-section="about"><span>i</span>Hakkında</button>
@@ -48,6 +51,34 @@
           <div class="device-list" id="device-list"></div>
           <div class="state-card compact-state" id="device-empty" hidden><span>▣</span><b>Etkin cihaz yok</b><p>Hesabına bağlı cihazlar burada görünür.</p></div>
           <p class="security-note">Bir cihazı kaldırdığında o cihazın Ritim Sosyal erişimi hemen kesilir. PC’deki YouTube Music oturumu ve yerel oynatma ayrı kalır.</p>
+        </section>
+
+        <section class="settings-panel" data-panel="social" hidden>
+          <div class="panel-intro"><div><h2>Sosyal görünürlük</h2><p>Profilini ve dinlediğin parçayı kimlerin görebileceğini seç.</p></div><span class="scope-pill">Hesap ayarı</span></div>
+          <div class="preference-list">
+            <label><span><b>Profil görünürlüğü</b><small>Adın, avatarın ve çevrimiçi durumun.</small></span><select id="profile-visibility"><option value="everyone">Herkes</option><option value="contacts">Yalnız mesajlaştıklarım</option><option value="hidden">Gizli</option></select></label>
+            <label><span><b>Dinleme görünürlüğü</b><small>Çalan parça ve birlikte dinleme erişimi.</small></span><select id="listening-visibility"><option value="everyone">Herkes</option><option value="contacts">Yalnız mesajlaştıklarım</option><option value="hidden">Gizli</option></select></label>
+          </div>
+          <p class="security-note">Değişiklikler aynı hesaptaki bütün cihazlara gelir ve açık dinleme odalarına anında uygulanır.</p>
+        </section>
+
+        <section class="settings-panel" data-panel="notifications" hidden>
+          <div class="panel-intro"><div><h2>Sosyal bildirimler</h2><p>Hesap olaylarını ve bu PC’deki sistem bildirimlerini yönet.</p></div></div>
+          <div class="preference-list">
+            <label><span><b>Mesaj bildirimleri</b><small>Yeni mesajlar ve mesaj istekleri.</small></span><input id="messages-enabled" type="checkbox" /></label>
+            <label><span><b>Tepki bildirimleri</b><small>Mesajlarına ve sosyal durumuna gelen tepkiler.</small></span><input id="reactions-enabled" type="checkbox" /></label>
+            <label><span><b>Windows bildirimleri</b><small>Yalnızca bu bilgisayarda gösterilir.</small></span><button class="secondary compact" id="device-notifications-button">Aç</button></label>
+          </div>
+          <div class="scope-grid"><span><b>Mesaj ve tepki</b><small>Hesap kapsamında · PostgreSQL</small></span><span><b>Sistem izni</b><small>Cihaz kapsamında · Bu PC</small></span></div>
+        </section>
+
+        <section class="settings-panel" data-panel="safety" hidden>
+          <div class="panel-intro"><div><h2>Güvenlik ve denetim</h2><p>Sessize aldığın, engellediğin ve şikâyet ettiğin hesapların güvenli özeti.</p></div><span class="scope-pill">Hesap ayarı</span></div>
+          <div class="moderation-grid">
+            <section><header><b>Sessize alınanlar</b><small id="muted-count">0</small></header><div id="muted-list" class="moderation-list"></div><p id="muted-empty" class="empty-copy">Sessize alınan kullanıcı yok.</p></section>
+            <section><header><b>Engellenenler</b><small id="blocked-count">0</small></header><div id="blocked-list" class="moderation-list"></div><p id="blocked-empty" class="empty-copy">Engellenen kullanıcı yok.</p></section>
+          </div>
+          <section class="report-summary"><header><div><b>Şikâyet geçmişi</b><small>Yalnızca gönderim durumu gösterilir; inceleme notları paylaşılmaz.</small></div><em id="report-count">0 kayıt</em></header><div id="report-list" class="report-list"></div><p id="report-empty" class="empty-copy">Gönderilmiş şikâyet bulunmuyor.</p></section>
         </section>
 
         <section class="settings-panel" data-panel="connection" hidden>

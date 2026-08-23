@@ -536,7 +536,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
 
       <main className={`mobile-browse-content ${socialOpen ? 'is-social' : ''} ${settingsOpen ? 'is-settings' : ''}`}>
         {settingsOpen ? (
-          <><div className="mobile-settings-heading"><h1>Ayarlar</h1><p>Hesabın ve bu hesaba bağlı cihazlar.</p></div><MobileSettings account={socialAccount} onRefresh={socialAccountActions.refresh} onReconnect={socialAccountActions.reconnect} onRevokeDevice={socialAccountActions.revokeDevice} onSignOut={socialAccountActions.signOut} /></>
+          <><div className="mobile-settings-heading"><h1>Ayarlar</h1><p>Hesap, cihaz, gizlilik ve bildirim tercihlerin.</p></div><MobileSettings account={socialAccount} onRefresh={socialAccountActions.refresh} onReconnect={socialAccountActions.reconnect} onRevokeDevice={socialAccountActions.revokeDevice} onSignOut={socialAccountActions.signOut} social={socialState} socialActions={socialActions} /></>
         ) : socialOpen ? (
           <MobileSocialHub state={socialState} actions={socialActions} />
         ) : (
