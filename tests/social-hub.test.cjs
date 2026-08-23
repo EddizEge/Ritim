@@ -3,7 +3,7 @@ const { createServer } = require('node:http')
 const test = require('node:test')
 const { Server } = require('socket.io')
 const { io: createClient } = require('socket.io-client')
-const { createSocialHub } = require('../electron/social-hub.cjs')
+const { createSocialHub, summarizeRoomSyncResult } = require('../electron/social-hub.cjs')
 
 function profile(id, displayName, deviceRole) {
   return {
@@ -17,6 +17,49 @@ function profile(id, displayName, deviceRole) {
     deviceRole,
   }
 }
+
+test('oda senkron özeti güncel sonucu sınıflandırır, metrikleri sınırlar ve eskisini beklemeye alır', () => {
+  const now = 1_000_000
+  const baseResult = {
+    playbackRevision: 12,
+    status: 'applied',
+    seekApplied: false,
+    playbackStateApplied: false,
+    driftMs: 320,
+    roundTripMs: 48,
+    reportedAtMs: now - 1_000,
+  }
+
+  assert.deepEqual(summarizeRoomSyncResult(undefined, 12, now), { status: 'waiting' })
+  assert.deepEqual(summarizeRoomSyncResult(baseResult, 13, now), { status: 'waiting' })
+  assert.deepEqual(summarizeRoomSyncResult({
+    ...baseResult,
+    reportedAtMs: now - 15_001,
+  }, 12, now), { status: 'waiting' })
+
+  assert.deepEqual(summarizeRoomSyncResult(baseResult, 12, now), {
+    status: 'synced',
+    roundTripMs: 48,
+    driftMs: 320,
+    measuredAt: now - 1_000,
+  })
+  assert.deepEqual(summarizeRoomSyncResult({
+    ...baseResult,
+    seekApplied: true,
+    driftMs: -900_000,
+    roundTripMs: 900_000,
+    reportedAtMs: now + 10_000,
+  }, 12, now), {
+    status: 'corrected',
+    roundTripMs: 60_000,
+    driftMs: -60_000,
+    measuredAt: now,
+  })
+  assert.equal(summarizeRoomSyncResult({
+    ...baseResult,
+    status: 'failed',
+  }, 12, now).status, 'unavailable')
+})
 
 test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görünür', async (context) => {
   const httpServer = createServer()
@@ -307,6 +350,49 @@ test('PC ve telefon tek hesap, diğer cihazlar ayrı kullanıcı olarak görün�
     }, resolve)
   })
   assert.deepEqual(playbackResult, { ok: true })
+  const correctedSummary = await waitForState('Ediz Telefon', (state) => (
+    state.rooms[0]?.syncSummary?.status === 'corrected'
+  ))
+  assert.equal(correctedSummary.rooms[0].syncSummary.status, 'corrected')
+  assert.equal(correctedSummary.rooms[0].syncSummary.roundTripMs, 54)
+  assert.equal(correctedSummary.rooms[0].syncSummary.driftMs, 2_300)
+  assert.equal(Number.isFinite(correctedSummary.rooms[0].syncSummary.measuredAt), true)
+  assert.equal(latestStates.get('Deniz PC').rooms[0].syncSummary, undefined)
+
+  const steadyResult = await new Promise((resolve) => {
+    desktopA.emit('social:room-playback:result', {
+      roomId: ownerRoomState.rooms[0].id,
+      playbackRevision: 2,
+      status: 'applied',
+      seekApplied: false,
+      playbackStateApplied: false,
+      driftMs: 180,
+      roundTripMs: 42,
+      reason: 'within_tolerance',
+    }, resolve)
+  })
+  assert.deepEqual(steadyResult, { ok: true })
+  const syncedSummary = await waitForState('Ediz PC', (state) => (
+    state.rooms[0]?.syncSummary?.status === 'synced'
+    && state.rooms[0].syncSummary.roundTripMs === 42
+  ))
+  assert.equal(syncedSummary.rooms[0].syncSummary.driftMs, 180)
+  assert.equal(latestStates.get('Deniz Telefon').rooms[0].syncSummary, undefined)
+
+  const desktopC = await connect('Mert PC', 'account-c', 'desktop')
+  await waitForState('Mert PC', (state) => state.users.length === 2)
+  const thirdAccountJoin = await new Promise((resolve) => {
+    desktopC.emit('social:room-membership', { roomId: ownerRoomState.rooms[0].id }, resolve)
+  })
+  assert.deepEqual(thirdAccountJoin, { ok: true, status: 'joined' })
+  const isolatedSummary = await waitForState('Mert PC', (state) => (
+    state.rooms[0]?.viewerRole === 'listener'
+    && state.rooms[0]?.syncSummary?.status === 'waiting'
+  ))
+  assert.deepEqual(isolatedSummary.rooms[0].syncSummary, { status: 'waiting' })
+  assert.equal(latestStates.get('Ediz PC').rooms[0].syncSummary.roundTripMs, 42)
+  desktopC.disconnect()
+  await waitForState('Ediz PC', (state) => state.users.length === 1 && state.rooms[0]?.memberCount === 2)
 
   const ownerPlaybackResult = await new Promise((resolve) => {
     desktopB.emit('social:room-playback:result', {
@@ -643,6 +729,7 @@ test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hata
   assert.deepEqual(failedResult, { ok: true })
   const unavailableState = await waitForState('Dinleyici PC', (state) => (
     state.rooms[0]?.viewerPlaybackStatus === 'unavailable'
+    && state.rooms[0]?.syncSummary?.status === 'unavailable'
   ))
   assert.equal(unavailableState.rooms[0].viewerPlaybackError, 'Video is not available for this account')
 
@@ -651,7 +738,10 @@ test('oda sahibi PC çevrimdışı kalınca oda korunur, erişim ve oynatma hata
     playbackRevision: 1,
     status: 'applied',
   })
-  await waitForState('Dinleyici PC', (state) => state.rooms[0]?.viewerPlaybackStatus === 'ready')
+  await waitForState('Dinleyici PC', (state) => (
+    state.rooms[0]?.viewerPlaybackStatus === 'ready'
+    && state.rooms[0]?.syncSummary?.status === 'synced'
+  ))
 
   ownerDesktop.disconnect()
   const offlineState = await waitForState('Dinleyici PC', (state) => (

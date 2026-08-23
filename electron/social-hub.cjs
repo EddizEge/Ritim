@@ -2,6 +2,9 @@ const crypto = require('node:crypto')
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_ROOM_MEMBERS = 8
 const MAX_PLAYBACK_POSITION_MS = 24 * 60 * 60 * 1000
+const ROOM_SYNC_RESULT_STALE_MS = 15_000
+const MAX_ROOM_SYNC_ROUND_TRIP_MS = 60_000
+const MAX_ROOM_SYNC_DRIFT_MS = 60_000
 
 function accountLookupKey(value) {
   return UUID_PATTERN.test(value)
@@ -49,6 +52,39 @@ function sanitizeRoomPlayback(value, ownerId) {
     playbackPositionMs,
     playbackState: value.playbackState,
     playbackRevision,
+  }
+}
+
+function clampRoomSyncMetric(value, minimum, maximum) {
+  const selected = Number(value)
+  if (!Number.isFinite(selected)) return 0
+  return Math.round(Math.max(minimum, Math.min(maximum, selected)))
+}
+
+function summarizeRoomSyncResult(result, playbackRevision, now = Date.now()) {
+  const currentRevision = Math.floor(Number(playbackRevision) || 0)
+  const currentTime = Number(now)
+  const reportedAtMs = Number(result?.reportedAtMs)
+  if (
+    !result
+    || currentRevision < 1
+    || result.playbackRevision !== currentRevision
+    || !Number.isFinite(currentTime)
+    || !Number.isFinite(reportedAtMs)
+  ) return { status: 'waiting' }
+
+  const measuredAt = Math.max(0, Math.min(Math.floor(currentTime), Math.floor(reportedAtMs)))
+  if (currentTime - measuredAt > ROOM_SYNC_RESULT_STALE_MS) return { status: 'waiting' }
+
+  const corrected = result.status === 'applied' && (
+    result.seekApplied
+    || result.playbackStateApplied
+  )
+  return {
+    status: result.status === 'failed' ? 'unavailable' : corrected ? 'corrected' : 'synced',
+    roundTripMs: clampRoomSyncMetric(result.roundTripMs, 0, MAX_ROOM_SYNC_ROUND_TRIP_MS),
+    driftMs: clampRoomSyncMetric(result.driftMs, -MAX_ROOM_SYNC_DRIFT_MS, MAX_ROOM_SYNC_DRIFT_MS),
+    measuredAt,
   }
 }
 
@@ -107,6 +143,34 @@ function createSocialHub(io, { store, onAbuse } = {}) {
 
   function socketsForAccount(accountId) {
     return socialSockets().filter((socket) => socket.data.socialAccountId === accountId)
+  }
+
+  function viewerRoomPlaybackState(accountId, socialRoom, playback, viewerIsListener, now) {
+    if (!viewerIsListener) {
+      return {
+        viewerPlaybackStatus: 'idle',
+        viewerPlaybackError: undefined,
+        syncSummary: undefined,
+      }
+    }
+    const latestResult = socketsForAccount(accountId)
+      .filter((peer) => (
+        peer.data.socialDeviceRole === 'desktop'
+        && peer.data.socialRoomPlaybackResult?.roomId === socialRoom.id
+        && peer.data.socialRoomPlaybackResult?.playbackRevision === playback?.playbackRevision
+      ))
+      .map((peer) => peer.data.socialRoomPlaybackResult)
+      .sort((left, right) => right.reportedAtMs - left.reportedAtMs)[0]
+    const syncSummary = summarizeRoomSyncResult(latestResult, playback?.playbackRevision, now)
+    return {
+      viewerPlaybackStatus: syncSummary.status === 'unavailable'
+        ? 'unavailable'
+        : ['synced', 'corrected'].includes(syncSummary.status)
+          ? 'ready'
+          : 'idle',
+      viewerPlaybackError: syncSummary.status === 'unavailable' ? latestResult?.error : undefined,
+      syncSummary,
+    }
   }
 
   function desktopAccountKeysForCurrentSockets() {
@@ -397,25 +461,17 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             ...(() => {
               const playback = playbackByRoom.get(socialRoom.id)
               const ownerDesktopOnline = desktopAccountKeys.has(accountLookupKey(socialRoom.ownerId))
-              const latestResult = socketsForAccount(accountId)
-                .filter((peer) => (
-                  socialRoom.memberIds.includes(accountId)
-                  && socialRoom.ownerId !== accountId
-                  && peer.data.socialDeviceRole === 'desktop'
-                  && peer.data.socialRoomPlaybackResult?.roomId === socialRoom.id
-                  && peer.data.socialRoomPlaybackResult?.playbackRevision === playback?.playbackRevision
-                ))
-                .map((peer) => peer.data.socialRoomPlaybackResult)
-                .sort((left, right) => right.reportedAtMs - left.reportedAtMs)[0]
+              const viewerPlayback = viewerRoomPlaybackState(
+                accountId,
+                socialRoom,
+                playback,
+                socialRoom.memberIds.includes(accountId) && socialRoom.ownerId !== accountId,
+                now,
+              )
               return {
                 ownerDesktopOnline,
                 lifecycle: ownerDesktopOnline ? (playback ? 'live' : 'waiting') : 'owner_offline',
-                viewerPlaybackStatus: latestResult?.status === 'failed'
-                  ? 'unavailable'
-                  : latestResult?.status === 'applied'
-                    ? 'ready'
-                    : 'idle',
-                viewerPlaybackError: latestResult?.status === 'failed' ? latestResult.error : undefined,
+                ...viewerPlayback,
               }
             })(),
             id: socialRoom.id,
@@ -445,16 +501,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
             }
             const playback = playbackByRoom.get(socialRoom.id)
             const ownerDesktopOnline = desktopAccountKeys.has(accountLookupKey(socialRoom.ownerId))
-            const latestResult = socketsForAccount(accountId)
-              .filter((peer) => (
-                selectedListening.get(accountId) === socialRoom.ownerId
-                && socialRoom.ownerId !== accountId
-                && peer.data.socialDeviceRole === 'desktop'
-                && peer.data.socialRoomPlaybackResult?.roomId === socialRoom.id
-                && peer.data.socialRoomPlaybackResult?.playbackRevision === playback?.playbackRevision
-              ))
-              .map((peer) => peer.data.socialRoomPlaybackResult)
-              .sort((left, right) => right.reportedAtMs - left.reportedAtMs)[0]
+            const viewerPlayback = viewerRoomPlaybackState(
+              accountId,
+              socialRoom,
+              playback,
+              selectedListening.get(accountId) === socialRoom.ownerId && socialRoom.ownerId !== accountId,
+              now,
+            )
             return {
               id: socialRoom.id,
               ownerId: socialRoom.ownerId,
@@ -465,12 +518,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
               isLive: ownerDesktopOnline,
               ownerDesktopOnline,
               lifecycle: ownerDesktopOnline ? (playback ? 'live' : 'waiting') : 'owner_offline',
-              viewerPlaybackStatus: latestResult?.status === 'failed'
-                ? 'unavailable'
-                : latestResult?.status === 'applied'
-                  ? 'ready'
-                  : 'idle',
-              viewerPlaybackError: latestResult?.status === 'failed' ? latestResult.error : undefined,
+              ...viewerPlayback,
               memberInitials: memberInitials.slice(0, 4),
               playback: playbackByRoom.get(socialRoom.id),
               viewerRole: socialRoom.ownerId === accountId
@@ -1352,11 +1400,24 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         error: cleanText(payload.error, 240),
         reportedAtMs: Date.now(),
       }
+      if (socket.data.socialRoomPlaybackResultExpiryTimer) {
+        clearTimeout(socket.data.socialRoomPlaybackResultExpiryTimer)
+      }
+      socket.data.socialRoomPlaybackResultExpiryTimer = setTimeout(
+        scheduleEmit,
+        ROOM_SYNC_RESULT_STALE_MS + 25,
+      )
+      socket.data.socialRoomPlaybackResultExpiryTimer.unref?.()
       reply({ ok: true })
       if (
         previousResult?.roomId !== socket.data.socialRoomPlaybackResult.roomId
         || previousResult?.playbackRevision !== socket.data.socialRoomPlaybackResult.playbackRevision
         || previousResult?.status !== socket.data.socialRoomPlaybackResult.status
+        || previousResult?.seekApplied !== socket.data.socialRoomPlaybackResult.seekApplied
+        || previousResult?.playbackStateApplied !== socket.data.socialRoomPlaybackResult.playbackStateApplied
+        || previousResult?.driftMs !== socket.data.socialRoomPlaybackResult.driftMs
+        || previousResult?.roundTripMs !== socket.data.socialRoomPlaybackResult.roundTripMs
+        || previousResult?.reason !== socket.data.socialRoomPlaybackResult.reason
         || previousResult?.error !== socket.data.socialRoomPlaybackResult.error
       ) await scheduleEmit()
     }))
@@ -1419,6 +1480,9 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     socket.on('disconnect', safely('Bağlantı kapanışı temizlenemedi', async () => {
       const accountId = socket.data.socialAccountId
       const deviceId = socket.data.socialDeviceId
+      if (socket.data.socialRoomPlaybackResultExpiryTimer) {
+        clearTimeout(socket.data.socialRoomPlaybackResultExpiryTimer)
+      }
       if (!accountId) return
       if (store && deviceId) await store.removePresence(accountId, deviceId)
       await new Promise((resolve) => setImmediate(resolve))
@@ -1442,9 +1506,14 @@ function createSocialHub(io, { store, onAbuse } = {}) {
 
   function close() {
     if (presenceHeartbeat) clearInterval(presenceHeartbeat)
+    for (const socket of socialSockets()) {
+      if (socket.data.socialRoomPlaybackResultExpiryTimer) {
+        clearTimeout(socket.data.socialRoomPlaybackResultExpiryTimer)
+      }
+    }
   }
 
   return { attach, emitAllStates: scheduleEmit, close }
 }
 
-module.exports = { createSocialHub }
+module.exports = { createSocialHub, summarizeRoomSyncResult }

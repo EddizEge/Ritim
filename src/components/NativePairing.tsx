@@ -1,19 +1,18 @@
 import { FormEvent, useState } from 'react'
 import { BarcodeFormat, BarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { Download, Link2, QrCode, RefreshCw, Smartphone } from 'lucide-react'
-import { parsePairingLink, saveMobilePairing } from '../mobileConfig'
+import { parsePairingLink, type MobilePairingConfig } from '../mobileConfig'
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
 
-export function NativePairing() {
+export function NativePairing({ onPaired }: { onPaired: (pairing: MobilePairingConfig) => Promise<void> }) {
   const [link, setLink] = useState('')
   const [error, setError] = useState('')
   const [scanning, setScanning] = useState(false)
   const updates = useMobileUpdate()
 
-  const connect = (value: string) => {
+  const connect = async (value: string) => {
     try {
-      saveMobilePairing(parsePairingLink(value))
-      window.location.reload()
+      await onPaired(parsePairingLink(value))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Bağlantı kurulamadı.')
     }
@@ -21,7 +20,7 @@ export function NativePairing() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    connect(link)
+    void connect(link)
   }
 
   const scan = async () => {
@@ -30,7 +29,7 @@ export function NativePairing() {
     try {
       const result = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode], autoZoom: true })
       const value = result.barcodes[0]?.rawValue || result.barcodes[0]?.displayValue || ''
-      if (value) connect(value)
+      if (value) await connect(value)
     } catch {
       setError('QR tarama iptal edildi veya kamera açılamadı.')
     } finally {
