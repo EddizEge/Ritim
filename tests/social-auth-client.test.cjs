@@ -11,6 +11,8 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
   const refreshToken = 'ritim_r1_test-refresh-token-that-must-not-be-plaintext'
   let callbackRequest
   let logoutCalled = false
+  let revokedDeviceId = ''
+  let accountAvailable = true
   const safeStorage = {
     isEncryptionAvailable: () => true,
     encryptString: (value) => Buffer.from([...value].reverse().join('')),
@@ -45,6 +47,24 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
       assert.equal(init.headers.authorization, 'Bearer signed-access-token')
       return Response.json({ ticket: 'ritim_ct1_ticket', expiresIn: 120 })
     }
+    if (pathname === '/auth/account') {
+      assert.equal(init.headers.authorization, 'Bearer signed-access-token')
+      if (!accountAvailable) {
+        return Response.json({ error: 'auth_not_configured', message: 'Ritim kimlik servisi yapılandırılmamış.' }, { status: 503 })
+      }
+      return Response.json({
+        user: { id: 'account-id', displayName: 'Ediz Ege Mercan', handle: '@ediz_test', initials: 'EE' },
+        currentDeviceId: 'device-id',
+        devices: [
+          { id: 'device-id', role: 'desktop', name: 'Ediz PC', createdAt: '2026-01-01T00:00:00.000Z' },
+          { id: 'phone-id', role: 'companion', name: 'Ediz Telefon', createdAt: '2026-01-02T00:00:00.000Z' },
+        ],
+      })
+    }
+    if (pathname === '/auth/devices/phone-id') {
+      revokedDeviceId = 'phone-id'
+      return new Response(null, { status: 204 })
+    }
     if (pathname === '/auth/logout') {
       logoutCalled = true
       return new Response(null, { status: 204 })
@@ -74,6 +94,16 @@ test('Electron PKCE istemcisi Ritim tokenlarını safeStorage ile şifreler', as
   assert.equal(signedIn.authenticated, true)
   assert.equal(await client.accessToken(), 'signed-access-token')
   assert.equal((await client.createCompanionTicket()).expiresIn, 120)
+  const account = await client.account()
+  assert.equal(account.devices.length, 2)
+  const afterRevoke = await client.revokeDevice('phone-id')
+  assert.equal(revokedDeviceId, 'phone-id')
+  assert.equal(afterRevoke.authenticated, true)
+  accountAvailable = false
+  const limitedAccount = await client.account()
+  assert.equal(limitedAccount.limited, true)
+  assert.equal(limitedAccount.devices.length, 1)
+  assert.equal(limitedAccount.devices[0].id, 'device-id')
   const encrypted = await fs.readFile(path.join(userDataPath, 'social-session.bin'))
   assert.equal(encrypted.subarray(0, 4).toString(), 'enc:')
   assert.equal(encrypted.includes(Buffer.from(refreshToken)), false)

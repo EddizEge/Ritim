@@ -43,9 +43,17 @@ export type SocialRoom = {
   lifecycle: 'waiting' | 'live' | 'owner_offline'
   viewerPlaybackStatus: 'idle' | 'ready' | 'unavailable'
   viewerPlaybackError?: string
+  syncSummary?: SocialRoomSyncSummary
   memberInitials: string[]
   viewerRole?: 'owner' | 'listener'
   playback?: SocialRoomPlayback
+}
+
+export type SocialRoomSyncSummary = {
+  status: 'waiting' | 'synced' | 'corrected' | 'unavailable'
+  roundTripMs?: number
+  driftMs?: number
+  measuredAt?: number
 }
 
 export type SocialRoomPlayback = {
@@ -111,10 +119,38 @@ export type SocialNotificationPreferences = {
   deviceEnabled: boolean
 }
 
+export type SocialReportSummary = {
+  total: number
+  recent: Array<{
+    targetUserId: string
+    displayName: string
+    reason: string
+    createdAt: number
+    status: 'received'
+  }>
+}
+
 export type SocialFeedback = {
   id: string
   tone: 'success' | 'info' | 'error'
   text: string
+}
+
+export type SocialAccountDevice = {
+  id: string
+  role: 'desktop' | 'companion'
+  name: string
+  lastSeenAt?: string
+  createdAt: string
+}
+
+export type SocialAccountSummary = {
+  authenticated: boolean
+  user?: Pick<SocialUser, 'id' | 'displayName' | 'handle' | 'initials' | 'avatarUrl' | 'avatarTone'>
+  currentDeviceId: string
+  devices: SocialAccountDevice[]
+  limited?: boolean
+  warning?: string
 }
 
 export type SocialState = {
@@ -133,7 +169,9 @@ export type SocialState = {
   notifications: SocialNotification[]
   notificationPreferences: SocialNotificationPreferences
   mutedUserIds: string[]
+  mutedUsers: SocialUser[]
   blockedUsers: SocialUser[]
+  reportSummary: SocialReportSummary
   feedback?: SocialFeedback
   selectedUserId: string
   listeningWithUserId?: string

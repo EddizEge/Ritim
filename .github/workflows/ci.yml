@@ -18,6 +18,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run test:version
       - run: npm run build
 
   android:
@@ -33,6 +34,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: npm ci
       - run: npm run android:sync
       - run: ./gradlew assembleDebug
@@ -41,8 +45,14 @@ jobs:
         shell: bash
         run: |
           expected_version="$(node -p "require('./package.json').version")"
+          expected_code="$(node -p "require('./electron/version-policy.cjs').androidVersionCode(require('./package.json').version)")"
           actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          actual_code="$(apkanalyzer manifest version-code android/app/build/outputs/apk/debug/app-debug.apk)"
           test "$actual_version" = "$expected_version" || {
             echo "APK version mismatch: expected $expected_version, got $actual_version"
+            exit 1
+          }
+          test "$actual_code" = "$expected_code" || {
+            echo "APK versionCode mismatch: expected $expected_code, got $actual_code"
             exit 1
           }

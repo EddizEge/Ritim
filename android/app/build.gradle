@@ -2,13 +2,22 @@ apply plugin: 'com.android.application'
 
 def packageMetadata = new groovy.json.JsonSlurper().parse(file('../../package.json'))
 def appVersionName = packageMetadata.version as String
-def semanticVersion = appVersionName =~ /^(\d+)\.(\d+)\.(\d+)$/
+def semanticVersion = appVersionName =~ /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/
 if (!semanticVersion.matches()) {
-    throw new GradleException("package.json version must use major.minor.patch format: ${appVersionName}")
+    throw new GradleException("package.json version must use Ritim semver format: ${appVersionName}")
 }
-def appVersionCode = semanticVersion[0][1].toInteger() * 10000 +
-        semanticVersion[0][2].toInteger() * 100 +
-        semanticVersion[0][3].toInteger()
+def prereleaseChannel = semanticVersion[0][4]
+def prereleaseIteration = semanticVersion[0][5] ? semanticVersion[0][5].toInteger() : 0
+def stageOffset = prereleaseChannel == 'alpha' ? 0 : prereleaseChannel == 'beta' ? 40 : prereleaseChannel == 'rc' ? 80 : 99
+def stageMaximum = prereleaseChannel == 'rc' ? 18 : 39
+if (prereleaseChannel && (prereleaseIteration < 1 || prereleaseIteration > stageMaximum)) {
+    throw new GradleException("package.json prerelease iteration is out of range: ${appVersionName}")
+}
+def stageCode = prereleaseChannel ? stageOffset + prereleaseIteration : 99
+def appVersionCode = semanticVersion[0][1].toInteger() * 1000000 +
+        semanticVersion[0][2].toInteger() * 10000 +
+        semanticVersion[0][3].toInteger() * 100 +
+        stageCode
 def signingStorePath = System.getenv('RITIM_ANDROID_KEYSTORE_PATH')
 def signingStorePassword = System.getenv('RITIM_ANDROID_KEYSTORE_PASSWORD')
 def signingKeyAlias = System.getenv('RITIM_ANDROID_KEY_ALIAS')

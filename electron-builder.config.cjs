@@ -1,11 +1,13 @@
 const repository = process.env.RITIM_GITHUB_REPOSITORY || process.env.GITHUB_REPOSITORY || 'EddizEge/Ritim'
 const [owner, repo] = repository.split('/')
+const { version } = require('./package.json')
+const { updateChannel } = require('./electron/version-policy.cjs')
 
 module.exports = {
   appId: 'app.ritim.desktop',
   productName: 'Ritim',
   artifactName: 'Ritim-Setup-${version}.${ext}',
-  files: ['dist/**/*', 'electron/**/*', 'package.json'],
+  files: ['dist/**/*', 'electron/**/*', 'shared/**/*', 'package.json'],
   directories: { output: process.env.RITIM_RELEASE_DIR || 'release' },
   win: { target: 'nsis', icon: 'build/icon.ico' },
   nsis: {
@@ -13,6 +15,6 @@ module.exports = {
     perMachine: false,
     include: 'build/installer.nsh',
   },
-  publish: [{ provider: 'github', owner, repo, releaseType: 'release' }],
+  publish: [{ provider: 'github', owner, repo, releaseType: 'release', channel: updateChannel(version) }],
   electronUpdaterCompatibility: '>=2.16',
 }

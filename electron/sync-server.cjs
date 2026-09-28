@@ -24,6 +24,7 @@ function startSyncServer(distPath, port = 8787, {
   getSocialCompanionTicket,
   commandOwnerTimeoutMs = 30000,
 } = {}) {
+  let currentPairingToken = String(pairingToken || '')
   const app = express()
   app.use(cors({
     origin: true,
@@ -32,16 +33,16 @@ function startSyncServer(distPath, port = 8787, {
   app.use(express.json({ limit: '8kb' }))
   app.use(express.static(distPath))
   app.get('/health', (_request, response) => response.json({ ok: true, service: 'ritim-sync', protocol: 2 }))
-  app.get('/pairing', (request, response) => {
-    if (!isLoopback(request.socket.remoteAddress)) return response.status(404).end()
-    return response.json({ token: pairingToken })
-  })
+  // This retired endpoint used to expose the pairing secret to any web page
+  // able to reach localhost. Pairing data is now revealed only through the
+  // consent-gated Electron settings IPC flow.
+  app.get('/pairing', (_request, response) => response.status(404).end())
   app.post('/social/session-ticket', async (request, response) => {
     const authorization = String(request.headers.authorization || '')
     const suppliedToken = authorization.startsWith('Bearer ')
       ? authorization.slice(7).trim()
       : request.headers['x-ritim-pairing-token']
-    if (!pairingToken || !safeEqual(suppliedToken, pairingToken)) {
+    if (!currentPairingToken || !safeEqual(suppliedToken, currentPairingToken)) {
       return response.status(401).json({ ok: false, message: 'Telefon eşleme anahtarı geçersiz.' })
     }
     if (typeof getSocialCompanionTicket !== 'function') {
@@ -97,11 +98,13 @@ function startSyncServer(distPath, port = 8787, {
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom) return
       const remoteAddress = socket.handshake.address
-      if (pairingToken && !isLoopback(remoteAddress) && !safeEqual(token, pairingToken)) {
+      const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
+      const tokenRequired = currentPairingToken && (normalizedRole === 'companion' || !isLoopback(remoteAddress))
+      if (tokenRequired && !safeEqual(token, currentPairingToken)) {
         socket.emit('pairing:error', 'Bu QR kodun süresi dolmuş. PC’den yeni QR kodu tara.')
+        socket.disconnect(true)
         return
       }
-      const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
       socket.join(normalizedRoom)
       socket.data.room = normalizedRoom
       socket.data.role = normalizedRole
@@ -215,7 +218,21 @@ function startSyncServer(distPath, port = 8787, {
 
   server.listen(port, '0.0.0.0', () => console.log(`[Ritim Sync V2] Telefon arayuzu: http://0.0.0.0:${port}/?companion=1`))
   server.io = io
-  server.pairingToken = pairingToken
+  server.pairingToken = currentPairingToken
+  server.rotatePairingToken = (nextToken) => {
+    const normalizedToken = String(nextToken || '').trim()
+    if (!/^[A-Za-z0-9_-]{32,128}$/.test(normalizedToken)) {
+      throw new Error('Geçerli bir telefon eşleme anahtarı gerekli.')
+    }
+    currentPairingToken = normalizedToken
+    server.pairingToken = currentPairingToken
+    for (const socket of io.sockets.sockets.values()) {
+      if (socket.data.role !== 'companion') continue
+      socket.emit('pairing:error', 'PC eşleme anahtarını yeniledi. Yeni QR kodu tara.')
+      socket.disconnect(true)
+    }
+    return currentPairingToken
+  }
   server.commandOwnerTimeoutMs = commandOwnerTimeoutMs
   return server
 }
