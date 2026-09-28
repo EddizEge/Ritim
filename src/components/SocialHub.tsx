@@ -129,6 +129,17 @@ function SocialTrackSummary({ track, compact = false }: { track?: SocialTrack; c
   )
 }
 
+function roomSyncLabel(room: SocialRoom) {
+  const summary = room.syncSummary
+  if (!summary) return ''
+  if (summary.status === 'waiting') return 'Senkron bekleniyor'
+  if (summary.status === 'unavailable') return 'Senkron kullanılamıyor'
+  const status = summary.status === 'corrected' ? 'Düzeltildi' : 'Senkron'
+  const roundTrip = Number.isFinite(summary.roundTripMs) ? `${Math.round(summary.roundTripMs || 0)} ms` : ''
+  const drift = Number.isFinite(summary.driftMs) ? `sapma ${Math.round(summary.driftMs || 0)} ms` : ''
+  return [status, roundTrip, drift].filter(Boolean).join(' • ')
+}
+
 function SocialRoomCard({
   room,
   actions,
@@ -160,13 +171,14 @@ function SocialRoomCard({
     : ownerOffline
       ? 'PC ÇEVRİMDIŞI'
       : room.lifecycle === 'waiting' ? 'HAZIRLANIYOR' : 'CANLI'
+  const syncLabel = roomSyncLabel(room)
 
   return (
     <article className={`${mobile ? 'mobile-room-card' : 'social-room-card'} ${room.viewerRole ? 'is-active' : ''} ${ownerOffline ? 'is-owner-offline' : ''} ${unavailable ? 'is-unavailable' : ''}`}>
       <Cover index={room.cover} className={mobile ? 'mobile-room-cover' : 'social-room-cover'} label="" />
       <span className={mobile ? 'mobile-room-live' : 'social-room-live'}><i />{statusLabel}</span>
       <b>{room.title}</b>
-      <small>{room.memberCount}/{room.maxMembers} kişi • {playbackLabel}</small>
+      <small>{room.memberCount}/{room.maxMembers} kişi • {playbackLabel}{syncLabel ? ` • ${syncLabel}` : ''}</small>
       <span className={mobile ? 'mobile-room-members' : 'social-room-members'}>
         {room.memberInitials.slice(0, 3).map((initials, index) => (
           <i key={`${room.id}-${initials}-${index}`}>{initials}</i>

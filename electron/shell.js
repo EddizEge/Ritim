@@ -38,6 +38,35 @@ const roomMessageInput = document.getElementById('room-message-input')
 let socialState = null
 let selectedUserId = ''
 let peopleQuery = ''
+let appearancePreferences = { theme: 'system', density: 'comfortable', motion: 'system', artwork: 'full' }
+const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+const appearanceValues = {
+  theme: new Set(['system', 'dark', 'black']),
+  density: new Set(['comfortable', 'compact']),
+  motion: new Set(['system', 'reduced']),
+  artwork: new Set(['full', 'reduced', 'hidden']),
+}
+
+function applyAppearancePreferences(value = {}) {
+  appearancePreferences = {
+    theme: appearanceValues.theme.has(value.theme) ? value.theme : 'system',
+    density: appearanceValues.density.has(value.density) ? value.density : 'comfortable',
+    motion: appearanceValues.motion.has(value.motion) ? value.motion : 'system',
+    artwork: appearanceValues.artwork.has(value.artwork) ? value.artwork : 'full',
+  }
+  const root = document.documentElement
+  root.dataset.theme = appearancePreferences.theme
+  root.dataset.resolvedTheme = appearancePreferences.theme === 'system'
+    ? systemThemeQuery.matches ? 'dark' : 'light'
+    : appearancePreferences.theme
+  root.dataset.density = appearancePreferences.density
+  root.dataset.motion = appearancePreferences.motion
+  root.dataset.artwork = appearancePreferences.artwork
+}
+
+systemThemeQuery.addEventListener('change', () => {
+  if (appearancePreferences.theme === 'system') applyAppearancePreferences(appearancePreferences)
+})
 
 function setView(view) {
   const isSocial = view === 'social'
@@ -48,6 +77,17 @@ function setView(view) {
 
 function formatTime(value) {
   return new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(value)
+}
+
+function roomSyncLabel(room) {
+  const summary = room.syncSummary
+  if (!summary) return ''
+  if (summary.status === 'waiting') return 'Senkron bekleniyor'
+  if (summary.status === 'unavailable') return 'Senkron kullanılamıyor'
+  const status = summary.status === 'corrected' ? 'Düzeltildi' : 'Senkron'
+  const roundTrip = Number.isFinite(summary.roundTripMs) ? `${Math.round(summary.roundTripMs)} ms` : ''
+  const drift = Number.isFinite(summary.driftMs) ? `sapma ${Math.round(summary.driftMs)} ms` : ''
+  return [status, roundTrip, drift].filter(Boolean).join(' • ')
 }
 
 function selectedUser() {
@@ -200,6 +240,8 @@ function renderRooms() {
       : room.playback
       ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
       : ownerOffline ? 'Oda sahibi yeniden bağlanıyor' : 'Oynatma bekleniyor'
+    const syncLabel = roomSyncLabel(room)
+    if (syncLabel) playback.textContent += ` • ${syncLabel}`
     card.append(header, title, playback)
     roomsList.append(card)
   }
@@ -335,6 +377,7 @@ for (const button of document.querySelectorAll('.room-reaction-actions button'))
 }
 
 window.ritimShell?.onViewChanged(setView)
+window.ritimShell?.onAppearance(applyAppearancePreferences)
 window.ritimShell?.onSocialState((state) => {
   socialState = state
   render()
@@ -343,5 +386,7 @@ window.ritimShell?.getSocialState().then((state) => {
   socialState = state
   render()
 })
+window.ritimShell?.getAppearance().then(applyAppearancePreferences).catch(() => {})
 window.ritimShell?.setView('music').then(setView)
+applyAppearancePreferences(appearancePreferences)
 render()

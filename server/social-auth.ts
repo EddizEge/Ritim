@@ -49,6 +49,14 @@ export type AuthIdentity = {
   avatarTone: number
 }
 
+export type AccountDevice = {
+  id: string
+  role: DeviceRole
+  name: string
+  lastSeenAt?: string
+  createdAt: string
+}
+
 type LoginInput = GoogleIdentityClaims & {
   deviceKey: string
   deviceRole: DeviceRole
@@ -84,6 +92,7 @@ export type SocialAuthRepository = {
   ) => Promise<AuthIdentity | null>
   revokeSessionFamily: (accountId: string, sessionId: string) => Promise<boolean>
   revokeDevice: (accountId: string, deviceId: string) => Promise<boolean>
+  listDevices: (accountId: string) => Promise<AccountDevice[]>
 }
 
 export type CompanionTicketStore = {
@@ -509,6 +518,31 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
     })
   }
 
+  async function listDevices(accountId: string) {
+    if (!UUID_PATTERN.test(accountId)) return []
+    const result = await pool.query(
+      `select
+        device.public_id,
+        device.device_type,
+        device.display_name,
+        device.last_seen_at,
+        device.created_at
+       from ritim.devices device
+       join ritim.users account on account.id = device.user_id
+       where account.public_id = $1
+         and device.revoked_at is null
+       order by device.last_seen_at desc nulls last, device.created_at desc`,
+      [accountId],
+    )
+    return result.rows.map((row): AccountDevice => ({
+      id: String(row.public_id),
+      role: row.device_type === 'companion' ? 'companion' : 'desktop',
+      name: String(row.display_name),
+      lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : undefined,
+      createdAt: new Date(row.created_at).toISOString(),
+    }))
+  }
+
   return {
     createIdentitySession,
     createCompanionSession,
@@ -516,6 +550,7 @@ export function createPostgresAuthRepository(pool: Pool): SocialAuthRepository {
     resolveAccessSession,
     revokeSessionFamily,
     revokeDevice,
+    listDevices,
   }
 }
 
@@ -794,6 +829,34 @@ export function createSocialAuthService(
     return repository.revokeDevice(identity.accountId, identity.deviceId)
   }
 
+  async function account(identity: AuthIdentity) {
+    return {
+      user: {
+        id: identity.accountId,
+        displayName: identity.displayName,
+        handle: identity.handle,
+        initials: identity.initials,
+        avatarUrl: identity.avatarUrl,
+        avatarTone: identity.avatarTone,
+      },
+      currentDeviceId: identity.deviceId,
+      devices: await repository.listDevices(identity.accountId),
+    }
+  }
+
+  async function revokeOtherDevice(identity: AuthIdentity, deviceId: string) {
+    const normalizedDeviceId = cleanText(deviceId, 100)
+    if (!UUID_PATTERN.test(normalizedDeviceId)) {
+      throw new AuthError(400, 'invalid_device_id', 'Cihaz kimliği geçersiz.')
+    }
+    if (normalizedDeviceId === identity.deviceId) {
+      throw new AuthError(400, 'current_device', 'Bu cihazdan çıkmak için oturumu kapat seçeneğini kullan.')
+    }
+    const revoked = await repository.revokeDevice(identity.accountId, normalizedDeviceId)
+    if (!revoked) throw new AuthError(404, 'device_not_found', 'Cihaz bulunamadı veya zaten kaldırılmış.')
+    return true
+  }
+
   return {
     config,
     exchangeGoogleCode,
@@ -804,6 +867,8 @@ export function createSocialAuthService(
     verifyAccessToken,
     logout,
     revokeCurrentDevice,
+    account,
+    revokeOtherDevice,
   }
 }
 
@@ -828,6 +893,9 @@ export function mountSocialAuthRoutes(
   app: Express,
   service: ReturnType<typeof createSocialAuthService> | undefined,
   config: SocialAuthConfig,
+  events: {
+    onDeviceRevoked?: (accountId: string, deviceId: string) => void
+  } = {},
 ) {
   app.get('/auth/config', (_request, response) => {
     response.json({
@@ -882,6 +950,16 @@ export function mountSocialAuthRoutes(
 
   app.post('/auth/logout', requireAccessToken(async (_request, response, identity) => {
     await service!.logout(identity)
+    events.onDeviceRevoked?.(identity.accountId, identity.deviceId)
+    response.status(204).end()
+  }))
+  app.get('/auth/account', requireAccessToken(async (_request, response, identity) => {
+    response.json(await service!.account(identity))
+  }))
+  app.delete('/auth/devices/:deviceId', requireAccessToken(async (request, response, identity) => {
+    const deviceId = String(request.params.deviceId || '')
+    await service!.revokeOtherDevice(identity, deviceId)
+    events.onDeviceRevoked?.(identity.accountId, deviceId)
     response.status(204).end()
   }))
   app.post('/auth/companion-ticket', requireAccessToken(async (_request, response, identity) => {
@@ -889,6 +967,7 @@ export function mountSocialAuthRoutes(
   }))
   app.delete('/auth/device/current', requireAccessToken(async (_request, response, identity) => {
     await service!.revokeCurrentDevice(identity)
+    events.onDeviceRevoked?.(identity.accountId, identity.deviceId)
     response.status(204).end()
   }))
 }

@@ -133,7 +133,16 @@ async function main() {
     limit: securityConfig.authLimit,
     onLimited: logAbuse,
   }))
-  mountSocialAuthRoutes(app, authService, authConfig)
+  mountSocialAuthRoutes(app, authService, authConfig, {
+    onDeviceRevoked: (accountId, deviceId) => {
+      for (const socket of io.sockets.sockets.values()) {
+        const identity = socket.data.socialIdentity
+        const socketAccountId = identity?.accountId || socket.data.socialAccountId
+        const socketDeviceId = identity?.deviceId || socket.data.socialDeviceId
+        if (socketAccountId === accountId && socketDeviceId === deviceId) socket.disconnect(true)
+      }
+    },
+  })
   app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction) => {
     if (error instanceof Error && /origin reddedildi/i.test(error.message)) {
       response.status(403).json({

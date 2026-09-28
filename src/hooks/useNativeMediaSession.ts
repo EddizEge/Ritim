@@ -2,13 +2,19 @@ import { useEffect, useRef } from 'react'
 import { getTrack } from '../data'
 import { isNativeMobile } from '../mobileConfig'
 import { RitimMedia } from '../nativeMedia'
+import type { AppearanceArtwork } from '../appearancePreferences'
 import type { PlayerActions, PlayerState } from '../types'
 
 const NOTIFICATION_PERMISSION_KEY = 'ritim-notification-permission-requested-v1'
 
-export function useNativeMediaSession(state: PlayerState, actions: PlayerActions, connected: boolean) {
+export function useNativeMediaSession(
+  state: PlayerState,
+  actions: PlayerActions,
+  connected: boolean,
+  artworkMode: AppearanceArtwork,
+) {
   const actionsRef = useRef(actions)
-  const lastUpdateRef = useRef({ trackId: '', playing: false, sentAt: 0 })
+  const lastUpdateRef = useRef({ trackId: '', playing: false, artworkMode: 'full' as AppearanceArtwork, sentAt: 0 })
   actionsRef.current = actions
 
   useEffect(() => {
@@ -34,16 +40,19 @@ export function useNativeMediaSession(state: PlayerState, actions: PlayerActions
     }
     const now = Date.now()
     const previous = lastUpdateRef.current
-    if (previous.trackId === state.trackId && previous.playing === state.isPlaying && now - previous.sentAt < 9000) return
+    if (previous.trackId === state.trackId
+      && previous.playing === state.isPlaying
+      && previous.artworkMode === artworkMode
+      && now - previous.sentAt < 9000) return
     const track = getTrack(state)
-    lastUpdateRef.current = { trackId: state.trackId, playing: state.isPlaying, sentAt: now }
+    lastUpdateRef.current = { trackId: state.trackId, playing: state.isPlaying, artworkMode, sentAt: now }
     void RitimMedia.update({
       title: track.title,
       artist: track.artist,
-      artwork: track.thumbnailUrl,
+      artwork: artworkMode === 'hidden' ? '' : track.thumbnailUrl,
       playing: state.isPlaying,
       position: Math.max(0, Math.round(state.position * 1000)),
       duration: Math.max(0, Math.round(track.duration * 1000)),
     }).catch(() => {})
-  }, [connected, state.catalog, state.isPlaying, state.position, state.trackId])
+  }, [artworkMode, connected, state.catalog, state.isPlaying, state.position, state.trackId])
 }

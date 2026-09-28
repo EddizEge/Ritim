@@ -17,6 +17,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Verify release tag and package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          node -e "require('./electron/version-policy.cjs').assertTagMatchesVersion(process.argv[1], process.argv[2])" "$env:GITHUB_REF_NAME" "$version"
       - run: npm run build
       - name: Build Windows installer and updater metadata
         run: npx electron-builder --config electron-builder.config.cjs --win nsis --publish never
@@ -27,10 +32,11 @@ jobs:
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $releaseVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          $channel = node -p "require('./electron/version-policy.cjs').updateChannel(require('./package.json').version)"
           $assets = @(
             "release/Ritim-Setup-$version.exe"
             "release/Ritim-Setup-$version.exe.blockmap"
-            "release/latest.yml"
+            "release/$channel.yml"
           )
           $releaseFlags = @()
           if ($env:GITHUB_REF_NAME.Contains('-')) {
@@ -54,6 +60,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: npm ci
       - name: Sync Android project
         run: npm run android:sync
@@ -74,9 +83,15 @@ jobs:
         shell: bash
         run: |
           expected_version="$(node -p "require('./package.json').version")"
+          expected_code="$(node -p "require('./electron/version-policy.cjs').androidVersionCode(require('./package.json').version)")"
           actual_version="$(apkanalyzer manifest version-name android/app/build/outputs/apk/debug/app-debug.apk)"
+          actual_code="$(apkanalyzer manifest version-code android/app/build/outputs/apk/debug/app-debug.apk)"
           test "$actual_version" = "$expected_version" || {
             echo "APK version mismatch: expected $expected_version, got $actual_version"
+            exit 1
+          }
+          test "$actual_code" = "$expected_code" || {
+            echo "APK versionCode mismatch: expected $expected_code, got $actual_code"
             exit 1
           }
           expected_certificate="6a5b01605a4a767da6d21e199d805d8ea230c4da01dcc4335bd18891f36c4458"
@@ -85,7 +100,7 @@ jobs:
             echo "apksigner was not found under $ANDROID_HOME/build-tools"
             exit 1
           }
-          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk 'tolower($0) ~ /signer: certificate sha-256 digest/ { print $NF; exit }' | tr -d '\r')"
+          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk 'tolower($0) ~ /^signer( #1)?:? certificate sha-256 digest:/ { print $NF; exit }' | tr -d '\r')"
           test "$actual_certificate" = "$expected_certificate" || {
             echo "APK signing certificate mismatch"
             exit 1
