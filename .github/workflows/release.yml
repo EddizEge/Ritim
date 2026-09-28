@@ -128,7 +128,12 @@ jobs:
             echo "apksigner was not found under $ANDROID_HOME/build-tools"
             exit 1
           }
-          certificate_output="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk)"
+          if ! certificate_output="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk 2>&1)"; then
+            printf '%s\n' "$certificate_output"
+            echo "APK cryptographic signature verification failed"
+            exit 1
+          fi
+          printf '%s\n' "$certificate_output"
           actual_certificate="$(printf '%s\n' "$certificate_output" | awk 'tolower($0) ~ /^signer.* certificate sha-256 digest:/ { print tolower($NF) }' | tr -d '\r' | sort -u)"
           test -n "$actual_certificate" || {
             echo "No APK signer certificate digest was found"
