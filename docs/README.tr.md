@@ -32,16 +32,16 @@ Windows Güvenlik Duvarı ilk bağlantıda Ritim’e yerel ağ izni sorabilir. Y
 
 ## Güncellemeler
 
-Paketli Windows uygulaması açılışta GitHub Releases üzerinde yeni sürüm arar. **Ayarlar → Güncellemeleri kontrol et** ile elle denetleyebilirsin. Güncelleme indirildiğinde **Yeniden başlat ve kur** düğmesi görünür.
+Paketli Windows uygulaması GitHub Releases üzerinde yeni sürüm arar. **Ayarlar → Güncellemeler** ile denetleyebilir, indirmeyi başlatabilir ve hazır paketi **Yeniden başlat ve kur** ile kurabilirsin. Beta sürümleri Beta kanalını kullanır. Eski Alpha'dan Beta 1'e ilk geçiş bir kez elle kurulum gerektirir.
 
-Android uygulaması da açılışta son GitHub sürümünü denetler. Yeni APK varsa indirme sayfasını açar; Android güvenlik modeli gereği kurulumu kullanıcı onaylar.
+Android uygulaması uygun GitHub sürümünü denetler; indirmeyi sistem Download Manager üzerinden takip eder. APK kurulumu kullanıcı onayıyla başlar. Yayın APK'ları kalıcı Ritim sertifikası kullanır; farklı yerel debug sertifikasıyla kurulmuş geliştirme uygulaması bunun üzerine güncellenemez.
 
 ## Geliştirme
 
 Gereksinimler: Node.js 24+, npm, Windows masaüstü paketi için Windows 10/11; Android derlemesi için JDK 21 ve Android SDK 36.
 
 ```powershell
-npm install
+npm ci
 npm run desktop
 ```
 
@@ -65,10 +65,13 @@ Android Ritim ── yerel ağ / Socket.IO ── Windows Ritim ── resmi You
 - PC, Sync V2’de oynatıcı durumunun tek yetkili kaynağıdır; telefon komutları benzersiz kimlikle gönderilir ve PC tarafından onaylanır.
 - Music sayfasındaki köprü yalnızca görünür müzik meta verisini ve oynatıcı durumunu okur.
 - React/Capacitor Android uygulaması yapılandırılmış veriyi yerel bileşenlerle gösterir ve Android MediaSession üzerinden sistem medya kontrollerini yayınlar.
-- GitHub Actions etiketli sürümlerde Windows kurucusunu, `latest.yml` güncelleme bilgisini ve test APK’sını yayınlar.
+- Sosyal özellikler HTTPS/WSS üzerinden Raspberry Pi gateway'ine bağlanır; aynı kişinin PC ve telefonu bir hesabın ayrı cihazlarıdır.
+- GitHub Actions etiketli sürümlerde Windows kurucusunu, kanala göre `latest.yml`/`beta.yml`/`rc.yml` güncelleme bilgisini ve kalıcı sertifikalı Android APK'sını yayınlar.
 
 ## Sınırlar
 
-YouTube Music’in sayfa yapısı Google tarafından değiştirildiğinde köprünün seçicileri güncellenmek zorunda kalabilir. Android sürümü şu anda test için debug imzalı APK üretir; mağaza dağıtımı için ayrı bir üretim anahtarı gerekir. Cihazlar aynı yerel ağda olmalıdır.
+YouTube Music’in sayfa yapısı Google tarafından değiştirildiğinde köprünün seçicileri güncellenmek zorunda kalabilir. Yerel Android derlemesi varsayılan debug imzasını, GitHub yayınları kalıcı Ritim sertifikasını kullanır; build variant adı tek başına imzayı belirlemez. Yerel PC–telefon kumandası aynı erişilebilir ağda çalışır; internet sosyal bağlantısı bu yerel kumandayı bir uzak ağ geçidine dönüştürmez.
+
+Beta 1'in son fiziksel kabul turu kullanıcı kararıyla sonraki aşamaya ertelendi. [Yayın notu](releases/v0.9.1-beta.1.md), [yol haritası](v0.9-roadmap.md) ve [Claude teslim notu](CLAUDE_HANDOFF.md) kapsamı ve bekleyen işleri açıklar.
 
 Ritim bağımsız bir projedir; Google veya YouTube ile bağlantılı, onaylı ya da sponsorlu değildir.
