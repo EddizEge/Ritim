@@ -2,13 +2,15 @@
 
 Belge tarihi: **28 Eylül 2026**. Geliştirici: **Ediz Ege Mercan**.
 Depo: <https://github.com/EddizEge/Ritim>.
-Beta 1 hedefi: <https://github.com/EddizEge/Ritim/releases/tag/v0.9.1-beta.1>.
+Yayınlanan Beta 1: <https://github.com/EddizEge/Ritim/releases/tag/v0.9.1-beta.1>.
 
 Bu belge projenin mevcut durumunu ve geçmiş kararları devreder. Son kullanıcı
 isteği Beta 1'i GitHub'da ön sürüm olarak yayınlamak ve projeyi Claude'a
 teslim etmektir. Son fiziksel kabul turu şimdilik ertelenmiştir; testleri
-tamamlanmış varsayma. Yayın işleminin kesin sonucu için GitHub Release ve
-Actions durumunu kontrol et; belge yayın hazırlığı sırasında yazılmıştır.
+tamamlanmış varsayma. Beta 1, 28 Eylül'de Windows kurucusu ve kalıcı imzalı
+Android APK'sıyla yayınlandı. Yayın kurtarma akışı başarılı; indirilen dört
+varlık, APK kimliği/sürümü/sertifikası ve Windows kanal metadata'sı doğrulandı.
+Yayın kanıtı ve ilk denemedeki doğrulayıcı sorunu Bölüm 15'te kayıtlıdır.
 
 ## 1. İlk okunacaklar ve gerçek kaynaklar
 
@@ -65,7 +67,7 @@ Kullanıcıyla Türkçe, samimi ve net iletişim kur. Geliştirici adı tam olar
 | Alpha 2, 25 Temmuz | Pi, PostgreSQL/Redis, OAuth/OIDC + PKCE, cihaz oturumları, Cloudflare | GitHub ön sürümü `v0.9.0-alpha.2` |
 | Alpha 3, 28 Temmuz | Birebir mesajlar/istekler, bildirimler, engelleme/sessize alma/şikâyet, yeniden bağlanma | Sonraki Alpha 4 kapsamına dahil; ayrı tag varsayma |
 | Alpha 4, 14 Ağustos | 8 kişilik odalar, oynatma zamanı/revision senkronu, sohbet/tepkiler, hata durumları | GitHub ön sürümü `v0.9.0-alpha.4` |
-| Beta 1, Ağustos–Eylül | Hesap/cihaz, ayarlar, gizlilik/bildirim, görünüm, güvenli eşleme, updater ve Hakkında | Teknik sürüm `0.9.1-beta.1`; son fiziksel tur ertelenerek yayın kararı alındı |
+| Beta 1, Ağustos–Eylül | Hesap/cihaz, ayarlar, gizlilik/bildirim, görünüm, güvenli eşleme, updater ve Hakkında | `0.9.1-beta.1`, 28 Eylül'de yayınlandı; son fiziksel tur ertelendi |
 
 Eski Alpha 2/4 etiketleri `0.9.0-alpha.*` olsa da iç uygulama sürümü `0.9.0`
 olarak paketlenmişti. Bu tarihsel tutarsızlık Beta 1'de düzeltildi. Beta'nın
@@ -78,6 +80,9 @@ Dilim 1–5 geliştirmesi bitmiştir. Dilim 6'nın bazı gerçek cihaz/saha kabu
 beklemektedir. Kullanıcı 28 Eylül 2026'da son testin şimdilik yapılmamasını,
 Beta 1'in GitHub'a eklenmesini ve Claude'a devir notu hazırlanmasını istedi.
 Bu, ertelenen testlerin geçtiği veya kararlı sürümün hazır olduğu anlamına gelmez.
+GitHub ön sürümü ve dört yayın varlığı tamamlandı; kararlı kanalın son yayını
+`v0.8.4` olarak kaldı. Bu devir sırasında telefona/PC'ye paket kurulmadı,
+Pi'ye dağıtım veya yeniden başlatma yapılmadı.
 
 | Dilim | Sonuç |
 | --- | --- |
@@ -356,13 +361,15 @@ paket kimliği/kodu/sertifika native katmanda doğrulanır.
 
 28 Eylül 2026'da tüm `.test.cjs`/`.test.ts` dosyaları
 `node --import tsx --test <dosyalar>` ile çalıştırıldı:
-**108 toplam, 105 geçti, 3 atlandı, 0 hata**. Atlananlar canlı gateway auth
+Yayın doğrulayıcısının üç regresyon testi eklendikten sonraki son toplam:
+**111 toplam, 108 geçti, 3 atlandı, 0 hata**. Atlananlar canlı gateway auth
 ve PostgreSQL yeniden başlatma/kalıcılık testleridir; gerekli test URL/token/
 altyapı yapılandırması olmadan bilinçli skip vardır. Canlı yönetici politika
 testi `.test.mjs` ayrıca opt-in'dir, bu yerel turda çalıştırılmadı.
 Web ve sosyal üretim build'i, 18 Electron JS syntax kontrolü, Android sync,
-`assembleDebug` ve `lintDebug` geçti. GitHub CI/yayın sonucu yayın sırasında
-ayrıca doğrulanmalıdır; güncel Actions kaydı nihai kanıttır.
+`assembleDebug` ve `lintDebug` geçti. PR #13 ve #14 CI kontrolleri geçti;
+Windows yayın job'u ve Android kurtarma yayını da başarılı. İndirilen APK
+yerel SDK aracıyla ayrıca doğrulandı. Bu, fiziksel yükseltme testi değildir.
 
 Önceki gerçek kabul kayıtları: eski Windows `0.9.0 → Beta1` installer
 yükseltmesinde 2.185 dosya/331.967.082 bayt verisi korundu; oturum/hesap,
@@ -396,7 +403,7 @@ Standart sıra: çalışma dalı → commit/push → PR → CI → main merge �
 `v0.9.1-beta.1` tag → tag push → `Release` Actions → yayın varlıkları kontrolü.
 Bu devir öncesi geliştirme dalı `agent/v0.9.1-beta1-settings`, son kaynak
 commit'i `a9e619f` ve main'den 12 commit ilerideydi. Devir/yayın belgeleri
-ve sertifika çıktı uyumluluğu buna ek commit olacaktır. Yayın sonrası
+ve sertifika çıktı uyumluluğu buna ek commit'lerle alındı. Yayın sonrası
 aktif dalı/commit'i Git'ten yeniden oku; bu belgeyi hardcoded branch state sayma.
 
 Gerekli varlıklar:
@@ -410,7 +417,49 @@ Actions Node 24, Android JDK 21 kullanır. Windows job release'i açar,
 Android job ardından APK'yı ekler; release sayfasının görünmesi tek başına
 tüm yayın başarıldı demek değildir. Workflow tamamını bekle, indirilen APK'da
 package/version/code/kalıcı SHA-256'yı doğrula, iki dilli notları yayın body'sine
-uygula. Sertifika parser'ı `Signer:` ve `Signer #1` çıktı biçimlerini destekler.
+uygula. Sertifika parser'ı eski, numaralı, SDK aralıklı ve `V2/V3/V3.1 Signer`
+çıktı biçimlerini destekler; tüm gerçek signer kimlikleri aynı beklenen kalıcı
+sertifika olmalıdır. Source Stamp kimliği yayın signer'ı yerine kabul edilmez.
+
+### 28 Eylül yayın kanıtı ve kurtarma kaydı
+
+- Uygulama/yayın kaynakları [PR #13](https://github.com/EddizEge/Ritim/pull/13)
+  ile main'e alındı. Değişmez annotated `v0.9.1-beta.1` tag'inin commit'i
+  `502e9a22a583d4c43c7afcc8457236f42a35335d`.
+- [İlk Release çalışması](https://github.com/EddizEge/Ritim/actions/runs/36361172032)
+  Windows job'unda başarılıydı; Android APK derlendi, fakat sertifika metnini
+  okuma adımı başarısız olduğundan APK yüklenmedi. Tüm ilk çalışmayı başarılı
+  diye sunma.
+- [PR #14](https://github.com/EddizEge/Ritim/pull/14) mevcut tag'in yalnız
+  Android yayını için manuel kurtarma akışını ekledi. İlk kurtarma denemesi
+  de parser'ın gerçek `V2 Signer:` önekini tanımaması nedeniyle durdu.
+- [Tanı çalışması](https://github.com/EddizEge/Ritim/actions/runs/36362300641)
+  gerçek sertifikanın beklenen kalıcı Ritim sertifikası olduğunu gösterdi.
+  İmza anahtarı yanlış değildi; hata anchored metin parser'ındaydı.
+- `d308d0b` bu öneki ve regresyon testini düzeltti. [Başarılı Release kurtarma
+  çalışması](https://github.com/EddizEge/Ritim/actions/runs/36362491299)
+  aynı değişmez tag'i checkout ederek APK'yı derledi, sürüm/kod/sertifika
+  kontrollerini geçirdi ve aynı release'e yükledi. Bu çalışmada Windows job'u
+  mevcut doğru dosyalar korunduğu için bilinçli atlandı.
+- `app.ritim.mobile`, `versionName=0.9.1-beta.1`, `versionCode=90141`,
+  min SDK 24, target SDK 36 ve kalıcı sertifika yerel indirilen APK'da doğrulandı.
+- Dört indirilen dosyanın SHA-256 değerleri GitHub'ın asset digest'leriyle
+  birebir eşleşti. `beta.yml` içindeki sürüm, kurucu adı, bayt sayısı ve SHA-512
+  de indirilen Windows kurucusuyla eşleşti. İki dilli yayın notları uygulandı;
+  prerelease işareti açık, son kararlı release hâlâ `v0.8.4`.
+
+| Yayın dosyası | Bayt | SHA-256 |
+| --- | ---: | --- |
+| `Ritim-Setup-0.9.1-beta.1.exe` | 106617794 | `450738836be27812ddab3243efbd6a5faab8a1ec42829ec4b7604efc13c18e5e` |
+| `Ritim-Setup-0.9.1-beta.1.exe.blockmap` | 112788 | `f4901a155c3991e97db691dd086cf32d82de5f43048a21ac5b9d572c938b6b35` |
+| `beta.yml` | 360 | `ddb884b2ea17f92ad49ddd5d2fcb01529ec269916b0d9b6692e2ab69b7c11d34` |
+| `Ritim-Android-v0.9.1-beta.1.apk` | 30780416 | `c4da35650e1a92b84c0ad6b96939b19091e964e4c81205b0abf616b468c4731d` |
+
+Gelecekte yarım bir yayında tag'i taşımadan Android kurtarması gerekirse güncel
+`Release` workflow'unun manuel `tag` girdisini kullan. Önce kaynak tag/paket
+eşleşmesi ve mevcut Windows varlıkları doğrulanır. Eski `android-package.yml`
+tam yayın yerine tanı artifact'i üretir; varsayılan eski SDK kurulumu da ayrı
+bakım ister. Onu doğrulamasız APK yayınlamak için kullanma.
 
 Kalıcı keystore Actions secret adları `RITIM_ANDROID_KEYSTORE_BASE64`,
 `RITIM_ANDROID_KEYSTORE_PASSWORD`, `RITIM_ANDROID_KEY_ALIAS`,
@@ -438,6 +487,9 @@ Beta2 veya RC kapsamı henüz onaylanmış bir özellik listesi değildir.
 native bildirim ve erişilebilirlik/görsel toparlama; sonra kalan uçtan uca
 kabulü kapatıp `0.9.1` kararlıya geçiş. Mevcut listeyi kullanıcıyla
 netleştirmeden sesli sohbet, feed, ses relay veya farklı mimariye genişletme.
+CI, bazı Actions sürümleri için Node 20/setup-java v4 kullanım ömrü uyarıları
+ve yaklaşan Ubuntu runner geçişi bildiriyor. Bunlar bu yayında hata değildi;
+sonraki bakımda bağımlılıkları kontrollü yenile ve aynı doğrulama matrisini koru.
 
 Teşhis için başlangıç haritası:
 
