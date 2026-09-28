@@ -134,7 +134,7 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$certificate_output"
-          actual_certificate="$(printf '%s\n' "$certificate_output" | awk 'tolower($0) ~ /^signer.* certificate sha-256 digest:/ { print tolower($NF) }' | tr -d '\r' | sort -u)"
+          actual_certificate="$(printf '%s\n' "$certificate_output" | awk 'tolower($0) ~ /^[[:space:]]*(v[0-9]+(\.[0-9]+)?[[:space:]]+)?signer.* certificate sha-256 digest:/ { print tolower($NF) }' | tr -d '\r' | sort -u)"
           test -n "$actual_certificate" || {
             echo "No APK signer certificate digest was found"
             exit 1
