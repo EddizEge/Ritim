@@ -3,12 +3,19 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag whose Android publication needs recovery
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   windows:
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,9 +55,14 @@ jobs:
 
   android:
     needs: windows
+    if: always() && (needs.windows.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.windows.result == 'skipped'))
     runs-on: ubuntu-latest
+    env:
+      RITIM_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -63,6 +75,22 @@ jobs:
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
+      - name: Verify recovery tag and existing Windows release assets
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node -e "require('./electron/version-policy.cjs').assertTagMatchesVersion(process.argv[1], process.argv[2])" "$RITIM_RELEASE_TAG" "$version"
+          channel="$(node -p "require('./electron/version-policy.cjs').updateChannel(require('./package.json').version)")"
+          assets="$(gh release view "$RITIM_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for expected_asset in "Ritim-Setup-$version.exe" "Ritim-Setup-$version.exe.blockmap" "$channel.yml"; do
+            printf '%s\n' "$assets" | grep -Fx -- "$expected_asset" > /dev/null || {
+              echo "Required Windows release asset is missing: $expected_asset"
+              exit 1
+            }
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm ci
       - name: Sync Android project
         run: npm run android:sync
@@ -100,14 +128,20 @@ jobs:
             echo "apksigner was not found under $ANDROID_HOME/build-tools"
             exit 1
           }
-          actual_certificate="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | awk 'tolower($0) ~ /^signer( #1)?:? certificate sha-256 digest:/ { print $NF; exit }' | tr -d '\r')"
+          certificate_output="$("$apksigner_path" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk)"
+          actual_certificate="$(printf '%s\n' "$certificate_output" | awk 'tolower($0) ~ /^signer.* certificate sha-256 digest:/ { print tolower($NF) }' | tr -d '\r' | sort -u)"
+          test -n "$actual_certificate" || {
+            echo "No APK signer certificate digest was found"
+            exit 1
+          }
           test "$actual_certificate" = "$expected_certificate" || {
             echo "APK signing certificate mismatch"
+            echo "Actual signer certificate digest(s): $actual_certificate"
             exit 1
           }
       - name: Attach Android test APK
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk "Ritim-Android-${GITHUB_REF_NAME}.apk"
-          gh release upload "$GITHUB_REF_NAME" "Ritim-Android-${GITHUB_REF_NAME}.apk" --clobber
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Ritim-Android-${RITIM_RELEASE_TAG}.apk"
+          gh release upload "$RITIM_RELEASE_TAG" "Ritim-Android-${RITIM_RELEASE_TAG}.apk" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
