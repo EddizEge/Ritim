@@ -19,9 +19,9 @@ function signerDigests(output) {
   return [...new Set(result.stdout.trim().split(/\r?\n/).filter(Boolean))].sort().join('\n')
 }
 
-test('release verification accepts old, numbered, and SDK-range signer labels', { skip: !awkAvailable }, () => {
+test('release verification accepts old, numbered, SDK-range, and scheme-prefixed signer labels', { skip: !awkAvailable }, () => {
   assert.ok(script)
-  for (const label of ['Signer:', 'Signer #1', 'Signer', 'Signer (minSdkVersion=24, maxSdkVersion=2147483647)']) {
+  for (const label of ['Signer:', 'Signer #1', 'Signer', 'Signer (minSdkVersion=24, maxSdkVersion=2147483647)', 'V2 Signer:', 'V3 Signer #1', 'V3.1 Signer (minSdkVersion=33, maxSdkVersion=2147483647)', '  V2 Signer:']) {
     assert.equal(signerDigests(`${label} certificate SHA-256 digest: ${certificate}\n`), certificate)
   }
   assert.equal(signerDigests(`Signer #1 certificate SHA-256 digest: ${certificate.toUpperCase()}\r\n`), certificate)
