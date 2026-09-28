@@ -32,16 +32,16 @@ Windows Firewall may ask for local-network access on first connection. Allow it 
 
 ## Updates
 
-The packaged Windows app checks GitHub Releases at startup. You can also use **Settings → Check for updates**. When a download is ready, **Restart and install** appears.
+The packaged Windows app checks GitHub Releases. **Settings → Updates** separates checking, downloading, and **Restart and install**. Beta builds use the Beta channel. Moving from the historical Alpha builds to Beta 1 requires one manual installation.
 
-The Android app checks the latest GitHub release at startup as well. When a newer APK is available it opens the download page; Android requires the user to approve installation.
+The Android app selects an eligible GitHub release and tracks its download through the system Download Manager. Installation starts with user approval. Published APKs use Ritim's permanent signing certificate; a locally debug-signed development installation cannot be updated in place with that APK.
 
 ## Development
 
 Requirements: Node.js 24+, npm, Windows 10/11 for Windows packaging, plus JDK 21 and Android SDK 36 for Android builds.
 
 ```powershell
-npm install
+npm ci
 npm run desktop
 ```
 
@@ -65,10 +65,13 @@ Android Ritim ── local network / Socket.IO ── Windows Ritim ── offic
 - The desktop is the sole authoritative Sync V2 state source; phone commands carry unique IDs and receive desktop acknowledgements.
 - The page bridge reads visible music metadata and player state only.
 - The React/Capacitor Android app renders structured data with local UI components and exposes system media controls through Android MediaSession.
-- GitHub Actions publishes the Windows installer, `latest.yml` updater metadata and a test APK for tagged releases.
+- Social features connect to the Raspberry Pi gateway over HTTPS/WSS; a person's PC and phone are separate devices on the same account.
+- GitHub Actions publishes the Windows installer, channel-specific `latest.yml`/`beta.yml`/`rc.yml` metadata, and a permanently signed Android APK for tagged releases.
 
 ## Limitations
 
-If Google changes YouTube Music’s page structure, the bridge selectors may need an update. The Android build currently produces a debug-signed test APK; store distribution requires a dedicated release key. Both devices must be reachable on the same local network.
+If Google changes YouTube Music’s page structure, the bridge selectors may need an update. Local Android builds default to a debug certificate; GitHub releases use Ritim's permanent certificate. The build variant name alone does not identify the signer. The PC and phone must be reachable on the same local network for local remote control; the social gateway does not relay that LAN connection.
+
+At the user's request, Beta 1's final physical acceptance round is deferred. See the [release notes](releases/v0.9.1-beta.1.md), [roadmap](v0.9-roadmap.md), and [Claude handoff](CLAUDE_HANDOFF.md) for the scope and remaining work.
 
 Ritim is an independent project and is not affiliated with, endorsed by, or sponsored by Google or YouTube.
