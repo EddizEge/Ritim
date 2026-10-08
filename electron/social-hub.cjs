@@ -22,6 +22,15 @@ function objectPayload(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
+// "Listening together" follows the viewer's room membership, which is durable
+// in PostgreSQL. The Redis listening key expires after two minutes and used to
+// clear this flag while the membership stayed, so the toggle then left the room.
+function listeningTargetForViewer(viewerRooms, viewerAccess) {
+  const ownerId = viewerRooms.find((room) => room.viewerRole === 'listener')?.ownerId
+  if (!ownerId || viewerAccess?.get(ownerId)?.listening === false) return undefined
+  return ownerId
+}
+
 function sanitizeTrack(track) {
   if (!track || !cleanText(track.title, 160)) return undefined
   return {
@@ -112,6 +121,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   const reports = []
   const knownProfiles = new Map()
   let emitChain = Promise.resolve()
+  let pendingEmit = null
 
   function conversationKey(leftId, rightId) {
     return [leftId, rightId].sort().join(':')
@@ -569,9 +579,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         blockedUsers,
         reportSummary: reportSummaries.get(accountId) || { total: 0, recent: [] },
         selectedUserId: users[0]?.id || '',
-        listeningWithUserId: accountAccess.get(selectedListening.get(accountId))?.listening === false
-          ? undefined
-          : selectedListening.get(accountId),
+        listeningWithUserId: listeningTargetForViewer(publicRooms, accountAccess),
         activeRoomId: publicRooms.find((socialRoom) => socialRoom.viewerRole)?.id,
       })
     }
@@ -605,11 +613,20 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return false
   }
 
+  // At most one state broadcast waits behind the running one. Every caller that
+  // arrives before it starts shares it, because it will read their change; a
+  // burst of events no longer queues one full broadcast per event.
   function scheduleEmit() {
-    emitChain = emitChain
-      .then(() => emitAllStates())
+    if (pendingEmit) return pendingEmit
+    const queued = emitChain
+      .then(() => {
+        pendingEmit = null
+        return emitAllStates()
+      })
       .catch((error) => console.error('[Ritim Social] Durum yayınlanamadı:', error))
-    return emitChain
+    pendingEmit = queued
+    emitChain = queued
+    return queued
   }
 
   function safely(label, handler) {
@@ -1531,4 +1548,4 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   return { attach, emitAllStates: scheduleEmit, close }
 }
 
-module.exports = { createSocialHub, summarizeRoomSyncResult }
+module.exports = { createSocialHub, listeningTargetForViewer, summarizeRoomSyncResult }
