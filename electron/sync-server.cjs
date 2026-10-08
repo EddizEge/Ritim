@@ -19,6 +19,16 @@ function safeRoom(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24)
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+// Socket.IO hands handlers any JSON value a peer sends. Destructuring null or a
+// primitive would throw an uncaught exception in the Electron main process.
+function objectPayload(value) {
+  return isPlainObject(value) ? value : {}
+}
+
 function startSyncServer(distPath, port = 8787, {
   pairingToken = '',
   getSocialCompanionTicket,
@@ -94,7 +104,8 @@ function startSyncServer(distPath, port = 8787, {
   }
 
   io.on('connection', (socket) => {
-    socket.on('room:join', ({ room, role, state, token }) => {
+    socket.on('room:join', (payload) => {
+      const { room, role, state, token } = objectPayload(payload)
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom) return
       const remoteAddress = socket.handshake.address
@@ -112,9 +123,10 @@ function startSyncServer(distPath, port = 8787, {
 
       const existing = rooms.get(normalizedRoom)
       if (!existing && normalizedRole === 'desktop') {
-        const revision = Math.max(0, Number(state?.syncRevision) || 0)
+        const initialState = objectPayload(state)
+        const revision = Math.max(0, Number(initialState.syncRevision) || 0)
         rooms.set(normalizedRoom, {
-          state: { ...state, syncRevision: revision, syncedAt: Date.now() },
+          state: { ...initialState, syncRevision: revision, syncedAt: Date.now() },
           revision,
           desktopSocketId: socket.id,
         })
@@ -127,7 +139,8 @@ function startSyncServer(distPath, port = 8787, {
       emitRoomStatus(normalizedRoom)
     })
 
-    socket.on('room:request-state', ({ room }) => {
+    socket.on('room:request-state', (payload) => {
+      const { room } = objectPayload(payload)
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom || socket.data.room !== normalizedRoom) return
       const record = rooms.get(normalizedRoom)
@@ -135,9 +148,11 @@ function startSyncServer(distPath, port = 8787, {
       socket.emit('room:status', roomStatus(normalizedRoom))
     })
 
-    socket.on('player:update', ({ room, state }) => {
+    socket.on('player:update', (payload) => {
+      const { room, state } = objectPayload(payload)
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom || socket.data.room !== normalizedRoom || socket.data.role !== 'desktop') return
+      if (!isPlainObject(state)) return
       const previous = rooms.get(normalizedRoom)
       const revision = (previous?.revision || 0) + 1
       const authoritativeState = { ...state, syncRevision: revision, syncedAt: Date.now() }
@@ -145,7 +160,8 @@ function startSyncServer(distPath, port = 8787, {
       socket.to(normalizedRoom).emit('player:state', authoritativeState)
     })
 
-    socket.on('player:command', ({ room, command }) => {
+    socket.on('player:command', (payload) => {
+      const { room, command } = objectPayload(payload)
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom || socket.data.room !== normalizedRoom || socket.data.role !== 'companion') return
       const normalizedCommand = normalizeCommand(command)

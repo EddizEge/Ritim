@@ -16,6 +16,12 @@ function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
 }
 
+// Clients can send any JSON value; handlers that destructure their payload
+// synchronously must never see null or a primitive.
+function objectPayload(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
 function sanitizeTrack(track) {
   if (!track || !cleanText(track.title, 160)) return undefined
   return {
@@ -607,10 +613,18 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   }
 
   function safely(label, handler) {
+    const report = (error) => console.error(`[Ritim Social] ${label}:`, error)
     return (...args) => {
-      Promise.resolve(handler(...args)).catch((error) => {
-        console.error(`[Ritim Social] ${label}:`, error)
-      })
+      let result
+      try {
+        result = handler(...args)
+      } catch (error) {
+        // A synchronous throw inside a Socket.IO listener would otherwise
+        // become an uncaught exception and stop the gateway for everyone.
+        report(error)
+        return
+      }
+      Promise.resolve(result).catch(report)
     }
   }
 
@@ -1345,8 +1359,9 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:clock:ping', ({ requestId, clientSentAtMs } = {}, acknowledge) => {
+    socket.on('social:clock:ping', (payload, acknowledge) => {
       if (typeof acknowledge !== 'function') return
+      const { requestId, clientSentAtMs } = objectPayload(payload)
       if (!socket.data.socialAccountId || !eventAllowed(socket, 'clock-ping', 30, 60_000)) {
         acknowledge({ ok: false })
         return
