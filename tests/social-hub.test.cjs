@@ -3,7 +3,58 @@ const { createServer } = require('node:http')
 const test = require('node:test')
 const { Server } = require('socket.io')
 const { io: createClient } = require('socket.io-client')
-const { createSocialHub, summarizeRoomSyncResult } = require('../electron/social-hub.cjs')
+const { createSocialHub, listeningTargetForViewer, summarizeRoomSyncResult } = require('../electron/social-hub.cjs')
+
+test('birlikte dinleme işareti kalıcı oda üyeliğinden gelir, süresi dolan Redis anahtarından değil', () => {
+  // PostgreSQL modunda üyelik kalıcıdır; Redis dinleme anahtarı 120 sn sonra
+  // silinse de dinleyici odada kalır ve işaret görünmeye devam etmelidir.
+  const rooms = [
+    { id: 'room-a', ownerId: 'owner-a', viewerRole: undefined },
+    { id: 'room-b', ownerId: 'owner-b', viewerRole: 'listener' },
+  ]
+  assert.equal(listeningTargetForViewer(rooms, new Map()), 'owner-b')
+  assert.equal(listeningTargetForViewer(rooms, undefined), 'owner-b')
+  assert.equal(
+    listeningTargetForViewer(rooms, new Map([['owner-b', { profile: true, listening: false }]])),
+    undefined,
+    'sahibin dinleme görünürlüğü kapalıysa hedef gösterilmez',
+  )
+  assert.equal(listeningTargetForViewer([{ id: 'own', ownerId: 'viewer', viewerRole: 'owner' }], new Map()), undefined)
+  assert.equal(listeningTargetForViewer([], new Map()), undefined)
+})
+
+test('art arda istenen durum yayınları tek yayında birleşir', async (context) => {
+  const httpServer = createServer()
+  const io = new Server(httpServer, { cors: { origin: true } })
+  const hub = createSocialHub(io)
+  io.on('connection', (socket) => hub.attach(socket))
+  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+  const client = createClient(`http://127.0.0.1:${httpServer.address().port}`, { transports: ['websocket'], reconnection: false })
+  context.after(async () => {
+    client.close()
+    hub.close()
+    await io.close()
+  })
+  await new Promise((resolve) => client.once('connect', resolve))
+  let received = 0
+  const firstState = new Promise((resolve) => client.once('social:state', resolve))
+  client.emit('social:join', {
+    accountId: 'emit-coalescing-account',
+    deviceId: 'emit-coalescing-desktop',
+    deviceRole: 'desktop',
+    profile: { displayName: 'Yayın Birleştirme' },
+  })
+  await firstState
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  client.on('social:state', () => { received += 1 })
+
+  // Before coalescing every call queued its own full broadcast (20 here).
+  const pending = Array.from({ length: 20 }, () => hub.emitAllStates())
+  await Promise.all(pending)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.ok(received >= 1, 'en az bir durum yayını gelmeli')
+  assert.ok(received <= 2, `20 istek en fazla 2 yayına inmeli, gelen: ${received}`)
+})
 
 function profile(id, displayName, deviceRole) {
   return {
