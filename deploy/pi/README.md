@@ -110,6 +110,15 @@ uca doğrulama için `RITIM_AUTH_REQUIRED=false` ile başlatılan gateway'e kar�
 `RITIM_SOCIAL_TEST_URL=<adres> node --test tests/social-gateway-message-requests.test.cjs`
 çalıştırılabilir; üretim gateway'ine bu test yöneltilmez.
 
+CI'daki `social-gateway` işi aynı opt-in testleri her çalıştırmada geçici
+PostgreSQL 17 + Redis 7 container'larına karşı koşar:
+`bash deploy/ci/social-gateway-e2e.sh`. Betik bu klasördeki `init` geçişlerini
+sıfır veritabanına uygular, 020+ geçişlerini bir kez daha uygulayarak
+tekrar çalıştırılabilirliği denetler, tokensız ve kimlik zorunlu iki gateway
+başlatır; kimlik testinin tokenı sahte bir Google kimliğiyle test içinde
+üretilir. Tüm parolalar çalıştırma başına rastgeledir; Docker kurulu bir
+geliştirme makinesinde de çalışır ve yalnız kendi container/süreçlerini kapatır.
+
 `RITIM_AUTH_REQUIRED=true` yalnızca PC ve Android istemcileri Ritim access
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.
@@ -134,6 +143,9 @@ alarak aynı Ritim hesabına bağlanır.
   hız sınırları ve kimlik doğrulaması ile korunur.
 - Cloudflare rotasında `RITIM_TRUST_PROXY=1` kullanılır; gateway yine
   `0.0.0.0` üzerinde host'a yayınlanmaz.
+- HTTP ve Socket.IO hız sınırları istemci adresini aynı kuralla bulur:
+  Express `trust proxy` hop sayısı kadar `X-Forwarded-For` sağdan atlanır.
+  `RITIM_TRUST_PROXY=0` iken bu başlık ve `CF-Connecting-IP` yok sayılır.
 
 ## Veri yerleşimi
 
