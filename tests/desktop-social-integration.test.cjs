@@ -1,0 +1,108 @@
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const test = require('node:test')
+
+const root = path.join(__dirname, '..')
+const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8')
+
+function slice(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker)
+  const end = source.indexOf(endMarker, start + startMarker.length)
+  assert.notEqual(start, -1, startMarker)
+  assert.notEqual(end, -1, endMarker)
+  return source.slice(start, end)
+}
+
+test('PC Sosyal görünümü ayrı, yalıtılmış ve kendi preloadu olan bir renderer', () => {
+  const mainSource = read('electron', 'main.cjs')
+  const view = slice(mainSource, 'function ensureSocialView()', 'function setShellView(')
+  assert.match(view, /contextIsolation: true/)
+  assert.match(view, /nodeIntegration: false/)
+  assert.match(view, /sandbox: true/)
+  assert.match(view, /partition: SOCIAL_PARTITION/)
+  assert.match(view, /preload: path\.join\(__dirname, 'social-preload\.cjs'\)/)
+  assert.match(view, /setWindowOpenHandler\([\s\S]*isExternalWebUrl\(url\)[\s\S]*shell\.openExternal\(url\)[\s\S]*action: 'deny'/)
+  assert.match(view, /'will-navigate'[\s\S]*isSocialPageUrl\(url, SOCIAL_PAGE_URL\)[\s\S]*preventDefault/)
+  assert.match(view, /'will-redirect'[\s\S]*preventDefault/)
+  assert.doesNotMatch(view, /persist:ritim-youtube-music/)
+
+  const shellView = slice(mainSource, 'function setShellView(', 'function broadcastAppearancePreferences(')
+  assert.match(shellView, /musicView\?\.setVisible\(activeShellView === 'music'\)/)
+  assert.match(shellView, /socialView\?\.setVisible\(activeShellView === 'social'\)/)
+
+  assert.match(mainSource, /protocol\.registerSchemesAsPrivileged\(\[socialSchemePrivileges\(\)\]\)/)
+  const sessionSetup = slice(mainSource, 'function configureSocialSession()', 'function ensureSocialView()')
+  assert.match(sessionSetup, /setPermissionRequestHandler\(\(_webContents, _permission, callback\) => callback\(false\)\)/)
+  assert.match(sessionSetup, /socialSession\.protocol\.handle\(SOCIAL_SCHEME/)
+  assert.match(mainSource, /partition: 'persist:ritim-youtube-music'/)
+})
+
+test('sosyal IPC yalnız Sosyal görünümün ana çerçevesinden kabul edilir', () => {
+  const mainSource = read('electron', 'main.cjs')
+  const trust = slice(mainSource, 'function isTrustedSocialSender(event)', 'function isMusicAuthUrl(')
+  assert.match(trust, /event\.sender === socialView\.webContents/)
+  assert.match(trust, /senderFrame === event\.sender\.mainFrame/)
+  assert.match(trust, /isSocialPageUrl\(senderFrame\?\.url, SOCIAL_PAGE_URL\)/)
+  for (const channel of ['social:get-state', 'social:get-appearance', 'social:action']) {
+    const handler = slice(mainSource, `ipcMain.handle('${channel}'`, '\n  })')
+    assert.match(handler, /isTrustedSocialSender\(event\)/, channel)
+  }
+  const settingsAction = slice(mainSource, "ipcMain.on('settings:social-action'", '\n  })')
+  assert.match(settingsAction, /isTrustedSettingsSender\(event\)/)
+  assert.match(settingsAction, /settingsSocialActions\.has\(selected\.type\)/)
+  assert.doesNotMatch(mainSource, /ipcMain\.on\('shell:social-action'/)
+  assert.doesNotMatch(mainSource, /'shell:get-social-state'/)
+  assert.doesNotMatch(mainSource, /'shell:social-state'/)
+
+  const handler = slice(mainSource, 'const handleSocialAction = async (type, payload) => {', "ipcMain.on('settings:open'")
+  assert.match(handler, /normalizeSocialAction\(type, payload\)/)
+  assert.match(handler, /socialActionBridge\.emit\(action\)/)
+  assert.doesNotMatch(handler, /socialSocket\.emit/)
+})
+
+test('ana süreç oda senkronu, bildirimler ve oturum akışı yerinde kalır', () => {
+  const mainSource = read('electron', 'main.cjs')
+  const stateHandler = slice(mainSource, "socialSocket.on('social:state', (state) => {", '\n  })')
+  assert.match(stateHandler, /broadcastSocialState\('online', state\)/)
+  assert.match(stateHandler, /publishOwnedRoomPlayback\(\)/)
+  assert.match(stateHandler, /applyJoinedRoomPlayback\(state\)/)
+  assert.match(stateHandler, /measureSocialClock\(\)/)
+  const broadcast = slice(mainSource, 'function broadcastSocialState(status, incomingState) {', 'function deliverDesktopSocialNotifications(')
+  assert.match(broadcast, /deliverDesktopSocialNotifications\(previousState, latestSocialState\)/)
+  assert.match(broadcast, /sendToSocialView\('social:state', socialViewState\(\)\)/)
+  assert.match(broadcast, /'shell:social-summary', socialShellSummary\(\)/)
+  const viewState = slice(mainSource, 'function socialViewState() {', 'function socialShellSummary() {')
+  assert.match(viewState, /publicSocialAuthentication\(socialAuthStatus\)/)
+  assert.match(viewState, /socialNotificationsEnabled/)
+  assert.match(mainSource, /socialSocket\.on\('social:error', \(error\) => sendToSocialView\('social:event', sanitizeSocialErrorEvent\(error\)\)\)/)
+})
+
+test('preloadlar token veya soket açmaz; eski sosyal panel kaldırıldı', () => {
+  const socialPreload = read('electron', 'social-preload.cjs')
+  const shellPreload = read('electron', 'shell-preload.cjs')
+  assert.match(socialPreload, /exposeInMainWorld\('ritimSocial'/)
+  assert.match(socialPreload, /invoke\('social:action', \{ type, payload \}\)/)
+  const socialPreloadCode = socialPreload.replace(/\/\/.*$/gm, '')
+  assert.doesNotMatch(socialPreloadCode, /token|socket|safeStorage|ipcRenderer\.send\(/i)
+  assert.doesNotMatch(shellPreload, /sendSocialAction|getSocialState|onSocialState|shell:social-action/)
+  assert.match(shellPreload, /'shell:social-summary'/)
+
+  const shellHtml = read('electron', 'shell.html')
+  const shellJs = read('electron', 'shell.js')
+  assert.doesNotMatch(shellHtml, /social-panel|people-list|message-form|ALPHA/)
+  assert.doesNotMatch(shellJs, /sendSocialAction|renderPeople|renderRooms|ALPHA/)
+  assert.match(shellJs, /renderSocialSummary/)
+  assert.doesNotMatch(read('src', 'components', 'SocialHub.tsx'), /ALPHA\.\d/)
+})
+
+test('Vite iki girişle derler; Android ve Sync için base değişmez', () => {
+  const viteConfig = read('vite.config.ts')
+  assert.match(viteConfig, /index\.html/)
+  assert.match(viteConfig, /desktop-social\.html/)
+  assert.doesNotMatch(viteConfig, /\bbase\s*:/)
+  assert.match(read('desktop-social.html'), /src="\/src\/desktopSocial\/main\.tsx"/)
+  const builder = require('../electron-builder.config.cjs')
+  assert.ok(builder.files.includes('dist/**/*'))
+  assert.ok(builder.files.includes('electron/**/*'))
+})

@@ -49,178 +49,20 @@ button { color: inherit; cursor: pointer; }
 .nav-button svg { width: 15px; }
 .nav-count { display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--accent); font-size: 9px; }
 .status { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: #a7aaae; background: #141618; font-size: 10px; }
-.status i, .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: #5a5e62; }
-.status.is-online i, .eyebrow i { background: #43da78; box-shadow: 0 0 10px rgba(67, 218, 120, .55); }
-.settings-button, .primary-button, .empty-state button, .listen-button {
-  display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid #35383c; border-radius: 9px; background: #1b1d20; font-size: 11px; font-weight: 750;
+.status i { width: 7px; height: 7px; border-radius: 50%; background: #5a5e62; }
+.status.is-online i { background: #43da78; box-shadow: 0 0 10px rgba(67, 218, 120, .55); }
+.settings-button {
+  display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid #35383c; border-radius: 9px; background: #1b1d20; font-size: 11px; font-weight: 750;
 }
-.settings-button { height: 34px; padding: 0 12px; }
-.settings-button:hover, .empty-state button:hover { border-color: #555a60; background: #25282b; }
+.settings-button:hover { border-color: #555a60; background: #25282b; }
 .settings-button svg { width: 16px; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.social-panel {
-  height: calc(100vh - 52px);
-  overflow: auto;
-  padding: 34px clamp(24px, 4vw, 64px) 42px;
-  background:
-    radial-gradient(circle at 14% 0%, rgba(255, 51, 83, .13), transparent 27%),
-    radial-gradient(circle at 90% 17%, rgba(117, 71, 255, .08), transparent 25%),
-    #090a0b;
-}
-.social-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; max-width: 1480px; margin: 0 auto 18px; }
-.eyebrow, .section-kicker { color: #ff6a80; font-size: 9px; font-weight: 850; letter-spacing: 1.5px; }
-.eyebrow { display: flex; align-items: center; gap: 7px; }
-.social-hero h1 { margin: 10px 0 9px; font-size: clamp(34px, 4vw, 58px); line-height: .98; letter-spacing: -2.5px; }
-.social-hero p { margin: 0; color: var(--muted); font-size: 13px; }
-.primary-button { min-height: 44px; padding: 0 18px; border-color: #ff5268; background: linear-gradient(145deg, #fa3150, #d71942); box-shadow: 0 10px 30px rgba(233, 30, 72, .22); }
-.primary-button:hover { filter: brightness(1.08); }
-.primary-button.is-active { border-color: #3ccf72; background: #193824; }
-.primary-button svg { width: 16px; }
-.social-service-note { display: flex; align-items: center; gap: 8px; max-width: 1480px; min-height: 34px; margin: 0 auto 12px; padding: 0 11px; border: 1px solid #2e3235; border-radius: 9px; color: #9ba0a4; background: #111315; font-size: 9px; }
-.social-service-note > i { width: 7px; height: 7px; border-radius: 50%; background: #d6a63f; }
-.social-service-note.is-online > i { background: #43da78; box-shadow: 0 0 9px rgba(67, 218, 120, .45); }
-.social-service-note.is-offline { color: #c9979f; border-color: #4b2e34; background: #181012; }
-.social-service-note.is-offline > i { background: #ff5b6c; }
-.social-service-note button { margin-left: auto; padding: 5px 8px; border: 1px solid #613641; border-radius: 7px; color: #ff8b9a; background: #29151b; font-size: 9px; font-weight: 750; }
-.social-privacy-toolbar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.social-privacy-toolbar label { display: flex; align-items: center; gap: 4px; color: #92979b; font-size: 8px; }
-.social-privacy-toolbar select { height: 24px; padding: 0 19px 0 6px; border: 1px solid #34383d; border-radius: 6px; color: #e0e2e3; background: #191b1e; }
-.social-privacy-toolbar + button { margin-left: 0; }
-
-.social-workspace {
-  display: grid;
-  grid-template-columns: minmax(260px, .9fr) minmax(360px, 1.35fr) minmax(220px, .7fr);
-  min-height: 520px;
-  max-width: 1480px;
-  margin: auto;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  overflow: hidden;
-  background: rgba(15, 16, 18, .92);
-  box-shadow: 0 30px 80px rgba(0,0,0,.25);
-}
-.people-panel, .rooms-panel { padding: 22px; }
-.people-panel { border-right: 1px solid var(--line); }
-.rooms-panel { border-left: 1px solid var(--line); }
-.people-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-.people-panel h2, .rooms-panel h2 { margin: 5px 0 0; font-size: 18px; letter-spacing: -.6px; }
-.online-pill { padding: 6px 8px; border: 1px solid #2c4535; border-radius: 999px; color: #6dde91; background: #14251a; font-size: 9px; white-space: nowrap; }
-.people-search { display: flex; align-items: center; gap: 7px; height: 34px; margin-bottom: 12px; padding: 0 9px; border: 1px solid #303338; border-radius: 9px; color: #74797d; background: #141619; }
-.people-search svg { flex: 0 0 auto; width: 14px; }
-.people-search input { min-width: 0; width: 100%; border: 0; outline: 0; color: #eee; background: transparent; font-size: 9px; }
-.people-list, .rooms-list { display: grid; gap: 8px; }
-.person-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 11px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: transparent;
-}
-.person-card:hover, .person-card.is-active { border-color: #383c41; background: #191b1e; }
-.person-card.is-active { box-shadow: inset 2px 0 var(--accent); }
-.person-select { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0; border: 0; color: inherit; text-align: left; background: transparent; }
-.avatar { position: relative; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: linear-gradient(145deg, #813eeb, #4b32a9); font-size: 12px; font-weight: 850; }
-.avatar img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
-.person-copy { min-width: 0; }
-.person-copy b, .person-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person-copy b { font-size: 12px; }
-.person-copy small { margin-top: 3px; color: var(--muted); font-size: 9px; }
-.reaction-button { width: 31px; height: 31px; border: 1px solid #35383d; border-radius: 9px; color: #ff5a70; background: #1f2023; font-size: 13px; }
-.reaction-button:hover { border-color: #ff536a; background: #2b1b20; }
-
-.chat-panel { position: relative; min-height: 520px; background: linear-gradient(180deg, #121416, #0e1012); }
-.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 45px; text-align: center; }
-.empty-icon { display: grid; place-items: center; width: 68px; height: 68px; border: 1px solid #32353a; border-radius: 22px; color: #656a70; background: #17191c; }
-.empty-icon svg { width: 30px; }
-.empty-state h2 { margin: 19px 0 7px; font-size: 19px; }
-.empty-state p { max-width: 330px; margin: 0 0 19px; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.empty-state button { min-height: 36px; padding: 0 13px; }
-.chat-content { display: grid; grid-template-rows: auto auto 1fr auto; height: 100%; }
-.chat-header { display: flex; align-items: center; gap: 11px; min-height: 72px; padding: 14px 17px; border-bottom: 1px solid var(--line); }
-.chat-header .avatar { width: 40px; height: 40px; }
-.chat-header > span:nth-child(2) { min-width: 0; }
-.chat-header b, .chat-header small { display: block; }
-.chat-header b { font-size: 12px; }
-.chat-header small { margin-top: 3px; color: #55d47f; font-size: 9px; }
-.listen-button { margin-left: auto; min-height: 34px; padding: 0 11px; }
-.listen-button.is-active { border-color: #3f8557; color: #70df96; background: #173220; }
-.block-button { min-height: 34px; padding: 0 9px; border: 1px solid #55343b; border-radius: 9px; color: #e98796; background: #24171a; font-size: 9px; }
-.block-button:hover { border-color: #9a4554; color: #ff9dac; }
-.chat-track { display: grid; grid-template-columns: 40px 1fr; gap: 10px; padding: 12px 17px; border-bottom: 1px solid var(--line); background: #14171a; }
-.track-cover { width: 40px; height: 40px; border-radius: 7px; object-fit: cover; background: linear-gradient(145deg, #37232a, #1d1f22); }
-.track-copy { min-width: 0; }
-.track-copy b, .track-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.track-copy b { font-size: 11px; }
-.track-copy small { margin-top: 4px; color: var(--muted); font-size: 9px; }
-.message-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 18px; }
-.message-bubble { align-self: flex-start; max-width: 75%; padding: 9px 11px 6px; border: 1px solid #30343a; border-radius: 4px 13px 13px 13px; background: #1b1e21; }
-.message-bubble.is-own { align-self: flex-end; border-color: #733445; border-radius: 13px 4px 13px 13px; background: #562333; }
-.message-bubble p { margin: 0; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.message-bubble time { display: block; margin-top: 3px; color: #92969b; font-size: 8px; text-align: right; }
-.message-placeholder { margin: auto; color: #666b70; font-size: 10px; }
-.message-form { display: flex; gap: 8px; padding: 13px; border-top: 1px solid var(--line); }
-.message-form input { flex: 1; min-width: 0; height: 39px; padding: 0 13px; border: 1px solid #34383d; border-radius: 10px; color: white; background: #191b1e; font-size: 11px; }
-.message-form button { display: grid; place-items: center; width: 39px; border: 0; border-radius: 10px; background: var(--accent); }
-.message-form button svg { width: 16px; }
-
-.room-card { padding: 13px; border: 1px solid #303338; border-radius: 12px; background: #181a1d; }
-.room-card.is-owner-offline { border-color: #4b4d50; opacity: .78; }
-.room-card.is-unavailable { border-color: #8b6739; }
-.room-card header { display: flex; align-items: center; justify-content: space-between; }
-.room-card header span { color: #ff6077; font-size: 8px; font-weight: 850; letter-spacing: 1px; }
-.room-card.is-owner-offline header span { color: #a5a8ac; }
-.room-card.is-unavailable header span { color: #f2b15d; }
-.room-card b, .room-card small { display: block; }
-.room-card b { margin-top: 10px; font-size: 11px; }
-.room-card small { margin-top: 4px; color: var(--muted); font-size: 9px; }
-.room-empty { padding: 24px 12px; border: 1px dashed #34373b; border-radius: 12px; color: #74787d; text-align: center; font-size: 10px; line-height: 1.5; }
-.room-chat { position: relative; margin-top: 12px; padding: 12px; border: 1px solid #34373b; border-radius: 12px; background: #131518; }
-.room-chat header span, .room-chat header b, .room-chat header small { display: block; }
-.room-chat header b { font-size: 11px; }
-.room-chat header small { margin-top: 3px; color: var(--muted); font-size: 8px; }
-.room-reaction-actions { display: flex; gap: 5px; margin: 9px 0; }
-.room-reaction-actions button { width: 30px; height: 28px; border: 1px solid #383b3f; border-radius: 7px; background: #202328; font-size: 14px; }
-.room-reaction-stream { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
-.room-reaction-stream span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #3c2027; box-shadow: 0 4px 12px #0008; animation: room-pop .25s ease both; }
-@keyframes room-pop { from { opacity: 0; transform: translateY(7px) scale(.7); } to { opacity: 1; transform: none; } }
-.room-chat-messages { display: grid; gap: 5px; max-height: 150px; overflow-y: auto; }
-.room-chat-messages article { max-width: 88%; padding: 7px 8px; border-radius: 8px 8px 8px 2px; background: #25282c; }
-.room-chat-messages article.is-own { justify-self: end; border-radius: 8px 8px 2px; background: #42232a; }
-.room-chat-messages b { color: #ff8998; font-size: 7px; }
-.room-chat-messages p { margin: 3px 0 0; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
-.room-chat-empty { color: #74787d; font-size: 9px; }
-.room-chat-form { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 6px; margin-top: 9px; padding: 5px; border: 1px solid #34373b; border-radius: 8px; background: #0d0f11; }
-.room-chat-form input { min-width: 0; border: 0; outline: 0; color: #eee; background: transparent; font-size: 9px; }
-.room-chat-form button { border: 0; border-radius: 6px; color: #fff; background: #b83f50; }
-.room-status-note { margin: 8px 0; padding: 8px 9px; border: 1px solid #4b4540; border-radius: 8px; color: #c7b8a8; background: #211e1b; font-size: 9px; line-height: 1.4; }
-.privacy-note { display: flex; gap: 10px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); color: #767a80; }
-.privacy-note svg { flex: 0 0 17px; width: 17px; }
-.privacy-note b, .privacy-note small { display: block; }
-.privacy-note b { color: #aaaeb3; font-size: 10px; }
-.privacy-note small { margin-top: 4px; font-size: 8px; line-height: 1.45; }
-
-@media (max-width: 1100px) {
-  .social-workspace { grid-template-columns: 280px minmax(380px, 1fr); }
-  .rooms-panel { display: none; }
-}
+/* The Social view is a separate renderer (desktop-social.html); this file only
+   styles the app bar that stays above the Music and Social views. */
 
 :root[data-density="compact"] .appbar { gap: 9px; padding-inline: 12px; }
 :root[data-density="compact"] .nav-button { min-width: 76px; padding-inline: 11px; }
-:root[data-density="compact"] .social-panel { padding: 24px clamp(18px, 3vw, 44px) 30px; }
-:root[data-density="compact"] .social-hero { margin-bottom: 12px; }
-:root[data-density="compact"] .social-workspace { min-height: 470px; }
-:root[data-density="compact"] .people-panel,
-:root[data-density="compact"] .rooms-panel { padding: 16px; }
-:root[data-density="compact"] .person-card { padding: 8px; }
-:root[data-density="compact"] .chat-panel { min-height: 470px; }
-:root[data-density="compact"] .chat-header { min-height: 62px; padding-block: 10px; }
-:root[data-density="compact"] .message-list { padding: 13px; }
-:root[data-density="compact"] .room-card { padding: 10px; }
 
 :root[data-motion="reduced"] *,
 :root[data-motion="reduced"] *::before,
@@ -239,10 +81,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   }
 }
 
-:root[data-artwork="reduced"] .track-cover { filter: saturate(.45); opacity: .7; }
-:root[data-artwork="hidden"] .track-cover { display: none; }
-:root[data-artwork="hidden"] .chat-track { grid-template-columns: minmax(0, 1fr); }
-
 :root[data-resolved-theme="black"] {
   color-scheme: dark;
   background: #000;
@@ -251,22 +89,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   --line: #202020;
   --muted: #888;
 }
-:root[data-resolved-theme="black"] body,
-:root[data-resolved-theme="black"] .social-panel { background: #000; }
+:root[data-resolved-theme="black"] body { background: #000; }
 :root[data-resolved-theme="black"] .appbar { border-color: #1d1d1d; background: rgba(0, 0, 0, .98); }
 :root[data-resolved-theme="black"] .status,
-:root[data-resolved-theme="black"] .settings-button,
-:root[data-resolved-theme="black"] .social-service-note,
-:root[data-resolved-theme="black"] .social-workspace,
-:root[data-resolved-theme="black"] .chat-panel,
-:root[data-resolved-theme="black"] .chat-track,
-:root[data-resolved-theme="black"] .room-card,
-:root[data-resolved-theme="black"] .room-chat { background: #050505; }
-:root[data-resolved-theme="black"] .person-card:hover,
-:root[data-resolved-theme="black"] .person-card.is-active,
-:root[data-resolved-theme="black"] .message-form input,
-:root[data-resolved-theme="black"] .people-search,
-:root[data-resolved-theme="black"] .room-chat-form { background: #080808; }
+:root[data-resolved-theme="black"] .settings-button { background: #050505; }
 
 :root[data-resolved-theme="light"] {
   color-scheme: light;
@@ -283,30 +109,4 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 :root[data-resolved-theme="light"] .nav-button:hover { color: #1d2024; background: rgba(0, 0, 0, .035); }
 :root[data-resolved-theme="light"] .nav-button.is-active { color: #17191c; }
 :root[data-resolved-theme="light"] .status,
-:root[data-resolved-theme="light"] .settings-button,
-:root[data-resolved-theme="light"] .empty-state button,
-:root[data-resolved-theme="light"] .listen-button { color: #272b30; background: #f0f1f3; }
-:root[data-resolved-theme="light"] .social-panel { background: radial-gradient(circle at 14% 0%, rgba(255, 51, 83, .11), transparent 27%), radial-gradient(circle at 90% 17%, rgba(117, 71, 255, .07), transparent 25%), #f4f5f6; }
-:root[data-resolved-theme="light"] .social-service-note,
-:root[data-resolved-theme="light"] .social-workspace,
-:root[data-resolved-theme="light"] .chat-panel,
-:root[data-resolved-theme="light"] .chat-track,
-:root[data-resolved-theme="light"] .room-card,
-:root[data-resolved-theme="light"] .room-chat { background: #fff; }
-:root[data-resolved-theme="light"] .people-search,
-:root[data-resolved-theme="light"] .person-card:hover,
-:root[data-resolved-theme="light"] .person-card.is-active,
-:root[data-resolved-theme="light"] .message-bubble,
-:root[data-resolved-theme="light"] .message-form input,
-:root[data-resolved-theme="light"] .room-chat-form,
-:root[data-resolved-theme="light"] .room-chat-messages article { color: #202328; background: #eef0f2; }
-:root[data-resolved-theme="light"] .message-bubble.is-own,
-:root[data-resolved-theme="light"] .room-chat-messages article.is-own { color: #fff; background: #7a2d42; }
-:root[data-resolved-theme="light"] .people-search input,
-:root[data-resolved-theme="light"] .message-form input,
-:root[data-resolved-theme="light"] .room-chat-form input,
-:root[data-resolved-theme="light"] .social-privacy-toolbar select { color: #24282c; }
-:root[data-resolved-theme="light"] .social-privacy-toolbar select { background: #fff; }
-:root[data-resolved-theme="light"] .empty-icon,
-:root[data-resolved-theme="light"] .reaction-button,
-:root[data-resolved-theme="light"] .room-reaction-actions button { background: #eef0f2; }
+:root[data-resolved-theme="light"] .settings-button { color: #272b30; background: #f0f1f3; }

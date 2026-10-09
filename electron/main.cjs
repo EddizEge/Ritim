@@ -1,5 +1,6 @@
-const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Notification, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Notification, protocol, safeStorage, session, shell } = require('electron')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -11,6 +12,22 @@ const { createDevicePreferences } = require('./device-preferences.cjs')
 const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData } = require('./pairing-security.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
+const {
+  createSocialActionBridge,
+  normalizeSocialAction,
+  publicSocialAuthentication,
+  sanitizeSocialErrorEvent,
+  socialBadgeCount,
+} = require('./social-bridge.cjs')
+const {
+  SOCIAL_PARTITION,
+  SOCIAL_SCHEME,
+  createSocialProtocolHandler,
+  isExternalWebUrl,
+  isSocialPageUrl,
+  socialPageUrl,
+  socialSchemePrivileges,
+} = require('./social-page.cjs')
 const { createSocialProfilePublisher } = require('./social-profile-policy.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
@@ -23,10 +40,19 @@ const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
 const LOCAL_SOCIAL_URL = 'http://127.0.0.1:8790'
 const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || (app.isPackaged ? PUBLIC_SOCIAL_URL : LOCAL_SOCIAL_URL)
 const SETTINGS_PAGE_URL = pathToFileURL(path.join(__dirname, 'settings.html')).toString()
+// Packaged builds (or RITIM_SOCIAL_FROM_DIST=1) serve the Social view from dist/;
+// `npm run desktop` uses the Vite development server.
+const SOCIAL_PAGE_FROM_DIST = app.isPackaged || process.env.RITIM_SOCIAL_FROM_DIST === '1'
+const SOCIAL_PAGE_URL = socialPageUrl({
+  isPackaged: SOCIAL_PAGE_FROM_DIST,
+  devServerUrl: process.env.RITIM_DEV_SERVER_URL || undefined,
+})
 const pairingRevealStore = createPairingRevealStore({ ttlMs: 60_000 })
 const socialProfilePublisher = createSocialProfilePublisher()
 let mainWindow
 let musicView
+let socialView
+let socialSessionConfigured = false
 let settingsWindow
 let syncServer
 let presence
@@ -49,13 +75,17 @@ let roomPlaybackApplyChain = Promise.resolve()
 let socialClockEstimate = {}
 let socialClockPingInFlight = false
 let socialClockTimer
-let expectedSocialRoomExitUntil = 0
 let updateController
 let devicePreferences
 let appearanceStore
 let pairingSecurity
 let isShuttingDown = false
 let activeShellView = 'music'
+const socialActionBridge = createSocialActionBridge({ getSocket: () => socialSocket })
+
+// Must run before the app is ready; the scheme is only handled in the Social
+// view's own session (configureSocialSession).
+protocol.registerSchemesAsPrivileged([socialSchemePrivileges()])
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -102,6 +132,14 @@ function isTrustedSettingsSender(event) {
     && senderFrame?.url === SETTINGS_PAGE_URL
 }
 
+function isTrustedSocialSender(event) {
+  if (!socialView || socialView.webContents.isDestroyed()) return false
+  const senderFrame = event?.senderFrame
+  return event.sender === socialView.webContents
+    && senderFrame === event.sender.mainFrame
+    && isSocialPageUrl(senderFrame?.url, SOCIAL_PAGE_URL)
+}
+
 function isMusicAuthUrl(value) {
   try {
     const host = new URL(value).hostname
@@ -132,21 +170,100 @@ function maskedPhoneUrl() {
   return `http://${findLanAddress()}:8787/…?room=${encodeURIComponent(ROOM)}&token=••••••••`
 }
 
-function resizeMusicView() {
-  if (!mainWindow || !musicView || mainWindow.isDestroyed()) return
+function resizeContentViews() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
   const [width, height] = mainWindow.getContentSize()
-  musicView.setBounds({ x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(0, height - APP_BAR_HEIGHT) })
+  const bounds = { x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(0, height - APP_BAR_HEIGHT) }
+  musicView?.setBounds(bounds)
+  socialView?.setBounds(bounds)
+}
+
+function sendToSocialView(channel, payload) {
+  if (!socialView || socialView.webContents.isDestroyed()) return
+  socialView.webContents.send(channel, payload)
+}
+
+// Hidden Social view keeps its React state (selection, drafts) but must not
+// mark conversations read while the user is on the Music tab.
+function socialViewVisible() {
+  return activeShellView === 'social'
+    && Boolean(mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized())
+}
+
+function sendSocialVisibility() {
+  sendToSocialView('social:visibility', socialViewVisible())
+}
+
+function configureSocialSession() {
+  if (socialSessionConfigured) return
+  socialSessionConfigured = true
+  const socialSession = session.fromPartition(SOCIAL_PARTITION)
+  socialSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  socialSession.setPermissionCheckHandler(() => false)
+  if (SOCIAL_PAGE_FROM_DIST) {
+    socialSession.protocol.handle(SOCIAL_SCHEME, createSocialProtocolHandler({
+      distRoot: path.join(__dirname, '..', 'dist'),
+      readFile: (filePath) => fs.promises.readFile(filePath),
+    }))
+  }
+}
+
+// The Social view is created on first use and then kept alive behind the
+// Music view. It renders the shared React DesktopSocialHub and talks to the
+// main-process social socket only through social-preload.cjs.
+function ensureSocialView() {
+  if (socialView) return socialView
+  if (!mainWindow || mainWindow.isDestroyed()) return null
+  configureSocialSession()
+  socialView = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      partition: SOCIAL_PARTITION,
+      preload: path.join(__dirname, 'social-preload.cjs'),
+      spellcheck: false,
+    },
+  })
+  socialView.setBackgroundColor('#090a0a')
+  socialView.setVisible(false)
+  const contents = socialView.webContents
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isExternalWebUrl(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  contents.on('will-navigate', (event, url) => {
+    if (isSocialPageUrl(url, SOCIAL_PAGE_URL)) return
+    event.preventDefault()
+    if (isExternalWebUrl(url)) void shell.openExternal(url)
+  })
+  contents.on('will-redirect', (event, url) => {
+    if (!isSocialPageUrl(url, SOCIAL_PAGE_URL)) event.preventDefault()
+  })
+  contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+    if (isMainFrame) console.error('[Ritim Social] Sosyal görünüm yüklenemedi:', errorCode, errorDescription, validatedUrl)
+  })
+  mainWindow.contentView.addChildView(socialView)
+  resizeContentViews()
+  void contents.loadURL(SOCIAL_PAGE_URL).catch((error) => {
+    console.error('[Ritim Social] Sosyal görünüm açılamadı:', error?.message || error)
+  })
+  return socialView
 }
 
 function setShellView(nextView) {
   activeShellView = nextView === 'social' ? 'social' : 'music'
-  if (musicView) {
-    musicView.setVisible(activeShellView === 'music')
-    if (activeShellView === 'music') resizeMusicView()
+  if (activeShellView === 'social') ensureSocialView()
+  musicView?.setVisible(activeShellView === 'music')
+  socialView?.setVisible(activeShellView === 'social')
+  resizeContentViews()
+  if (activeShellView === 'social' && socialView && !socialView.webContents.isDestroyed()) {
+    socialView.webContents.focus()
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('shell:view-changed', activeShellView)
   }
+  sendSocialVisibility()
   return activeShellView
 }
 
@@ -155,6 +272,7 @@ function broadcastAppearancePreferences(preferences = appearanceStore?.read()) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('shell:appearance', preferences)
   }
+  sendToSocialView('social:appearance', preferences)
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.webContents.send('settings:appearance', preferences)
   }
@@ -324,18 +442,66 @@ function applyJoinedRoomPlayback(state) {
   })
 }
 
+function emptySocialState() {
+  return {
+    currentUser: desktopSocialProfile(),
+    privacy: {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    },
+    currentDeviceCount: 1,
+    companionConnected: false,
+    users: [],
+    rooms: [],
+    roomMessages: {},
+    roomReactions: {},
+    conversations: {},
+    unreadCounts: {},
+    messageRequests: [],
+    notifications: [],
+    notificationPreferences: { messagesEnabled: true, reactionsEnabled: true, deviceEnabled: false },
+    mutedUserIds: [],
+    mutedUsers: [],
+    blockedUsers: [],
+    reportSummary: { total: 0, recent: [] },
+    selectedUserId: '',
+    authentication: socialAuthStatus,
+    connectionStatus: socialConnectionStatus,
+  }
+}
+
+// What the Social view renders: the gateway snapshot, this PC's system
+// notification switch and a token-free authentication summary.
+function socialViewState() {
+  const state = latestSocialState || emptySocialState()
+  return {
+    ...state,
+    notificationPreferences: {
+      ...state.notificationPreferences,
+      deviceEnabled: Boolean(devicePreferences?.read().socialNotificationsEnabled),
+    },
+    authentication: publicSocialAuthentication(socialAuthStatus),
+    connectionStatus: socialConnectionStatus,
+  }
+}
+
+function socialShellSummary() {
+  return {
+    unreadCount: socialBadgeCount(latestSocialState),
+    companionConnected: Boolean(latestSocialState?.companionConnected),
+  }
+}
+
+// Signing in or out must not leave the previous account's conversations on
+// screen until the new session's first snapshot arrives.
+function resetSocialSessionState() {
+  latestSocialState = undefined
+}
+
 function broadcastSocialState(status, incomingState) {
   socialConnectionStatus = status
   const previousState = latestSocialState
   const previous = incomingState || previousState
-  const lostActiveRoom = Boolean(
-    status === 'online'
-    && incomingState
-    && previousState?.activeRoomId
-    && !incomingState.activeRoomId
-  )
-  const expectedRoomExit = lostActiveRoom && expectedSocialRoomExitUntil >= Date.now()
-  if (lostActiveRoom) expectedSocialRoomExitUntil = 0
   latestSocialState = {
     currentUser: previous?.currentUser || desktopSocialProfile(),
     privacy: previous?.privacy || {
@@ -364,14 +530,12 @@ function broadcastSocialState(status, incomingState) {
     selectedUserId: previous?.selectedUserId || '',
     listeningWithUserId: previous?.listeningWithUserId,
     activeRoomId: previous?.activeRoomId,
-    roomNotice: lostActiveRoom && !expectedRoomExit
-      ? 'Dinleme odası kapatıldı veya erişimin kaldırıldı.'
-      : undefined,
     authentication: socialAuthStatus,
     connectionStatus: status,
   }
   if (incomingState) deliverDesktopSocialNotifications(previousState, latestSocialState)
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-state', latestSocialState)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('shell:social-summary', socialShellSummary())
+  sendToSocialView('social:state', socialViewState())
   if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:social-state', latestSocialState)
 }
 
@@ -464,6 +628,8 @@ async function startSocialClient({ forceRefresh = false } = {}) {
     }
   })
   socialSocket.io.on('reconnect_attempt', () => broadcastSocialState('connecting'))
+  socialSocket.on('social:error', (error) => sendToSocialView('social:event', sanitizeSocialErrorEvent(error)))
+  socialSocket.on('social:report-saved', () => sendToSocialView('social:event', { kind: 'report-saved' }))
   socialSocket.on('social:state', (state) => {
     broadcastSocialState('online', state)
     publishOwnedRoomPlayback()
@@ -497,7 +663,7 @@ function createMusicView() {
   })
   mainWindow.contentView.addChildView(musicView)
   musicView.setVisible(true)
-  resizeMusicView()
+  resizeContentViews()
   musicView.webContents.on('did-finish-load', () => {
     void musicView?.webContents.insertCSS(`
       ytmusic-player-bar {
@@ -590,11 +756,14 @@ function createWindow() {
   })
   mainWindow.setMenuBarVisibility(false)
   mainWindow.once('ready-to-show', () => mainWindow.show())
-  mainWindow.on('resize', resizeMusicView)
+  mainWindow.on('resize', resizeContentViews)
+  mainWindow.on('minimize', sendSocialVisibility)
+  mainWindow.on('restore', sendSocialVisibility)
   mainWindow.on('closed', () => {
     musicBridge?.destroy()
     musicBridge = null
     musicView = null
+    socialView = null
     mainWindow = null
   })
   void mainWindow.loadFile(path.join(__dirname, 'shell.html'))
@@ -642,60 +811,63 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     },
   })
 
-  const handleSocialAction = (action = {}) => {
+  const setDesktopSocialNotifications = (enabled) => {
+    const supported = Notification.isSupported()
+    const next = devicePreferences.update({ socialNotificationsEnabled: supported && enabled === true })
+    sendToSocialView('social:state', socialViewState())
+    return { socialNotificationsEnabled: next.socialNotificationsEnabled, supported }
+  }
+
+  // Every renderer request goes through social-bridge.cjs: unknown types and
+  // malformed payloads are rejected before anything reaches the gateway.
+  const handleSocialAction = async (type, payload) => {
+    const action = normalizeSocialAction(type, payload)
+    if (!action.ok) return action
     if (action.type === 'reconnect') {
       broadcastSocialState('connecting')
       if (socialSocket?.connected) publishDesktopSocialProfile({ force: true })
       else void startSocialClient()
-      return
+      return { ok: true }
     }
     if (action.type === 'sign-in') {
-      void socialAuth?.signIn()
-        .then(async () => {
-          socialAuthStatus = await socialAuth.status()
-          await startSocialClient()
-        })
-        .catch((error) => {
-          console.error('[Ritim Social] Google ile giriş tamamlanamadı:', error)
-          broadcastSocialState('offline')
-        })
-      return
+      try {
+        await socialAuth.signIn()
+        socialAuthStatus = await socialAuth.status()
+        resetSocialSessionState()
+        await startSocialClient()
+        return { ok: true }
+      } catch (error) {
+        console.error('[Ritim Social] Google ile giriş tamamlanamadı:', error)
+        broadcastSocialState('offline')
+        return { ok: false, code: 'sign_in_failed' }
+      }
     }
     if (action.type === 'sign-out') {
-      void socialAuth?.signOut().then(async (status) => {
-        socialAuthStatus = status
+      try {
+        socialAuthStatus = await socialAuth.signOut()
+        resetSocialSessionState()
         await startSocialClient()
-      })
-      return
-    }
-    if (!socialSocket?.connected) return
-    const payload = action.payload || {}
-    if (action.type === 'message') socialSocket.emit('social:message', payload)
-    if (action.type === 'room-message') socialSocket.emit('social:room-message', payload)
-    if (action.type === 'room-reaction') socialSocket.emit('social:room-reaction', payload)
-    if (action.type === 'reaction') socialSocket.emit('social:reaction', payload)
-    if (action.type === 'privacy') socialSocket.emit('social:privacy', payload)
-    if (action.type === 'notification-preferences') socialSocket.emit('social:notification-preferences', payload)
-    if (action.type === 'mute') socialSocket.emit('social:mute', payload)
-    if (action.type === 'report') socialSocket.emit('social:report', payload)
-    if (action.type === 'block') socialSocket.emit('social:block', payload)
-    if (action.type === 'listening') {
-      if (latestSocialState?.listeningWithUserId === payload.targetUserId) {
-        expectedSocialRoomExitUntil = Date.now() + 5_000
+        return { ok: true }
+      } catch (error) {
+        console.error('[Ritim Social] Ritim Social oturumu kapatılamadı:', error)
+        return { ok: false, code: 'sign_out_failed' }
       }
-      socialSocket.emit('social:listening', payload)
+    }
+    if (action.type === 'device-notifications') {
+      const result = setDesktopSocialNotifications(action.payload.enabled)
+      return { ok: true, enabled: result.socialNotificationsEnabled, supported: result.supported }
     }
     if (action.type === 'create-room') {
-      if (latestSocialState?.rooms?.some((room) => room.viewerRole === 'owner')) {
-        expectedSocialRoomExitUntil = Date.now() + 5_000
-      }
       const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
-      socialSocket.emit('social:create-room', {
-        ...payload,
-        title: track?.title || 'Ritim PC dinliyor',
-        cover: track?.cover || 0,
+      return socialActionBridge.emit({
+        ...action,
+        payload: {
+          title: track?.title || 'Ritim PC dinliyor',
+          cover: track?.cover || 0,
+        },
       })
     }
+    return socialActionBridge.emit(action)
   }
 
   ipcMain.on('settings:open', createSettingsWindow)
@@ -706,33 +878,33 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     }
     return appearanceStore.read()
   })
-  ipcMain.handle('shell:get-social-state', () => latestSocialState || {
-    currentUser: desktopSocialProfile(),
-    privacy: {
-      profileVisibility: 'everyone',
-      listeningVisibility: 'everyone',
-    },
-    currentDeviceCount: 1,
-    companionConnected: false,
-    users: [],
-    rooms: [],
-    roomMessages: {},
-    roomReactions: {},
-    conversations: {},
-    unreadCounts: {},
-    messageRequests: [],
-    notifications: [],
-    notificationPreferences: { messagesEnabled: true, reactionsEnabled: true, deviceEnabled: false },
-    mutedUserIds: [],
-    mutedUsers: [],
-    blockedUsers: [],
-    reportSummary: { total: 0, recent: [] },
-    selectedUserId: '',
-    authentication: socialAuthStatus,
-    connectionStatus: socialConnectionStatus,
+  ipcMain.handle('shell:get-social-summary', (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('Sosyal özet yalnızca Ritim ana penceresinden okunabilir.')
+    }
+    return socialShellSummary()
   })
-  ipcMain.on('shell:social-action', (_event, action = {}) => handleSocialAction(action))
-  ipcMain.on('settings:social-action', (_event, action = {}) => handleSocialAction(action))
+  ipcMain.handle('social:get-state', (event) => {
+    if (!isTrustedSocialSender(event)) throw new Error('Sosyal durum yalnızca Ritim sosyal görünümünden okunabilir.')
+    return { ...socialViewState(), viewVisible: socialViewVisible() }
+  })
+  ipcMain.handle('social:get-appearance', (event) => {
+    if (!isTrustedSocialSender(event)) throw new Error('Görünüm tercihleri yalnızca Ritim sosyal görünümünden okunabilir.')
+    return appearanceStore.read()
+  })
+  ipcMain.handle('social:action', (event, request) => {
+    if (!isTrustedSocialSender(event)) return { ok: false, code: 'forbidden' }
+    const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
+    return handleSocialAction(selected.type, selected.payload)
+  })
+  // The Settings window keeps its own moderation and preference controls.
+  const settingsSocialActions = new Set(['privacy', 'notification-preferences', 'mute', 'block'])
+  ipcMain.on('settings:social-action', (event, request) => {
+    if (!isTrustedSettingsSender(event)) return
+    const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
+    if (!settingsSocialActions.has(selected.type)) return
+    void handleSocialAction(selected.type, selected.payload)
+  })
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const socialAccount = await socialAuth?.account().catch((error) => ({
@@ -776,11 +948,13 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('settings:revoke-social-device', (_event, deviceId) => socialAuth?.revokeDevice(String(deviceId || '')))
   ipcMain.handle('settings:social-sign-out', async () => {
     socialAuthStatus = await socialAuth.signOut()
+    resetSocialSessionState()
     await startSocialClient()
     return socialAuth.account()
   })
   ipcMain.handle('settings:social-sign-in', async () => {
     socialAuthStatus = await socialAuth.signIn()
+    resetSocialSessionState()
     await startSocialClient()
     return socialAuth.account()
   })
@@ -881,11 +1055,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (!isTrustedSettingsSender(event)) throw new Error('Yetkisiz güncelleme kurma isteği.')
     return updateController?.install() || false
   })
-  ipcMain.handle('settings:set-device-notifications', (_event, enabled) => {
-    const supported = Notification.isSupported()
-    const next = devicePreferences.update({ socialNotificationsEnabled: supported && enabled === true })
-    return { socialNotificationsEnabled: next.socialNotificationsEnabled, supported }
-  })
+  ipcMain.handle('settings:set-device-notifications', (_event, enabled) => setDesktopSocialNotifications(enabled))
 
   createWindow()
   void startSocialClient()
