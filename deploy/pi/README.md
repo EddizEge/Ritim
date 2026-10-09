@@ -134,6 +134,9 @@ alarak aynı Ritim hesabına bağlanır.
   hız sınırları ve kimlik doğrulaması ile korunur.
 - Cloudflare rotasında `RITIM_TRUST_PROXY=1` kullanılır; gateway yine
   `0.0.0.0` üzerinde host'a yayınlanmaz.
+- HTTP ve Socket.IO hız sınırları istemci adresini aynı kuralla bulur:
+  Express `trust proxy` hop sayısı kadar `X-Forwarded-For` sağdan atlanır.
+  `RITIM_TRUST_PROXY=0` iken bu başlık ve `CF-Connecting-IP` yok sayılır.
 
 ## Veri yerleşimi
 
