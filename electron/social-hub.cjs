@@ -33,6 +33,30 @@ function listeningTargetForViewer(viewerRooms, viewerAccess) {
   return ownerId
 }
 
+// "Ediz Ege Mercan" -> "EE": first letters of the first two words.
+function initialsFromDisplayName(displayName) {
+  return String(displayName || '')
+    .split(/\s+/)
+    .map((word) => word.match(/[\p{L}\p{N}]/u)?.[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toLocaleUpperCase('tr')
+}
+
+// "Şükrü Işık" -> "@sukruisik": NFKD splits ç/ğ/ö/ş/ü into a base letter and
+// a mark that is dropped; dotless ı has no decomposition, so it is mapped.
+// Only lowercase ASCII letters and digits are kept.
+function handleFromDisplayName(displayName) {
+  const slug = String(displayName || '')
+    .toLocaleLowerCase('tr')
+    .replace(/ı/g, 'i')
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 30)
+  return slug ? `@${slug}` : ''
+}
+
 function sanitizeTrack(track) {
   if (!track || !cleanText(track.title, 160)) return undefined
   return {
@@ -666,8 +690,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return {
       id: accountId,
       displayName,
-      handle: cleanText(profile.handle, 64) || '@ritim',
-      initials: cleanText(profile.initials, 3).toLocaleUpperCase('tr') || 'R',
+      handle: cleanText(profile.handle, 64) || handleFromDisplayName(displayName) || '@ritim',
+      initials: cleanText(profile.initials, 3).toLocaleUpperCase('tr')
+        || initialsFromDisplayName(displayName)
+        || 'R',
       avatarUrl: cleanText(profile.avatarUrl, 1000) || undefined,
       avatarTone: Math.max(0, Math.min(11, Number(profile.avatarTone) || 0)),
       presence: 'online',
@@ -1563,4 +1589,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   return { attach, emitAllStates: scheduleEmit, close }
 }
 
-module.exports = { createSocialHub, listeningTargetForViewer, summarizeRoomSyncResult }
+module.exports = {
+  createSocialHub,
+  handleFromDisplayName,
+  initialsFromDisplayName,
+  listeningTargetForViewer,
+  summarizeRoomSyncResult,
+}
