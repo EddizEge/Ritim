@@ -1166,10 +1166,16 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     return reactions
   }
 
-  async function loadAccess(accountIds: string[]) {
+  // `ownerKeys` are database account keys of room owners that are not
+  // connected (loadRooms reports an offline owner by that key). Their rules
+  // are returned under the same key so rooms stay private while the owner is
+  // away; a key without a user row gets no rule and callers treat it as hidden.
+  async function loadAccess(accountIds: string[], ownerKeys: string[] = []) {
     const access = new Map<string, Map<string, AccessRule>>()
     if (!accountIds.length) return access
     const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const offlineOwnerKeys = [...new Set(ownerKeys)].filter((ownerKey) => !accountByKey.has(ownerKey))
+    for (const ownerKey of offlineOwnerKeys) accountByKey.set(ownerKey, ownerKey)
     const keys = [...accountByKey.keys()]
     const placeholders = keys.map((_value, index) => `$${index + 1}`).join(', ')
     const users = await pool.query<{
@@ -1222,9 +1228,13 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       if (relationship.kind === 'block') blocked.add(pair)
       else contacts.add(pair)
     }
+    const targetIds = [
+      ...accountIds,
+      ...offlineOwnerKeys.filter((ownerKey) => preferences.has(ownerKey)),
+    ]
     for (const viewerId of accountIds) {
       const rules = new Map<string, AccessRule>()
-      for (const targetId of accountIds) {
+      for (const targetId of targetIds) {
         if (viewerId === targetId) {
           rules.set(targetId, { profile: true, listening: true })
           continue

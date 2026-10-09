@@ -229,11 +229,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     }
   }
 
-  function memoryAccess(accountIds) {
+  // Targets include owners of rooms whose owner is offline, so a room keeps
+  // its owner's privacy and block rules while the owner is away.
+  function memoryAccess(accountIds, targetIds = accountIds) {
     const access = new Map()
     for (const viewerId of accountIds) {
       const rules = new Map()
-      for (const targetId of accountIds) {
+      for (const targetId of new Set([...accountIds, ...targetIds])) {
         const targetPrivacy = privacy.get(targetId) || {
           profileVisibility: 'everyone',
           listeningVisibility: 'everyone',
@@ -404,7 +406,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           [...rooms.values()],
           listening,
           reactions,
-          memoryAccess(accountIds),
+          memoryAccess(accountIds, [...rooms.values()].map((socialRoom) => socialRoom.ownerId)),
           accountIds.map((accountId) => [accountId, privacy.get(accountId) || {
             profileVisibility: 'everyone',
             listeningVisibility: 'everyone',
@@ -416,6 +418,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           memoryModeration(accountIds),
           memoryReportSummaries(accountIds),
         ]
+    const offlineOwnerIds = [...new Set(selectedRooms.map((socialRoom) => socialRoom.ownerId))]
+      .filter((ownerId) => !profiles.has(ownerId))
+    const roomAccess = store && offlineOwnerIds.length
+      ? await store.loadAccess(accountIds, offlineOwnerIds)
+      : access
     const privacyByAccount = new Map(privacyEntries)
     const playbackByRoom = store?.loadRoomPlaybacks
       ? await store.loadRoomPlaybacks(selectedRooms.map((room) => room.id))
@@ -467,11 +474,17 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         )).map(({ targetId: _targetId, ...message }) => message)
         unreadCounts[user.id] = Math.max(0, Number(unread.get(accountId)?.get(user.id)) || 0)
       }
+      const viewerRoomAccess = roomAccess.get(accountId) || new Map()
+      // Unknown access (no rule for the owner) is treated as hidden; a viewer
+      // who already belongs to the room keeps seeing it.
       const visibleRooms = selectedRooms.filter((socialRoom) => (
         socialRoom.ownerId === accountId
+        || (store
+          ? socialRoom.memberIds.includes(accountId)
+          : selectedListening.get(accountId) === socialRoom.ownerId)
         || (
-          accountAccess.get(socialRoom.ownerId)?.profile !== false
-          && accountAccess.get(socialRoom.ownerId)?.listening !== false
+          viewerRoomAccess.get(socialRoom.ownerId)?.profile === true
+          && viewerRoomAccess.get(socialRoom.ownerId)?.listening === true
         )
       ))
       const publicRooms = store
