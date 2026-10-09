@@ -1,14 +1,64 @@
 const assert = require('node:assert/strict')
+const crypto = require('node:crypto')
 const test = require('node:test')
 const { io: createClient } = require('socket.io-client')
 
 const gatewayUrl = process.env.RITIM_SOCIAL_AUTH_TEST_URL
-const accessToken = process.env.RITIM_SOCIAL_AUTH_TEST_ACCESS_TOKEN
-const expectedAccountId = process.env.RITIM_SOCIAL_AUTH_TEST_ACCOUNT_ID
+const providedAccessToken = process.env.RITIM_SOCIAL_AUTH_TEST_ACCESS_TOKEN
+const providedAccountId = process.env.RITIM_SOCIAL_AUTH_TEST_ACCOUNT_ID
+// RITIM_SOCIAL_AUTH_TEST_MINT=true issues the token inside the test for a
+// disposable gateway (CI): it needs the gateway's RITIM_AUTH_JWT_SECRET,
+// RITIM_GOOGLE_CLIENT_IDS and RITIM_DB_* values and must run with
+// `node --import tsx`. Google is replaced by a local fake identity, so no
+// real Google account or secret is involved. Never use it against production.
+const mintToken = process.env.RITIM_SOCIAL_AUTH_TEST_MINT === 'true'
+
+async function mintIdentity() {
+  const { Pool } = require('pg')
+  const auth = require('../server/social-auth.ts')
+  const config = auth.readSocialAuthConfig(process.env)
+  const pool = new Pool({
+    host: process.env.RITIM_DB_HOST,
+    port: Number(process.env.RITIM_DB_PORT || 5432),
+    database: process.env.RITIM_DB_NAME,
+    user: process.env.RITIM_DB_USER,
+    password: process.env.RITIM_DB_PASSWORD,
+    max: 2,
+  })
+  const runId = crypto.randomUUID()
+  try {
+    const service = auth.createSocialAuthService(config, auth.createPostgresAuthRepository(pool), {
+      async exchangeAuthorizationCode() {
+        throw new Error('Bu test authorization code kullanmaz.')
+      },
+      async verifyIdToken(_idToken, clientId) {
+        return {
+          issuer: 'https://ritim.test/gateway-auth',
+          subject: `gateway-auth-${runId}`,
+          audience: clientId,
+          displayName: 'Gateway Kimlik Testi',
+        }
+      },
+    })
+    const tokens = await service.loginWithGoogleIdToken({
+      idToken: 'gateway-auth',
+      clientId: config.googleClientIds[0],
+      deviceKey: `gateway-auth-${runId}-desktop`,
+      deviceName: 'Gateway Kimlik Testi PC',
+      deviceRole: 'desktop',
+    })
+    return { accessToken: tokens.accessToken, expectedAccountId: tokens.user.id }
+  } finally {
+    await pool.end()
+  }
+}
 
 test('auth-required gateway token olmadan reddeder ve doğrulanmış kimliği kullanır', {
-  skip: !gatewayUrl || !accessToken || !expectedAccountId,
+  skip: !gatewayUrl || (!mintToken && (!providedAccessToken || !providedAccountId)),
 }, async (context) => {
+  const { accessToken, expectedAccountId } = mintToken
+    ? await mintIdentity()
+    : { accessToken: providedAccessToken, expectedAccountId: providedAccountId }
   const unauthorized = createClient(gatewayUrl, {
     autoConnect: false,
     transports: ['websocket'],
