@@ -4,6 +4,24 @@ import { io } from 'socket.io-client'
 import type { MobilePairingConfig } from '../mobileConfig'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
 import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
+import {
+  EXPECTED_ROOM_EXIT_MS,
+  SOCIAL_ACK_TIMEOUT_MS,
+  SOCIAL_MESSAGE_MAX_LENGTH,
+  SOCIAL_REPORT_DETAIL_MAX_LENGTH,
+  SOCIAL_REPORT_REASON_MAX_LENGTH,
+  SOCIAL_ROOM_MESSAGE_MAX_LENGTH,
+  SOCIAL_TEXT,
+  isAckHandledSocialError,
+  mergeIncomingSocialSnapshot,
+  messageAckFeedback,
+  roomMembershipFeedback,
+  socialErrorText,
+  socialFeedback,
+  type ExpectedRoomExit,
+  type SocialAckResult,
+  type SocialSnapshot,
+} from '../social/socialShared'
 import type {
   SocialActions,
   SocialMessageReaction,
@@ -23,8 +41,6 @@ type Options = {
   isCompanion: boolean
   pairing: MobilePairingConfig
 }
-
-type SocialSnapshot = Omit<SocialState, 'connectionStatus'>
 
 const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
 const DELIVERED_NOTIFICATION_IDS_KEY = 'ritim-social-delivered-notifications-v1'
@@ -59,21 +75,6 @@ function notificationTitle(notification: SocialNotification, actorName: string) 
   if (notification.kind === 'reaction') return `${actorName} mesajına tepki verdi`
   if (notification.kind === 'message_request') return `${actorName} mesaj isteği gönderdi`
   return `${actorName} sana yazdı`
-}
-
-function socialErrorText(code?: string) {
-  if (code === 'rate_limited') return 'Çok hızlı işlem yaptın. Biraz bekleyip tekrar dene.'
-  if (code === 'message_request_pending') return 'Bu mesaj isteği henüz yanıt bekliyor.'
-  if (code === 'message_request_rejected') return 'Bu kullanıcı mesaj isteğini reddetti.'
-  if (code === 'message_too_long') return 'Mesaj en fazla 500 karakter olabilir.'
-  if (code === 'message_blocked') return 'Bu kullanıcıyla mesajlaşma kullanılamıyor.'
-  if (code === 'room_full') return 'Bu oda dolu; en fazla 8 kişi birlikte dinleyebilir.'
-  if (code === 'room_not_found') return 'Bu dinleme odası artık açık değil.'
-  if (code === 'room_owner') return 'Odanın sahibisin; ayrılmak için odayı kapatabilirsin.'
-  if (code === 'room_owner_offline') return 'Oda sahibinin bilgisayarı çevrimdışı. Bağlandığında tekrar deneyebilirsin.'
-  if (code === 'room_access_denied') return 'Bu dinleme odasına erişimin bulunmuyor.'
-  if (code === 'room_message_too_long') return 'Oda mesajı en fazla 280 karakter olabilir.'
-  return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
 }
 
 async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
@@ -241,7 +242,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const playbackPublishRef = useRef({ roomId: '', revision: 0, signature: '' })
   const activeRoomIdRef = useRef(snapshot.activeRoomId)
   activeRoomIdRef.current = snapshot.activeRoomId
-  const expectedRoomExitRef = useRef({ roomId: '', until: 0 })
+  const expectedRoomExitRef = useRef<ExpectedRoomExit>({ roomId: '', until: 0 })
 
   const joinSocialAccount = useCallback(() => {
     socket.emit('social:join', {
@@ -278,11 +279,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       setConnectionStatus('offline')
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'info',
-          text: 'Sosyal bağlantı kesildi. Müzik ve telefon kumandası çalışmaya devam ediyor.',
-        },
+        feedback: socialFeedback('info', SOCIAL_TEXT.disconnected),
         users: previous.users.map((user) => ({ ...user, presence: 'offline' })),
       }))
     }
@@ -300,63 +297,30 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
       setSnapshot((previous) => {
-        const selected = selectedUserIdRef.current
-        const selectedStillExists = next.users.some((user) => user.id === selected)
-        const lostActiveRoom = Boolean(previous.activeRoomId && !next.activeRoomId)
-        const expectedExit = Boolean(
-          lostActiveRoom
-          && expectedRoomExitRef.current.roomId === previous.activeRoomId
-          && expectedRoomExitRef.current.until >= Date.now()
-        )
-        if (lostActiveRoom && !expectedExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
-        return {
-          ...next,
-          notificationPreferences: {
-            messagesEnabled: next.notificationPreferences?.messagesEnabled !== false,
-            reactionsEnabled: next.notificationPreferences?.reactionsEnabled !== false,
-            deviceEnabled: notificationPreferencesRef.current.deviceEnabled,
-          },
-          mutedUsers: next.mutedUsers || [],
-          reportSummary: next.reportSummary || { total: 0, recent: [] },
-          feedback: lostActiveRoom && !expectedExit
-            ? {
-                id: crypto.randomUUID(),
-                tone: 'info',
-                text: 'Dinleme odası kapatıldı veya erişimin kaldırıldı.',
-              }
-            : previous.feedback,
-          selectedUserId: selectedStillExists ? selected : next.selectedUserId,
-        }
+        const { snapshot: merged, resetExpectedRoomExit } = mergeIncomingSocialSnapshot(previous, next, {
+          selectedUserId: selectedUserIdRef.current,
+          expectedRoomExit: expectedRoomExitRef.current,
+          deviceEnabled: notificationPreferencesRef.current.deviceEnabled,
+          now: Date.now(),
+        })
+        if (resetExpectedRoomExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
+        return merged
       })
     }
     const onSocialError = (error: { code?: string; event?: string }) => {
       // Profil yenileme arka planda gerçekleşir; kullanıcı eylemi değildir.
       // Mesaj hataları da acknowledgement callback'i üzerinden daha doğru
       // biçimde ele alınır ve burada ikinci kez başarı/hata bildirimini ezmez.
-      if (
-        error?.event === 'profile'
-        || error?.event === 'message'
-        || error?.event === 'room-message'
-        || error?.event === 'room-reaction'
-        || error?.event === 'room-membership'
-      ) return
+      if (isAckHandledSocialError(error?.event)) return
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: socialErrorText(error?.code),
-        },
+        feedback: socialFeedback('error', socialErrorText(error?.code)),
       }))
     }
     const onReportSaved = () => {
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'success',
-          text: 'Şikâyet güvenli şekilde kaydedildi.',
-        },
+        feedback: socialFeedback('success', SOCIAL_TEXT.reportSaved),
       }))
     }
 
@@ -453,16 +417,12 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   }, [socket])
 
   const sendMessage = useCallback((userId: string, text: string): Promise<boolean> => {
-    const cleanText = text.trim().slice(0, 500)
+    const cleanText = text.trim().slice(0, SOCIAL_MESSAGE_MAX_LENGTH)
     if (!cleanText) return Promise.resolve(false)
     if (!socket.connected) {
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: 'Mesaj gönderilemedi; Sosyal bağlantısı çevrimdışı.',
-        },
+        feedback: socialFeedback('error', SOCIAL_TEXT.messageOffline),
       }))
       return Promise.resolve(false)
     }
@@ -474,31 +434,21 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         acknowledged = true
         setSnapshot((current) => ({
           ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: 'error',
-            text: 'Sunucu mesajı zamanında onaylamadı. Mesajın taslakta tutuldu.',
-          },
+          feedback: socialFeedback('error', SOCIAL_TEXT.messageTimeout),
         }))
         resolve(false)
-      }, 5_000)
+      }, SOCIAL_ACK_TIMEOUT_MS)
       socket.emit('social:message', {
         targetUserId: userId,
         text: cleanText,
         clientMessageId,
-      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
+      }, (result: SocialAckResult = {}) => {
         if (acknowledged) return
         acknowledged = true
         window.clearTimeout(timeout)
         setSnapshot((current) => ({
           ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: result.ok ? 'success' : 'error',
-            text: result.ok
-              ? (result.duplicate ? 'Mesaj daha önce güvenli şekilde gönderilmiş.' : 'Mesaj sunucuya ulaştı.')
-              : socialErrorText(result.code),
-          },
+          feedback: messageAckFeedback(result),
         }))
         resolve(Boolean(result.ok))
       })
@@ -561,11 +511,10 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: granted ? 'success' : 'info',
-          text: granted ? 'Sistem bildirimleri açıldı.' : 'Sistem bildirimi izni verilmedi.',
-        },
+        feedback: socialFeedback(
+          granted ? 'success' : 'info',
+          granted ? SOCIAL_TEXT.deviceNotificationsOn : SOCIAL_TEXT.deviceNotificationsDenied,
+        ),
       }))
     })()
   }, [])
@@ -579,8 +528,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     if (!socket.connected) return
     socket.emit('social:report', {
       targetUserId: userId,
-      reason: reason.trim().slice(0, 120),
-      detail: detail.trim().slice(0, 2000),
+      reason: reason.trim().slice(0, SOCIAL_REPORT_REASON_MAX_LENGTH),
+      detail: detail.trim().slice(0, SOCIAL_REPORT_DETAIL_MAX_LENGTH),
       messageId,
     })
   }, [socket])
@@ -597,29 +546,19 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const joinRoom = useCallback((roomId: string) => {
     if (!socket.connected) return
     if (activeRoomIdRef.current === roomId) {
-      expectedRoomExitRef.current = { roomId, until: Date.now() + 5_000 }
+      expectedRoomExitRef.current = { roomId, until: Date.now() + EXPECTED_ROOM_EXIT_MS }
     }
-    socket.emit('social:room-membership', { roomId }, (result: {
-      ok?: boolean
-      code?: string
-      status?: 'joined' | 'left'
-    } = {}) => {
+    socket.emit('social:room-membership', { roomId }, (result: SocialAckResult = {}) => {
       if (!result.ok) expectedRoomExitRef.current = { roomId: '', until: 0 }
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: result.ok ? 'success' : 'error',
-          text: result.ok
-            ? (result.status === 'left' ? 'Dinleme odasından ayrıldın.' : 'Dinleme odasına katıldın.')
-            : socialErrorText(result.code),
-        },
+        feedback: roomMembershipFeedback(result),
       }))
     })
   }, [socket])
 
   const sendRoomMessage = useCallback((roomId: string, text: string): Promise<boolean> => {
-    const message = text.trim().slice(0, 280)
+    const message = text.trim().slice(0, SOCIAL_ROOM_MESSAGE_MAX_LENGTH)
     if (!message || !socket.connected) return Promise.resolve(false)
     return new Promise((resolve) => {
       let acknowledged = false
@@ -628,30 +567,22 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         acknowledged = true
         setSnapshot((current) => ({
           ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: 'error',
-            text: 'Oda mesajı zamanında onaylanmadı; taslağın korunuyor.',
-          },
+          feedback: socialFeedback('error', SOCIAL_TEXT.roomMessageTimeout),
         }))
         resolve(false)
-      }, 5_000)
+      }, SOCIAL_ACK_TIMEOUT_MS)
       socket.emit('social:room-message', {
         roomId,
         text: message,
         clientMessageId: crypto.randomUUID(),
-      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
+      }, (result: SocialAckResult = {}) => {
         if (acknowledged) return
         acknowledged = true
         window.clearTimeout(timeout)
         if (!result.ok) {
           setSnapshot((current) => ({
             ...current,
-            feedback: {
-              id: crypto.randomUUID(),
-              tone: 'error',
-              text: socialErrorText(result.code),
-            },
+            feedback: socialFeedback('error', socialErrorText(result.code)),
           }))
         }
         resolve(Boolean(result.ok))
@@ -661,15 +592,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
 
   const sendRoomReaction = useCallback((roomId: string, reaction: SocialRoomReaction['reaction']) => {
     if (!socket.connected) return
-    socket.emit('social:room-reaction', { roomId, reaction }, (result: { ok?: boolean; code?: string } = {}) => {
+    socket.emit('social:room-reaction', { roomId, reaction }, (result: SocialAckResult = {}) => {
       if (result.ok) return
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: socialErrorText(result.code),
-        },
+        feedback: socialFeedback('error', socialErrorText(result.code)),
       }))
     })
   }, [socket])
