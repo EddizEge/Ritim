@@ -6,6 +6,7 @@ import type { SocialActions, SocialState } from '../social/types'
 import { useAppearance } from '../appearanceContext'
 import type { AppearanceArtwork, AppearanceDensity, AppearanceMotion, AppearanceTheme } from '../appearancePreferences'
 import { isNativeMobile } from '../mobileConfig'
+import { ritimReleaseLabel } from '../versioning'
 import productInfo from '../../shared/product-info.json'
 
 type Props = {
@@ -70,6 +71,7 @@ async function openProductLink(url: string) {
 export function MobileUpdateAboutSettings({ update }: { update: MobileUpdateView }) {
   const [notice, setNotice] = useState('')
   const channelLabels: Record<string, string> = { alpha: 'Alpha', beta: 'Beta', rc: 'RC', latest: 'Kararlı' }
+  const releaseLabel = ritimReleaseLabel(update.currentVersion)
   const lastChecked = update.lastCheckedAt
     ? new Date(update.lastCheckedAt).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })
     : 'Henüz denetlenmedi'
@@ -120,7 +122,7 @@ export function MobileUpdateAboutSettings({ update }: { update: MobileUpdateView
       </section>
 
       <section className="mobile-settings-section mobile-about-section">
-        <header><div><Info /><span><h2>{productInfo.name} hakkında</h2><p>{productInfo.developer} tarafından geliştirildi.</p></span></div><em>Beta 1</em></header>
+        <header><div><Info /><span><h2>{productInfo.name} hakkında</h2><p>{productInfo.developer} tarafından geliştirildi.</p></span></div>{releaseLabel ? <em>{releaseLabel}</em> : null}</header>
         <p className="mobile-about-description">{productInfo.descriptionTr}</p>
         <p className="mobile-about-disclaimer">{productInfo.disclaimerTr}</p>
         <div className="mobile-about-links">

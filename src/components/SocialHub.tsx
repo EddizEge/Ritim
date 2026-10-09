@@ -107,9 +107,20 @@ function matchesSocialQuery(user: SocialUser, query: string) {
 }
 
 function TrackProgress({ track }: { track: SocialTrack }) {
-  const progress = track.duration > 0 ? Math.min(100, Math.max(0, (track.position / track.duration) * 100)) : 0
+  // Profiles arrive at most every 15 s while playing (profilePublishPolicy.ts),
+  // so the bar advances locally from the last reported position.
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    setElapsed(0)
+    if (!track.isPlaying || !(track.duration > 0)) return
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 1000)
+    return () => window.clearInterval(timer)
+  }, [track.id, track.position, track.isPlaying, track.duration])
+  const position = track.duration > 0 ? Math.min(track.duration, track.position + elapsed) : track.position
+  const progress = track.duration > 0 ? Math.min(100, Math.max(0, (position / track.duration) * 100)) : 0
   return (
-    <div className="social-track-progress" aria-label={`${formatTime(track.position)} / ${formatTime(track.duration)}`}>
+    <div className="social-track-progress" aria-label={`${formatTime(position)} / ${formatTime(track.duration)}`}>
       <span style={{ width: `${progress}%` }} />
     </div>
   )

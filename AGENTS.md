@@ -36,7 +36,8 @@ Temel ürün kuralları:
 - Telefon için paketlenmiş senkron sunucusu: `electron/sync-server.cjs`
 - Güncelleme yöneticisi: `electron/updater.cjs`
 - Discord Rich Presence: `electron/discord-presence.cjs`
-- Electron preload: `electron/preload.cjs`
+- Electron preload'ları: ana pencere `electron/shell-preload.cjs`, Ayarlar `electron/settings-preload.cjs`. Masaüstü kabuğu `electron/shell.*`, Ayarlar `electron/settings.*` dosyalarıdır.
+- `electron/preload.cjs` ve `electron/youtube-service.cjs` eski React masaüstü sürümünden kalmıştır; `main.cjs` bunları yüklemez.
 - Masaüstü app id: `app.ritim.desktop`
 - YouTube Music oturum partition'ını ve kalıcı Google oturum davranışını bozma.
 
@@ -137,8 +138,11 @@ Değişikliğe göre ilgili testleri çalıştır; bir release öncesinde mümk�
 node --check electron/main.cjs
 node --check electron/ytmusic-bridge.cjs
 node --check electron/discord-presence.cjs
+npm test
 npm run build
 ```
+
+`npm test` bütün `tests/*.test.{cjs,ts}` dosyalarını koşar; canlı gateway/PostgreSQL isteyen testler ortam değişkeni yoksa bilinçli olarak atlanır.
 
 ### Masaüstü gerçek akış
 
@@ -198,7 +202,9 @@ npm run dist:win
 ## 9. Güncelleyici ve süreç güvenliği
 
 - Ritim güncellemesi sırasında installer'ın "Ritim kapatılamaz" hatasına dönmemesi kritik bir gereksinimdir.
-- `prepareForUpdate()` ve `stopRuntime()` Discord, YouTube köprüsü, yerel sunucu, pencereler ve single-instance lock'u kontrollü kapatır; bu sırayı bozma.
+- `prepareForUpdate()` uygulamayı bilerek açık tutar ve yalnız eşleme gösterimlerini geçersiz kılar; kurucu başlayamazsa Ritim çalışmaya devam eder.
+- Asıl kapanış, electron-updater çıkışı başlatınca `before-quit` → `stopRuntime()` ile olur: sosyal soket, YouTube köprüsü, Discord ve yerel Sync sunucusu sırayla kapanır.
+- Pencereler ve single-instance kilidi `app.quit()` ile bırakılır; NSIS `customCheckAppRunning` makrosu (`build/installer.nsh`) kalan `Ritim.exe`'yi kapatır. Bu sırayı bozma.
 - `git reset --hard`, kullanıcı dosyalarını silme veya ilgisiz süreçleri kapatma.
 - Port kapatırken yalnızca bu testte başlatılan PID'leri hedefle.
 - Kullanıcı oyun oynadığını veya ekranda pencere istemediğini söylerse computer-use, görünür pencere ve odak çalan işlemler kullanma.

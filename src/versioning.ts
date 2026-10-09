@@ -8,6 +8,7 @@ export type RitimVersion = {
 
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/
 const CHANNEL_RANK = { alpha: 0, beta: 1, rc: 2 } as const
+const CHANNEL_LABELS = { alpha: 'Alpha', beta: 'Beta', rc: 'RC' } as const
 
 export function parseRitimVersion(value: string): RitimVersion | null {
   const normalized = String(value || '').trim().replace(/^v/i, '')
@@ -44,6 +45,16 @@ export function compareRitimVersions(leftValue: string, rightValue: string) {
 
 export function isNewerRitimVersion(candidate: string, current: string) {
   return compareRitimVersions(candidate, current) > 0
+}
+
+// Short label for Settings ("Beta 2", "RC 1", "Kararlı"); derived from the
+// package version so it cannot go stale between releases.
+export function ritimReleaseLabel(value: string) {
+  const parsed = parseRitimVersion(value)
+  if (!parsed) return ''
+  return parsed.prerelease
+    ? `${CHANNEL_LABELS[parsed.prerelease.channel]} ${parsed.prerelease.iteration}`
+    : 'Kararlı'
 }
 
 export function acceptsPrereleaseUpdates(current: string) {

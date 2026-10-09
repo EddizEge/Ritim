@@ -79,6 +79,13 @@ function formatTime(value) {
   return new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(value)
 }
 
+// Playback positions are seconds into the track, not timestamps; formatting
+// them with formatTime() showed the 1970 clock time ("02:00") for every room.
+function formatPlaybackPosition(seconds) {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0))
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
+}
+
 function roomSyncLabel(room) {
   const summary = room.syncSummary
   if (!summary) return ''
@@ -238,7 +245,7 @@ function renderRooms() {
     playback.textContent = unavailable
       ? 'Bu parça bu bilgisayarda açılamadı.'
       : room.playback
-      ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatTime(room.playback.playbackPositionMs / 1000)}`
+      ? `${room.playback.playbackState === 'playing' ? 'Çalıyor' : 'Duraklatıldı'} • ${formatPlaybackPosition(room.playback.playbackPositionMs / 1000)}`
       : ownerOffline ? 'Oda sahibi yeniden bağlanıyor' : 'Oynatma bekleniyor'
     const syncLabel = roomSyncLabel(room)
     if (syncLabel) playback.textContent += ` • ${syncLabel}`

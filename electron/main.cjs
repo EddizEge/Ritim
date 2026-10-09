@@ -11,6 +11,7 @@ const { createDevicePreferences } = require('./device-preferences.cjs')
 const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData } = require('./pairing-security.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
+const { createSocialProfilePublisher } = require('./social-profile-policy.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
 const productInfo = require('../shared/product-info.json')
@@ -23,6 +24,7 @@ const LOCAL_SOCIAL_URL = 'http://127.0.0.1:8790'
 const SOCIAL_URL = process.env.RITIM_SOCIAL_URL || (app.isPackaged ? PUBLIC_SOCIAL_URL : LOCAL_SOCIAL_URL)
 const SETTINGS_PAGE_URL = pathToFileURL(path.join(__dirname, 'settings.html')).toString()
 const pairingRevealStore = createPairingRevealStore({ ttlMs: 60_000 })
+const socialProfilePublisher = createSocialProfilePublisher()
 let mainWindow
 let musicView
 let settingsWindow
@@ -194,9 +196,13 @@ function desktopSocialProfile() {
   }
 }
 
-function publishDesktopSocialProfile() {
+function publishDesktopSocialProfile({ force = false } = {}) {
   if (!socialSocket?.connected) return
-  socialSocket.emit('social:profile', { profile: desktopSocialProfile() })
+  const profile = desktopSocialProfile()
+  // The player reports state on every capture; see social-profile-policy.cjs.
+  if (!force && !socialProfilePublisher.shouldPublish(profile)) return
+  socialProfilePublisher.remember(profile)
+  socialSocket.emit('social:profile', { profile })
 }
 
 function publishOwnedRoomPlayback() {
@@ -428,11 +434,13 @@ async function startSocialClient({ forceRefresh = false } = {}) {
   socialSocket.on('connect', () => {
     broadcastSocialState('connecting')
     const identity = desktopSocialIdentity()
+    const profile = desktopSocialProfile()
     socialSocket.emit('social:join', {
       ...identity,
       deviceRole: 'desktop',
-      profile: desktopSocialProfile(),
+      profile,
     })
+    socialProfilePublisher.remember(profile)
     measureSocialClock()
   })
   socialSocket.on('disconnect', () => {
@@ -637,7 +645,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   const handleSocialAction = (action = {}) => {
     if (action.type === 'reconnect') {
       broadcastSocialState('connecting')
-      if (socialSocket?.connected) publishDesktopSocialProfile()
+      if (socialSocket?.connected) publishDesktopSocialProfile({ force: true })
       else void startSocialClient()
       return
     }
