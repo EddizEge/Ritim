@@ -4,6 +4,7 @@ import {
   acceptsPrereleaseUpdates,
   compareRitimVersions,
   isNewerRitimVersion,
+  ritimReleaseLabel,
 } from '../src/versioning'
 import {
   githubReleasesApiUrl,
@@ -73,4 +74,12 @@ test('mobil güncelleme yalnız kanonik GitHub APK varlığını kabul eder', ()
   assert.equal(safeMobileUpdateAssetUrl('https://evil.example/Ritim.apk', 'EddizEge/Ritim'), '')
   assert.equal(safeMobileUpdateAssetUrl('https://github.com/Other/Ritim/releases/download/v1/app.apk', 'EddizEge/Ritim'), '')
   assert.equal(safeMobileUpdateAssetUrl('https://github.com/EddizEge/Ritim/releases/tag/v1', 'EddizEge/Ritim'), '')
+})
+
+test('Ayarlar sürüm etiketi paket sürümünden türetilir', () => {
+  assert.equal(ritimReleaseLabel('0.9.1-beta.2'), 'Beta 2')
+  assert.equal(ritimReleaseLabel('v0.9.1-rc.1'), 'RC 1')
+  assert.equal(ritimReleaseLabel('0.9.1-alpha.4'), 'Alpha 4')
+  assert.equal(ritimReleaseLabel('0.9.1'), 'Kararlı')
+  assert.equal(ritimReleaseLabel('geçersiz'), '')
 })

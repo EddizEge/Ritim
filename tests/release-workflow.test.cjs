@@ -38,6 +38,38 @@ test('release verification ignores source stamps and rejects missing or differen
   assert.equal(signerDigests(output.replaceAll(otherCertificate, certificate)), certificate)
 })
 
+test('release ships a signed, non-debuggable release-variant APK and publishes the draft only after attaching it', () => {
+  assert.match(source, /run: \.\/gradlew assembleRelease/)
+  assert.doesNotMatch(source, /assembleDebug|app-debug\.apk/)
+  assert.match(source, /RITIM_RELEASE_APK: android\/app\/build\/outputs\/apk\/release\/app-release\.apk/)
+  assert.match(source, /apkanalyzer manifest debuggable "\$RITIM_RELEASE_APK"/)
+  assert.match(source, /test "\$actual_debuggable" = "false"/)
+  assert.match(source, /\$releaseFlags = @\('--draft'\)/)
+  assert.match(source, /gh release edit "\$RITIM_RELEASE_TAG" --repo "\$GITHUB_REPOSITORY" --draft=false/)
+  assert.ok(source.indexOf('gh release upload') < source.indexOf('--draft=false'), 'release must be published after the APK upload')
+  assert.match(source, /if: \$\{\{ !cancelled\(\) && /)
+})
+
+test('signing secrets reach steps only through env, never inside shell scripts', () => {
+  const secretLines = source.split(/\r?\n/).filter((line) => /\$\{\{\s*secrets\./.test(line))
+  assert.ok(secretLines.length >= 5)
+  for (const line of secretLines) {
+    assert.match(line, /^\s+[A-Z0-9_]+:\s*\$\{\{\s*secrets\.[A-Z0-9_]+\s*\}\}\s*$/, `secret must be passed via env: ${line.trim()}`)
+  }
+})
+
+test('CI and release run the full test suite; the unverified legacy APK workflow is gone', () => {
+  const ci = fs.readFileSync(path.join(__dirname, '../.github/workflows/ci.yml'), 'utf8')
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))
+  assert.match(packageJson.scripts.test, /--test "tests\/\*\.test\.cjs" "tests\/\*\.test\.ts"/)
+  assert.match(ci, /- run: npm test/)
+  assert.match(source, /- run: npm test/)
+  assert.equal(fs.existsSync(path.join(__dirname, '../.github/workflows/android-package.yml')), false)
+  for (const workflow of [ci, source]) {
+    assert.doesNotMatch(workflow, /actions\/(checkout|setup-node|setup-java)@v4|setup-android@v3/)
+  }
+})
+
 test('Android recovery keeps the immutable tag and requires existing Windows assets', () => {
   assert.match(source, /workflow_dispatch:/)
   assert.match(source, /ref: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/)

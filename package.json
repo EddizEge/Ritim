@@ -1,7 +1,7 @@
 {
   "name": "ritim",
   "private": true,
-  "version": "0.9.1-beta.1",
+  "version": "0.9.1-beta.2",
   "author": "Ediz Ege Mercan",
   "description": "Senkron masaustu ve mobil muzik deneyimi",
   "main": "electron/main.cjs",
@@ -17,6 +17,7 @@
     "start:server": "tsx server/index.ts",
     "start:social": "tsx server/social.ts",
     "build:social": "tsc -p tsconfig.social.json",
+    "test": "node --import tsx --test \"tests/*.test.cjs\" \"tests/*.test.ts\"",
     "test:social": "node --import tsx --test tests/room-playback-sync.test.cjs tests/social-auth.test.ts tests/social-auth-client.test.cjs tests/social-auth-mobile-races.test.ts tests/social-hub.test.cjs tests/social-infrastructure.test.ts tests/social-security.test.ts tests/sync-server-social-ticket.test.cjs",
     "test:sync": "node --test tests/pairing-security.test.cjs tests/sync-server-pairing-rotation.test.cjs tests/sync-server-reliability.test.cjs tests/sync-server-social-ticket.test.cjs",
     "test:version": "node --test tests/version-policy.test.cjs tests/android-update-plugin.test.cjs && node --import tsx --test tests/mobile-versioning.test.ts",

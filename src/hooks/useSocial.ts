@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { io } from 'socket.io-client'
 import type { MobilePairingConfig } from '../mobileConfig'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
+import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
 import type {
   SocialActions,
   SocialMessageReaction,
@@ -228,6 +229,9 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   selectedUserIdRef.current = snapshot.selectedUserId
   const profileRef = useRef(localProfile)
   profileRef.current = localProfile
+  const profilePublisherRef = useRef<ReturnType<typeof createSocialProfilePublisher> | null>(null)
+  if (!profilePublisherRef.current) profilePublisherRef.current = createSocialProfilePublisher()
+  const profilePublisher = profilePublisherRef.current
   const notificationPreferencesRef = useRef(snapshot.notificationPreferences)
   notificationPreferencesRef.current = snapshot.notificationPreferences
   const deliveredNotificationsRef = useRef<Set<string> | null>(null)
@@ -246,7 +250,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       deviceRole,
       profile: profileRef.current,
     })
-  }, [accountId, deviceId, deviceRole, socket])
+    profilePublisher.remember(profileRef.current)
+  }, [accountId, deviceId, deviceRole, profilePublisher, socket])
 
   useEffect(() => {
     let disposed = false
@@ -381,8 +386,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   }, [isCompanion, joinSocialAccount, pairing.syncUrl, pairing.token, socialUrl, socket])
 
   useEffect(() => {
-    if (socket.connected) socket.emit('social:profile', { profile: localProfile })
-  }, [localProfile, socket])
+    // currentTrack.position changes every second; see profilePublishPolicy.ts.
+    if (!socket.connected || !profilePublisher.shouldPublish(localProfile)) return
+    profilePublisher.remember(localProfile)
+    socket.emit('social:profile', { profile: localProfile })
+  }, [localProfile, profilePublisher, socket])
 
   const ownedRoom = snapshot.rooms.find((room) => room.viewerRole === 'owner')
   const ownedRoomId = ownedRoom?.id || ''

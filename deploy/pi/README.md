@@ -92,6 +92,24 @@ güncellenmez.
 Geçiş eski birebir konuşmaları kabul edilmiş ilişki olarak korur; mesajları
 silmez veya yeniden yazmaz. Betik tekrar çalıştırılabilir.
 
+Beta 2 mesaj izni geçişi:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/080_beta2_message_permissions.sql
+```
+
+`080` geçişi `ritim_app` rolüne yalnız `ritim.messages.deleted_at` sütununda
+`UPDATE` yetkisi verir. Bu yetki olmadan mesaj isteğini reddetmek (yumuşak
+silme) ve mesaja tepki vermek (`SELECT ... FOR UPDATE` kilidi) PostgreSQL
+modunda `permission denied` ile başarısız oluyordu. Mesaj gövdesi ve kimlik
+sütunları değiştirilemez kalır. Betik idempotenttir; önce şifreli yedek alınıp
+Beta 2 gateway imajından önce bir kez uygulanmalıdır. Geçici bir ortamda uçtan
+uca doğrulama için `RITIM_AUTH_REQUIRED=false` ile başlatılan gateway'e karşı
+`RITIM_SOCIAL_TEST_URL=<adres> node --test tests/social-gateway-message-requests.test.cjs`
+çalıştırılabilir; üretim gateway'ine bu test yöneltilmez.
+
 `RITIM_AUTH_REQUIRED=true` yalnızca PC ve Android istemcileri Ritim access
 tokenı göndermeye başladıktan sonra açılmalıdır. Bu modda tokensız Socket.IO
 bağlantıları reddedilir.

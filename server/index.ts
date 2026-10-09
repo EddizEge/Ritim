@@ -34,6 +34,16 @@ function safeRoom(value: unknown) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24)
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+// Socket.IO hands handlers any JSON value a peer sends. Destructuring null or a
+// primitive would throw an uncaught exception and stop the server.
+function objectPayload(value: unknown): Record<string, unknown> {
+  return isPlainObject(value) ? value : {}
+}
+
 function socketsInRoom(room: string) {
   const socketIds = io.sockets.adapter.rooms.get(room) || new Set<string>()
   return [...socketIds].map((id) => io.sockets.sockets.get(id)).filter(Boolean)
@@ -66,7 +76,8 @@ function normalizeCommand(command: Partial<SyncCommand> | undefined): SyncComman
 }
 
 io.on('connection', (socket) => {
-  socket.on('room:join', ({ room, role, state }: { room: string; role: string; state: PlayerState }) => {
+  socket.on('room:join', (payload: unknown) => {
+    const { room, role, state } = objectPayload(payload)
     const normalizedRoom = safeRoom(room)
     if (!normalizedRoom) return
     const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
@@ -76,9 +87,10 @@ io.on('connection', (socket) => {
 
     const existing = rooms.get(normalizedRoom)
     if (!existing && normalizedRole === 'desktop') {
-      const revision = Math.max(0, Number(state?.syncRevision) || 0)
+      const initialState = objectPayload(state) as Partial<PlayerState>
+      const revision = Math.max(0, Number(initialState.syncRevision) || 0)
       rooms.set(normalizedRoom, {
-        state: { ...state, syncRevision: revision, syncedAt: Date.now() },
+        state: { ...initialState, syncRevision: revision, syncedAt: Date.now() } as PlayerState,
         revision,
         desktopSocketId: socket.id,
       })
@@ -91,7 +103,8 @@ io.on('connection', (socket) => {
     emitRoomStatus(normalizedRoom)
   })
 
-  socket.on('room:request-state', ({ room }: { room: string }) => {
+  socket.on('room:request-state', (payload: unknown) => {
+    const { room } = objectPayload(payload)
     const normalizedRoom = safeRoom(room)
     if (!normalizedRoom || socket.data.room !== normalizedRoom) return
     const record = rooms.get(normalizedRoom)
@@ -99,20 +112,23 @@ io.on('connection', (socket) => {
     socket.emit('room:status', roomStatus(normalizedRoom))
   })
 
-  socket.on('player:update', ({ room, state }: { room: string; state: PlayerState }) => {
+  socket.on('player:update', (payload: unknown) => {
+    const { room, state } = objectPayload(payload)
     const normalizedRoom = safeRoom(room)
     if (!normalizedRoom || socket.data.room !== normalizedRoom || socket.data.role !== 'desktop') return
+    if (!isPlainObject(state)) return
     const previous = rooms.get(normalizedRoom)
     const revision = (previous?.revision || 0) + 1
-    const authoritativeState = { ...state, syncRevision: revision, syncedAt: Date.now() }
+    const authoritativeState = { ...(state as Partial<PlayerState>), syncRevision: revision, syncedAt: Date.now() } as PlayerState
     rooms.set(normalizedRoom, { state: authoritativeState, revision, desktopSocketId: socket.id })
     socket.to(normalizedRoom).emit('player:state', authoritativeState)
   })
 
-  socket.on('player:command', ({ room, command }: { room: string; command: Partial<SyncCommand> }) => {
+  socket.on('player:command', (payload: unknown) => {
+    const { room, command } = objectPayload(payload)
     const normalizedRoom = safeRoom(room)
     if (!normalizedRoom || socket.data.room !== normalizedRoom || socket.data.role !== 'companion') return
-    const normalizedCommand = normalizeCommand(command)
+    const normalizedCommand = normalizeCommand(isPlainObject(command) ? command as Partial<SyncCommand> : undefined)
     if (!normalizedCommand) return
     const desktopSocketId = rooms.get(normalizedRoom)?.desktopSocketId
     const desktop = desktopSocketId ? io.sockets.sockets.get(desktopSocketId) : undefined
