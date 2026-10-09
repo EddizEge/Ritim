@@ -255,27 +255,40 @@ function createSocialHub(io, { store, onAbuse } = {}) {
 
   // Targets include owners of rooms whose owner is offline, so a room keeps
   // its owner's privacy and block rules while the owner is away.
+  // Same rule as loadAccess/usersCanInteract in server/social-store.ts:
+  // `profile` gates messages and reactions, `profile && listening` gates
+  // joining a room.
+  function memoryAccessRule(viewerId, targetId) {
+    if (viewerId === targetId) return { profile: true, listening: true }
+    const targetPrivacy = privacy.get(targetId) || {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    }
+    const blocked = blocks.has(`${viewerId}:${targetId}`) || blocks.has(`${targetId}:${viewerId}`)
+    const isContact = messageRequests.get(conversationKey(viewerId, targetId))?.status === 'accepted'
+    return {
+      profile: !blocked && (
+        targetPrivacy.profileVisibility === 'everyone'
+        || (targetPrivacy.profileVisibility === 'contacts' && isContact)
+      ),
+      listening: !blocked && (
+        targetPrivacy.listeningVisibility === 'everyone'
+        || (targetPrivacy.listeningVisibility === 'contacts' && isContact)
+      ),
+    }
+  }
+
+  function memoryRoomAccessAllowed(listenerId, ownerId) {
+    const rule = memoryAccessRule(listenerId, ownerId)
+    return rule.profile && rule.listening
+  }
+
   function memoryAccess(accountIds, targetIds = accountIds) {
     const access = new Map()
     for (const viewerId of accountIds) {
       const rules = new Map()
       for (const targetId of new Set([...accountIds, ...targetIds])) {
-        const targetPrivacy = privacy.get(targetId) || {
-          profileVisibility: 'everyone',
-          listeningVisibility: 'everyone',
-        }
-        const blocked = blocks.has(`${viewerId}:${targetId}`) || blocks.has(`${targetId}:${viewerId}`)
-        const isContact = messageRequests.get(conversationKey(viewerId, targetId))?.status === 'accepted'
-        rules.set(targetId, {
-          profile: viewerId === targetId || (!blocked && (
-            targetPrivacy.profileVisibility === 'everyone'
-            || (targetPrivacy.profileVisibility === 'contacts' && isContact)
-          )),
-          listening: viewerId === targetId || (!blocked && (
-            targetPrivacy.listeningVisibility === 'everyone'
-            || (targetPrivacy.listeningVisibility === 'contacts' && isContact)
-          )),
-        })
+        rules.set(targetId, memoryAccessRule(viewerId, targetId))
       }
       access.set(viewerId, rules)
     }
@@ -813,6 +826,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           reply({ ok: true, duplicate: true })
           return
         }
+        if (!memoryAccessRule(senderId, targetId).profile) {
+          socket.emit('social:error', { code: 'message_blocked', event: 'message' })
+          reply({ ok: false, code: 'message_blocked' })
+          return
+        }
         const key = conversationKey(senderId, targetId)
         const request = messageRequests.get(key)
         if (request?.status === 'pending') {
@@ -1042,6 +1060,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const cleanReaction = cleanText(reaction, 8) || '♥'
       if (store) await store.saveReaction({ actorId: senderId, targetId, reaction: cleanReaction })
       else {
+        if (!memoryAccessRule(senderId, targetId).profile) return
         const current = reactions.get(targetId) || { count: 0 }
         reactions.set(targetId, {
           count: Math.min(999, current.count + 1),
@@ -1107,6 +1126,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         }
         if (!socketsForAccount(targetId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
           socket.emit('social:error', { code: 'room_owner_offline', event: 'listening' })
+          return
+        }
+        if (!memoryRoomAccessAllowed(senderId, targetId)) {
+          socket.emit('social:error', { code: 'room_access_denied', event: 'listening' })
           return
         }
         if (memberCount >= MAX_ROOM_MEMBERS) {
@@ -1178,6 +1201,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           if (!socketsForAccount(room.ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
             socket.emit('social:error', { code: 'room_owner_offline', event: 'room-membership' })
             reply({ ok: false, code: 'room_owner_offline' })
+            return
+          }
+          if (!memoryRoomAccessAllowed(accountId, room.ownerId)) {
+            socket.emit('social:error', { code: 'room_access_denied', event: 'room-membership' })
+            reply({ ok: false, code: 'room_access_denied' })
             return
           }
           const memberCount = 1 + [...listening.values()]
