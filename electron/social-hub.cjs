@@ -5,6 +5,8 @@ const MAX_PLAYBACK_POSITION_MS = 24 * 60 * 60 * 1000
 const ROOM_SYNC_RESULT_STALE_MS = 15_000
 const MAX_ROOM_SYNC_ROUND_TRIP_MS = 60_000
 const MAX_ROOM_SYNC_DRIFT_MS = 60_000
+// Matches NOTIFICATION_LIMIT_PER_ACCOUNT in server/social-store.ts.
+const NOTIFICATION_LIMIT_PER_ACCOUNT = 100
 
 function accountLookupKey(value) {
   return UUID_PATTERN.test(value)
@@ -150,7 +152,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       read: false,
       ...notification,
     })
-    notifications.set(recipientId, selected.slice(0, 50))
+    notifications.set(recipientId, selected.slice(0, NOTIFICATION_LIMIT_PER_ACCOUNT))
   }
 
   function socialSockets() {
