@@ -153,8 +153,18 @@ export type SocialAccountSummary = {
   warning?: string
 }
 
+// Only the Electron Social view fills this: the PC signs in to Ritim Social
+// itself, while phones join through the PC's companion ticket.
+export type SocialAuthenticationSummary = {
+  configured: boolean
+  required: boolean
+  authenticated: boolean
+  user?: Pick<SocialUser, 'id' | 'displayName' | 'handle' | 'initials' | 'avatarUrl' | 'avatarTone'>
+}
+
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
+  authentication?: SocialAuthenticationSummary
   currentUser: SocialUser
   privacy: SocialPrivacy
   currentDeviceCount: number
@@ -199,4 +209,6 @@ export type SocialActions = {
   updatePrivacy: (privacy: SocialPrivacy) => void
   blockUser: (userId: string) => void
   reconnectSocial: () => void
+  signIn?: () => void
+  signOut?: () => void
 }
