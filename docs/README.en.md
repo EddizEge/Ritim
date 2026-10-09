@@ -72,6 +72,6 @@ Android Ritim ── local network / Socket.IO ── Windows Ritim ── offic
 
 If Google changes YouTube Music’s page structure, the bridge selectors may need an update. Local Android builds default to a debug certificate; GitHub releases use Ritim's permanent certificate. The build variant name alone does not identify the signer. The PC and phone must be reachable on the same local network for local remote control; the social gateway does not relay that LAN connection.
 
-At the user's request, Beta 1's final physical acceptance round is deferred. See the [release notes](releases/v0.9.1-beta.1.md), [roadmap](v0.9-roadmap.md), and [Claude handoff](CLAUDE_HANDOFF.md) for the scope and remaining work.
+At the user's request, Beta 1's final physical acceptance round is deferred; Beta 2 fixes the issues found in the handoff review. See the [Beta 2 release notes](releases/v0.9.1-beta.2.md), [Beta 1 release notes](releases/v0.9.1-beta.1.md), [roadmap](v0.9-roadmap.md), and [Claude handoff](CLAUDE_HANDOFF.md) for the scope and remaining work.
 
 Ritim is an independent project and is not affiliated with, endorsed by, or sponsored by Google or YouTube.
