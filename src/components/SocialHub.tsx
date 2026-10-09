@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  Bell, BellRing, Check, Eye, Flag, Heart, MailQuestion, MessageCircle, MoreVertical, Plus, Radio,
+  Bell, BellRing, Check, Eye, Flag, Heart, LogIn, LogOut, MailQuestion, MessageCircle, MoreVertical, Plus, Radio,
   RefreshCw, Search, Send, ShieldBan, SmilePlus, Trash2, UsersRound, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { formatTime } from '../data'
@@ -27,14 +27,20 @@ function SocialAvatar({ user, small = false }: { user: SocialUser; small?: boole
 function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps & { mobile?: boolean }) {
   const online = state.connectionStatus === 'online'
   const connecting = state.connectionStatus === 'connecting'
-  const text = online
-    ? (mobile ? `${state.currentDeviceCount} cihazın tek Ritim hesabında senkron` : 'Ritim Social bağlantısı kuruldu.')
-    : connecting
-      ? 'Ritim Social’a bağlanıyor…'
-      : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
+  // Only the PC signs in to Ritim Social itself (Electron Social view).
+  const authentication = !mobile && actions.signIn && actions.signOut ? state.authentication : undefined
+  const canSignIn = Boolean(authentication?.configured && !authentication.authenticated)
+  const needsSignIn = canSignIn && Boolean(authentication?.required)
+  const accountName = authentication?.authenticated ? authentication.user?.displayName : ''
+  const text = needsSignIn
+    ? 'Sosyal özellikler için Google hesabını Ritim Social’a bağla.'
+    : online
+      ? (mobile ? `${state.currentDeviceCount} cihazın tek Ritim hesabında senkron` : `Ritim Social bağlantısı kuruldu${accountName ? ` • ${accountName}` : ''}.`)
+      : connecting
+        ? 'Ritim Social’a bağlanıyor…'
+        : 'Sosyal servis çevrimdışı; müzik ve telefon kumandası çalışmaya devam eder.'
   return (
     <div className={mobile ? `mobile-social-preview is-${state.connectionStatus}` : `social-preview-note is-${state.connectionStatus}`}>
-      <span>ALPHA.4</span>
       <p>{text}</p>
       {online ? (
         <div className="social-privacy-controls">
@@ -71,7 +77,16 @@ function SocialConnectionNotice({ state, actions, mobile = false }: SocialProps 
           </label>
         </div>
       ) : null}
-      {!online && !connecting ? <button onClick={actions.reconnectSocial}><RefreshCw />Yeniden bağlan</button> : null}
+      {!online && !connecting && !needsSignIn ? <button onClick={actions.reconnectSocial}><RefreshCw />Yeniden bağlan</button> : null}
+      {canSignIn ? <button className="social-account-button" onClick={actions.signIn}><LogIn />Google ile bağlan</button> : null}
+      {authentication?.authenticated ? (
+        <button
+          className="social-account-button is-sign-out"
+          onClick={() => {
+            if (window.confirm('Ritim Social hesabından çıkılsın mı? Mesajların ve odaların, yeniden giriş yapana kadar bu bilgisayarda görünmez.')) actions.signOut?.()
+          }}
+        ><LogOut />Hesaptan çık</button>
+      ) : null}
     </div>
   )
 }
@@ -565,7 +580,13 @@ function ChatThread({ state, actions, mobile = false, onClose }: SocialProps & {
   )
 }
 
-function DesktopUserRow({ user, selected, listening, muted, unread, actions }: { user: SocialUser; selected: boolean; listening: boolean; muted: boolean; unread: number; actions: SocialActions }) {
+// "Listen together" joins the other user's room, so it is only offered to
+// users who currently own one.
+function useRoomOwnerIds(state: SocialState) {
+  return useMemo(() => new Set(state.rooms.map((room) => room.ownerId)), [state.rooms])
+}
+
+function DesktopUserRow({ user, selected, listening, hasRoom, muted, unread, actions }: { user: SocialUser; selected: boolean; listening: boolean; hasRoom: boolean; muted: boolean; unread: number; actions: SocialActions }) {
   return (
     <article className={`social-user-row ${selected ? 'is-selected' : ''} ${listening ? 'is-listening' : ''}`}>
       <button className="social-user-identity" onClick={() => actions.selectUser(user.id)}>
@@ -576,7 +597,9 @@ function DesktopUserRow({ user, selected, listening, muted, unread, actions }: {
       <div className="social-user-actions">
         <button onClick={() => actions.reactToUser(user.id)}><Heart fill={user.lastReaction === '♥' ? 'currentColor' : 'none'} /><span>Tepki</span><small>{user.lastReaction} {user.reactionCount}</small></button>
         <button onClick={() => actions.selectUser(user.id)}><MessageCircle /><span>Mesaj</span></button>
-        <button className={listening ? 'is-active' : 'is-primary'} onClick={() => actions.toggleListeningWith(user.id)}><UsersRound /><span>{listening ? 'Birliktesiniz' : 'Birlikte dinle'}</span></button>
+        {listening || hasRoom ? (
+          <button className={listening ? 'is-active' : 'is-primary'} onClick={() => actions.toggleListeningWith(user.id)}><UsersRound /><span>{listening ? 'Birliktesiniz' : 'Birlikte dinle'}</span></button>
+        ) : null}
       </div>
       <button className="social-user-more" aria-label={`${user.displayName} seçenekleri`}><MoreVertical /></button>
     </article>
@@ -591,6 +614,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
   }, [deferredQuery, state.users])
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
   const ownedRoom = state.rooms.find((room) => room.viewerRole === 'owner')
+  const roomOwnerIds = useRoomOwnerIds(state)
 
   return (
     <section className="social-desktop-shell">
@@ -623,6 +647,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
                 user={user}
                 selected={state.selectedUserId === user.id}
                 listening={state.listeningWithUserId === user.id}
+                hasRoom={roomOwnerIds.has(user.id)}
                 muted={state.mutedUserIds.includes(user.id)}
                 unread={state.unreadCounts[user.id] || 0}
                 actions={actions}
@@ -638,7 +663,7 @@ export function DesktopSocialHub({ state, actions }: SocialProps) {
   )
 }
 
-function MobileSocialUserRow({ user, state, actions, onMessage }: { user: SocialUser; state: SocialState; actions: SocialActions; onMessage: () => void }) {
+function MobileSocialUserRow({ user, state, actions, hasRoom, onMessage }: { user: SocialUser; state: SocialState; actions: SocialActions; hasRoom: boolean; onMessage: () => void }) {
   const listening = state.listeningWithUserId === user.id
   return (
     <article className={`mobile-social-user ${listening ? 'is-listening' : ''}`}>
@@ -652,7 +677,9 @@ function MobileSocialUserRow({ user, state, actions, onMessage }: { user: Social
           <Heart fill="currentColor" /><span>{user.reactionCount}</span>
         </button>
         <button onClick={() => { actions.selectUser(user.id); onMessage() }} aria-label={`${user.displayName} kullanıcısına mesaj gönder`}><MessageCircle /></button>
-        <button className={listening ? 'is-active' : 'is-primary'} onClick={() => actions.toggleListeningWith(user.id)}>{listening ? 'Birlikte' : 'Katıl'}</button>
+        {listening || hasRoom ? (
+          <button className={listening ? 'is-active' : 'is-primary'} onClick={() => actions.toggleListeningWith(user.id)}>{listening ? 'Birlikte' : 'Katıl'}</button>
+        ) : null}
       </div>
     </article>
   )
@@ -668,6 +695,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
   )
   const onlineCount = state.users.filter((user) => user.presence === 'online').length
   const ownedRoom = state.rooms.find((room) => room.viewerRole === 'owner')
+  const roomOwnerIds = useRoomOwnerIds(state)
 
   return (
     <>
@@ -694,7 +722,7 @@ export function MobileSocialHub({ state, actions }: SocialProps) {
         <section className="mobile-social-list">
           <div className="mobile-social-section-title"><h2>Şu an dinleyenler</h2><small>{onlineCount} kişi</small></div>
           {visibleUsers.length ? visibleUsers.map((user) => (
-            <MobileSocialUserRow key={user.id} user={user} state={state} actions={actions} onMessage={() => setChatOpen(true)} />
+            <MobileSocialUserRow key={user.id} user={user} state={state} actions={actions} hasRoom={roomOwnerIds.has(user.id)} onMessage={() => setChatOpen(true)} />
           )) : <div className="social-no-results"><UsersRound /><b>{deferredQuery ? 'Kullanıcı bulunamadı' : 'Henüz başka kullanıcı yok'}</b><p>{deferredQuery ? 'Başka bir ad, kullanıcı adı veya şarkı ara.' : 'Başka bir Ritim hesabı bağlandığında burada görünecek.'}</p></div>}
         </section>
       </section>
