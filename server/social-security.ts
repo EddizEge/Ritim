@@ -155,10 +155,35 @@ export function createRateLimiter(options: RateLimitOptions) {
   }
 }
 
+// Mirrors Express `trust proxy` with a hop count (proxy-addr): the address
+// chain is the socket peer followed by X-Forwarded-For from right to left, and
+// the client is the first address after `trustProxy` trusted hops. Without
+// proxy trust the header is client-controlled and ignored.
+export function resolveClientAddress(
+  remoteAddress: string | undefined,
+  forwardedFor: string | string[] | undefined,
+  trustProxy: SocialSecurityConfig['trustProxy'],
+) {
+  if (!trustProxy) return remoteAddress
+  const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : String(forwardedFor || '')
+  const chain = [
+    remoteAddress,
+    ...header.split(',').map((value) => value.trim()).filter(Boolean).reverse(),
+  ]
+  return chain[Math.min(trustProxy, chain.length - 1)]
+}
+
 export function createRateGate(options: Omit<RateLimitOptions, 'skip'>) {
   const entries = new Map<string, RateEntry>()
-  return (clientAddress: string | undefined): RateGate => {
+  let nextSweepAt = 0
+  const gate = (clientAddress: string | undefined): RateGate => {
     const now = Date.now()
+    if (now >= nextSweepAt) {
+      for (const [key, entry] of entries) {
+        if (entry.resetAt <= now) entries.delete(key)
+      }
+      nextSweepAt = now + Math.min(options.windowMs, 60_000)
+    }
     const fingerprint = clientFingerprint(clientAddress)
     const current = entries.get(fingerprint)
     const entry = !current || current.resetAt <= now
@@ -180,4 +205,5 @@ export function createRateGate(options: Omit<RateLimitOptions, 'skip'>) {
       retryAfter: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
     }
   }
+  return Object.assign(gate, { size: () => entries.size })
 }

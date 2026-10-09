@@ -5,6 +5,8 @@ const MAX_PLAYBACK_POSITION_MS = 24 * 60 * 60 * 1000
 const ROOM_SYNC_RESULT_STALE_MS = 15_000
 const MAX_ROOM_SYNC_ROUND_TRIP_MS = 60_000
 const MAX_ROOM_SYNC_DRIFT_MS = 60_000
+// Matches NOTIFICATION_LIMIT_PER_ACCOUNT in server/social-store.ts.
+const NOTIFICATION_LIMIT_PER_ACCOUNT = 100
 
 function accountLookupKey(value) {
   return UUID_PATTERN.test(value)
@@ -29,6 +31,30 @@ function listeningTargetForViewer(viewerRooms, viewerAccess) {
   const ownerId = viewerRooms.find((room) => room.viewerRole === 'listener')?.ownerId
   if (!ownerId || viewerAccess?.get(ownerId)?.listening === false) return undefined
   return ownerId
+}
+
+// "Ediz Ege Mercan" -> "EE": first letters of the first two words.
+function initialsFromDisplayName(displayName) {
+  return String(displayName || '')
+    .split(/\s+/)
+    .map((word) => word.match(/[\p{L}\p{N}]/u)?.[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toLocaleUpperCase('tr')
+}
+
+// "Şükrü Işık" -> "@sukruisik": NFKD splits ç/ğ/ö/ş/ü into a base letter and
+// a mark that is dropped; dotless ı has no decomposition, so it is mapped.
+// Only lowercase ASCII letters and digits are kept.
+function handleFromDisplayName(displayName) {
+  const slug = String(displayName || '')
+    .toLocaleLowerCase('tr')
+    .replace(/ı/g, 'i')
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 30)
+  return slug ? `@${slug}` : ''
 }
 
 function sanitizeTrack(track) {
@@ -150,7 +176,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       read: false,
       ...notification,
     })
-    notifications.set(recipientId, selected.slice(0, 50))
+    notifications.set(recipientId, selected.slice(0, NOTIFICATION_LIMIT_PER_ACCOUNT))
   }
 
   function socialSockets() {
@@ -227,27 +253,42 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     }
   }
 
-  function memoryAccess(accountIds) {
+  // Targets include owners of rooms whose owner is offline, so a room keeps
+  // its owner's privacy and block rules while the owner is away.
+  // Same rule as loadAccess/usersCanInteract in server/social-store.ts:
+  // `profile` gates messages and reactions, `profile && listening` gates
+  // joining a room.
+  function memoryAccessRule(viewerId, targetId) {
+    if (viewerId === targetId) return { profile: true, listening: true }
+    const targetPrivacy = privacy.get(targetId) || {
+      profileVisibility: 'everyone',
+      listeningVisibility: 'everyone',
+    }
+    const blocked = blocks.has(`${viewerId}:${targetId}`) || blocks.has(`${targetId}:${viewerId}`)
+    const isContact = messageRequests.get(conversationKey(viewerId, targetId))?.status === 'accepted'
+    return {
+      profile: !blocked && (
+        targetPrivacy.profileVisibility === 'everyone'
+        || (targetPrivacy.profileVisibility === 'contacts' && isContact)
+      ),
+      listening: !blocked && (
+        targetPrivacy.listeningVisibility === 'everyone'
+        || (targetPrivacy.listeningVisibility === 'contacts' && isContact)
+      ),
+    }
+  }
+
+  function memoryRoomAccessAllowed(listenerId, ownerId) {
+    const rule = memoryAccessRule(listenerId, ownerId)
+    return rule.profile && rule.listening
+  }
+
+  function memoryAccess(accountIds, targetIds = accountIds) {
     const access = new Map()
     for (const viewerId of accountIds) {
       const rules = new Map()
-      for (const targetId of accountIds) {
-        const targetPrivacy = privacy.get(targetId) || {
-          profileVisibility: 'everyone',
-          listeningVisibility: 'everyone',
-        }
-        const blocked = blocks.has(`${viewerId}:${targetId}`) || blocks.has(`${targetId}:${viewerId}`)
-        const isContact = messageRequests.get(conversationKey(viewerId, targetId))?.status === 'accepted'
-        rules.set(targetId, {
-          profile: viewerId === targetId || (!blocked && (
-            targetPrivacy.profileVisibility === 'everyone'
-            || (targetPrivacy.profileVisibility === 'contacts' && isContact)
-          )),
-          listening: viewerId === targetId || (!blocked && (
-            targetPrivacy.listeningVisibility === 'everyone'
-            || (targetPrivacy.listeningVisibility === 'contacts' && isContact)
-          )),
-        })
+      for (const targetId of new Set([...accountIds, ...targetIds])) {
+        rules.set(targetId, memoryAccessRule(viewerId, targetId))
       }
       access.set(viewerId, rules)
     }
@@ -402,7 +443,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           [...rooms.values()],
           listening,
           reactions,
-          memoryAccess(accountIds),
+          memoryAccess(accountIds, [...rooms.values()].map((socialRoom) => socialRoom.ownerId)),
           accountIds.map((accountId) => [accountId, privacy.get(accountId) || {
             profileVisibility: 'everyone',
             listeningVisibility: 'everyone',
@@ -414,6 +455,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           memoryModeration(accountIds),
           memoryReportSummaries(accountIds),
         ]
+    const offlineOwnerIds = [...new Set(selectedRooms.map((socialRoom) => socialRoom.ownerId))]
+      .filter((ownerId) => !profiles.has(ownerId))
+    const roomAccess = store && offlineOwnerIds.length
+      ? await store.loadAccess(accountIds, offlineOwnerIds)
+      : access
     const privacyByAccount = new Map(privacyEntries)
     const playbackByRoom = store?.loadRoomPlaybacks
       ? await store.loadRoomPlaybacks(selectedRooms.map((room) => room.id))
@@ -465,11 +511,17 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         )).map(({ targetId: _targetId, ...message }) => message)
         unreadCounts[user.id] = Math.max(0, Number(unread.get(accountId)?.get(user.id)) || 0)
       }
+      const viewerRoomAccess = roomAccess.get(accountId) || new Map()
+      // Unknown access (no rule for the owner) is treated as hidden; a viewer
+      // who already belongs to the room keeps seeing it.
       const visibleRooms = selectedRooms.filter((socialRoom) => (
         socialRoom.ownerId === accountId
+        || (store
+          ? socialRoom.memberIds.includes(accountId)
+          : selectedListening.get(accountId) === socialRoom.ownerId)
         || (
-          accountAccess.get(socialRoom.ownerId)?.profile !== false
-          && accountAccess.get(socialRoom.ownerId)?.listening !== false
+          viewerRoomAccess.get(socialRoom.ownerId)?.profile === true
+          && viewerRoomAccess.get(socialRoom.ownerId)?.listening === true
         )
       ))
       const publicRooms = store
@@ -651,8 +703,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     return {
       id: accountId,
       displayName,
-      handle: cleanText(profile.handle, 64) || '@ritim',
-      initials: cleanText(profile.initials, 3).toLocaleUpperCase('tr') || 'R',
+      handle: cleanText(profile.handle, 64) || handleFromDisplayName(displayName) || '@ritim',
+      initials: cleanText(profile.initials, 3).toLocaleUpperCase('tr')
+        || initialsFromDisplayName(displayName)
+        || 'R',
       avatarUrl: cleanText(profile.avatarUrl, 1000) || undefined,
       avatarTone: Math.max(0, Math.min(11, Number(profile.avatarTone) || 0)),
       presence: 'online',
@@ -770,6 +824,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       } else {
         if (messages.some((candidate) => candidate.id === message.id && candidate.senderId === senderId)) {
           reply({ ok: true, duplicate: true })
+          return
+        }
+        if (!memoryAccessRule(senderId, targetId).profile) {
+          socket.emit('social:error', { code: 'message_blocked', event: 'message' })
+          reply({ ok: false, code: 'message_blocked' })
           return
         }
         const key = conversationKey(senderId, targetId)
@@ -1001,6 +1060,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const cleanReaction = cleanText(reaction, 8) || '♥'
       if (store) await store.saveReaction({ actorId: senderId, targetId, reaction: cleanReaction })
       else {
+        if (!memoryAccessRule(senderId, targetId).profile) return
         const current = reactions.get(targetId) || { count: 0 }
         reactions.set(targetId, {
           count: Math.min(999, current.count + 1),
@@ -1066,6 +1126,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         }
         if (!socketsForAccount(targetId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
           socket.emit('social:error', { code: 'room_owner_offline', event: 'listening' })
+          return
+        }
+        if (!memoryRoomAccessAllowed(senderId, targetId)) {
+          socket.emit('social:error', { code: 'room_access_denied', event: 'listening' })
           return
         }
         if (memberCount >= MAX_ROOM_MEMBERS) {
@@ -1137,6 +1201,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           if (!socketsForAccount(room.ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
             socket.emit('social:error', { code: 'room_owner_offline', event: 'room-membership' })
             reply({ ok: false, code: 'room_owner_offline' })
+            return
+          }
+          if (!memoryRoomAccessAllowed(accountId, room.ownerId)) {
+            socket.emit('social:error', { code: 'room_access_denied', event: 'room-membership' })
+            reply({ ok: false, code: 'room_access_denied' })
             return
           }
           const memberCount = 1 + [...listening.values()]
@@ -1548,4 +1617,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
   return { attach, emitAllStates: scheduleEmit, close }
 }
 
-module.exports = { createSocialHub, listeningTargetForViewer, summarizeRoomSyncResult }
+module.exports = {
+  createSocialHub,
+  handleFromDisplayName,
+  initialsFromDisplayName,
+  listeningTargetForViewer,
+  summarizeRoomSyncResult,
+}
