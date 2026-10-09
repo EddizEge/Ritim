@@ -94,7 +94,15 @@ const elements = {
   productName: byId('product-name'), productDescription: byId('product-description'), productDeveloper: byId('product-developer'),
   productLicense: byId('product-license'), productDisclaimer: byId('product-disclaimer'),
   aboutGithub: byId('about-github'), aboutReleases: byId('about-releases'), aboutPrivacy: byId('about-privacy'),
-  aboutNotices: byId('about-notices'), aboutFeedback: byId('about-feedback'),
+  aboutNotices: byId('about-notices'), aboutFeedback: byId('about-feedback'), versionPill: byId('version-pill'),
+}
+
+// Same rule as ritimReleaseLabel() in src/versioning.ts: "Beta 2", "RC 1", "Kararlı".
+function releaseLabel(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/.exec(String(version || '').trim().replace(/^v/i, ''))
+  if (!match) return ''
+  if (!match[4]) return 'Kararlı'
+  return `${{ alpha: 'Alpha', beta: 'Beta', rc: 'RC' }[match[4]]} ${Number(match[5])}`
 }
 
 const appearanceValues = {
@@ -410,6 +418,8 @@ async function loadSettings() {
   const data = settingsApi ? await settingsApi.getData() : fallbackData
   elements.appVersion.textContent = data.appVersion
   elements.aboutAppVersion.textContent = data.appVersion
+  elements.versionPill.textContent = releaseLabel(data.appVersion)
+  elements.versionPill.hidden = !elements.versionPill.textContent
   elements.computerName.textContent = data.computerName
   elements.electronVersion.textContent = data.electronVersion
   elements.room.textContent = data.room
