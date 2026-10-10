@@ -3,6 +3,8 @@ import { Capacitor } from '@capacitor/core'
 import { io } from 'socket.io-client'
 import type { MobilePairingConfig } from '../mobileConfig'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
+import { handleFromDisplayName, initialsFromDisplayName } from '../social/handle'
+import { deviceNotificationContent } from '../social/socialModel'
 import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
 import {
   EXPECTED_ROOM_EXIT_MS,
@@ -14,7 +16,6 @@ import {
   SOCIAL_TEXT,
   isAckHandledSocialError,
   mergeIncomingSocialSnapshot,
-  messageAckFeedback,
   roomMembershipFeedback,
   socialErrorText,
   socialFeedback,
@@ -29,6 +30,7 @@ import type {
   SocialNotificationPreferences,
   SocialPrivacy,
   SocialRoomReaction,
+  SocialSendResult,
   SocialState,
   SocialTrack,
   SocialUser,
@@ -71,14 +73,8 @@ function notificationNumber(id: string) {
   return Math.max(1, Math.abs(value))
 }
 
-function notificationTitle(notification: SocialNotification, actorName: string) {
-  if (notification.kind === 'reaction') return `${actorName} mesajına tepki verdi`
-  if (notification.kind === 'message_request') return `${actorName} mesaj isteği gönderdi`
-  return `${actorName} sana yazdı`
-}
-
-async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
-  const title = notificationTitle(notification, actorName)
+async function deliverDeviceNotification(notification: SocialNotification, content: { title: string; body: string }) {
+  const { title, body } = content
   if (Capacitor.isNativePlatform()) {
     const { LocalNotifications } = await import('@capacitor/local-notifications')
     const permission = await LocalNotifications.checkPermissions()
@@ -93,7 +89,7 @@ async function deliverDeviceNotification(notification: SocialNotification, actor
       notifications: [{
         id: notificationNumber(notification.id),
         title,
-        body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+        body,
         channelId: 'ritim-social',
         extra: { socialNotificationId: notification.id },
       }],
@@ -102,29 +98,10 @@ async function deliverDeviceNotification(notification: SocialNotification, actor
   }
   if (!('Notification' in window) || Notification.permission !== 'granted') return false
   new Notification(title, {
-    body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+    body,
     tag: `ritim-social-${notification.id}`,
   })
   return true
-}
-
-function profileInitials(displayName: string) {
-  const initials = displayName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toLocaleUpperCase('tr'))
-    .join('')
-  return initials || 'R'
-}
-
-function profileHandle(displayName: string, isCompanion: boolean) {
-  const normalized = displayName
-    .toLocaleLowerCase('tr')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '')
-  return `@${normalized || (isCompanion ? 'telefon' : 'ritimpc')}`
 }
 
 export function stableSocialAccountId(seed: string) {
@@ -186,12 +163,14 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const deviceRole = isCompanion ? 'companion' : 'desktop'
   const resolvedName = displayName?.trim() || (isCompanion ? 'Ritim Telefon' : 'Ritim Web')
   const [connectionStatus, setConnectionStatus] = useState<SocialState['connectionStatus']>(() => socket.connected ? 'online' : 'connecting')
+  const [lastOnlineAt, setLastOnlineAt] = useState<number | undefined>(undefined)
 
   const localProfile = useMemo<SocialUser>(() => ({
     id: accountId,
     displayName: resolvedName,
-    handle: profileHandle(resolvedName, isCompanion),
-    initials: profileInitials(resolvedName),
+    // Empty when nothing usable remains; the gateway then derives it.
+    handle: handleFromDisplayName(resolvedName),
+    initials: initialsFromDisplayName(resolvedName),
     avatarUrl,
     avatarTone: isCompanion ? 3 : 5,
     presence: 'online',
@@ -273,10 +252,12 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     connectSocialRef.current = () => void connectSocial()
     const onConnect = () => {
       setConnectionStatus('online')
+      setLastOnlineAt(Date.now())
       joinSocialAccount()
     }
     const onDisconnect = () => {
       setConnectionStatus('offline')
+      setLastOnlineAt(Date.now())
       setSnapshot((previous) => ({
         ...previous,
         feedback: socialFeedback('info', SOCIAL_TEXT.disconnected),
@@ -296,6 +277,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     const onSessionChanged = () => void connectSocial()
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
+      setLastOnlineAt(Date.now())
       setSnapshot((previous) => {
         const { snapshot: merged, resetExpectedRoomExit } = mergeIncomingSocialSnapshot(previous, next, {
           selectedUserId: selectedUserIdRef.current,
@@ -398,7 +380,13 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     if (!pending.length) return
     void Promise.all(pending.map(async (notification) => {
       const actorName = snapshot.users.find((user) => user.id === notification.actorId)?.displayName || 'Bir Ritim kullanıcısı'
-      const delivered = await deliverDeviceNotification(notification, actorName).catch(() => false)
+      // Unknown kinds (and kinds switched off in preferences) are skipped once.
+      const content = deviceNotificationContent(notification, actorName, snapshot.notificationPreferences)
+      if (!content) {
+        deliveredNotificationSet.add(notification.id)
+        return
+      }
+      const delivered = await deliverDeviceNotification(notification, content).catch(() => false)
       if (delivered) deliveredNotificationSet.add(notification.id)
     })).then(() => {
       localStorage.setItem(
@@ -406,7 +394,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         JSON.stringify([...deliveredNotificationSet].slice(-100)),
       )
     })
-  }, [deliveredNotificationSet, snapshot.notificationPreferences.deviceEnabled, snapshot.notifications, snapshot.users])
+  }, [deliveredNotificationSet, snapshot.notificationPreferences, snapshot.notifications, snapshot.users])
 
   const selectUser = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
@@ -416,27 +404,18 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     socket.emit('social:reaction', { targetUserId: userId, reaction })
   }, [socket])
 
-  const sendMessage = useCallback((userId: string, text: string): Promise<boolean> => {
+  // The chat shows the outcome on the message bubble itself (socialOutbox.ts),
+  // so sending raises no separate notice.
+  const sendMessage = useCallback((userId: string, text: string, clientMessageId: string = crypto.randomUUID()): Promise<SocialSendResult> => {
     const cleanText = text.trim().slice(0, SOCIAL_MESSAGE_MAX_LENGTH)
-    if (!cleanText) return Promise.resolve(false)
-    if (!socket.connected) {
-      setSnapshot((current) => ({
-        ...current,
-        feedback: socialFeedback('error', SOCIAL_TEXT.messageOffline),
-      }))
-      return Promise.resolve(false)
-    }
-    const clientMessageId = crypto.randomUUID()
+    if (!cleanText) return Promise.resolve({ ok: false, code: 'invalid_payload' })
+    if (!socket.connected) return Promise.resolve({ ok: false, code: 'offline' })
     return new Promise((resolve) => {
       let acknowledged = false
       const timeout = window.setTimeout(() => {
         if (acknowledged) return
         acknowledged = true
-        setSnapshot((current) => ({
-          ...current,
-          feedback: socialFeedback('error', SOCIAL_TEXT.messageTimeout),
-        }))
-        resolve(false)
+        resolve({ ok: false, code: 'timeout' })
       }, SOCIAL_ACK_TIMEOUT_MS)
       socket.emit('social:message', {
         targetUserId: userId,
@@ -446,11 +425,9 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         if (acknowledged) return
         acknowledged = true
         window.clearTimeout(timeout)
-        setSnapshot((current) => ({
-          ...current,
-          feedback: messageAckFeedback(result),
-        }))
-        resolve(Boolean(result.ok))
+        resolve(result.ok
+          ? { ok: true, duplicate: Boolean(result.duplicate) }
+          : { ok: false, code: result.code || 'rejected' })
       })
     })
   }, [socket])
@@ -626,6 +603,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     state: {
       ...snapshot,
       connectionStatus,
+      lastOnlineAt,
     },
     actions: {
       selectUser,

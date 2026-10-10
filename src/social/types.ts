@@ -103,9 +103,14 @@ export type SocialMessageRequest = {
   sentAt: number
 }
 
+// `profile_reaction` (someone left an emoji on your profile) carries the
+// emoji in `body` and has no `messageId`. Kinds this client does not know are
+// skipped by the interface and by system notifications.
+export type SocialNotificationKind = 'message_request' | 'message' | 'reaction' | 'profile_reaction'
+
 export type SocialNotification = {
   id: string
-  kind: 'message_request' | 'message' | 'reaction'
+  kind: SocialNotificationKind
   actorId?: string
   messageId?: string
   body: string
@@ -186,12 +191,25 @@ export type SocialState = {
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
+  // Last moment this device was known to be connected to Ritim Social.
+  lastOnlineAt?: number
 }
+
+// Acknowledgement of a direct message; `code` explains a failure
+// ('offline', 'timeout', or a gateway code such as 'rate_limited').
+export type SocialSendResult = {
+  ok: boolean
+  code?: string
+  duplicate?: boolean
+}
+
+export type SocialSettingsSection = 'social' | 'notifications'
 
 export type SocialActions = {
   selectUser: (userId: string) => void
   reactToUser: (userId: string, reaction?: string) => void
-  sendMessage: (userId: string, text: string) => Promise<boolean>
+  // Retrying passes the same clientMessageId; the gateway drops duplicates.
+  sendMessage: (userId: string, text: string, clientMessageId?: string) => Promise<SocialSendResult>
   markConversationRead: (userId: string) => void
   respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => void
   reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => void
@@ -211,4 +229,6 @@ export type SocialActions = {
   reconnectSocial: () => void
   signIn?: () => void
   signOut?: () => void
+  // PC only: opens the Settings window on the given section.
+  openSettings?: (section: SocialSettingsSection) => void
 }

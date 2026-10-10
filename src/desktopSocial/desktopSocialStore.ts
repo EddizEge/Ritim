@@ -7,7 +7,6 @@ import {
   SOCIAL_TEXT,
   isAckHandledSocialError,
   mergeIncomingSocialSnapshot,
-  messageAckFeedback,
   roomMembershipFeedback,
   socialErrorText,
   socialFeedback,
@@ -23,6 +22,8 @@ import type {
   SocialNotificationPreferences,
   SocialPrivacy,
   SocialRoomReaction,
+  SocialSendResult,
+  SocialSettingsSection,
   SocialState,
 } from '../social/types'
 
@@ -41,6 +42,8 @@ export type DesktopSocialIncomingState = Partial<SocialSnapshot> & {
   connectionStatus?: SocialConnectionStatus
   authentication?: SocialAuthenticationSummary
   viewVisible?: boolean
+  // Kept by the main process, which outlives this view.
+  lastOnlineAt?: number
 }
 
 export type DesktopSocialEvent =
@@ -75,6 +78,7 @@ const DESKTOP_TEXT = {
   signOutFailed: 'Ritim Social oturumu kapatılamadı. Tekrar dene.',
   deviceNotificationsOff: 'Sistem bildirimleri kapatıldı.',
   deviceNotificationsUnsupported: 'Bu bilgisayarda sistem bildirimleri desteklenmiyor.',
+  settingsFailed: 'Ayarlar penceresi açılamadı.',
 } as const
 
 const CONNECTION_STATUSES = new Set<SocialConnectionStatus>(['preview', 'connecting', 'online', 'offline'])
@@ -221,6 +225,11 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
         : snapshot.feedback,
       connectionStatus: status,
       authentication: incoming.authentication,
+      // "Son başarılı bağlantı": refreshed while online and stamped once more
+      // when the connection drops.
+      lastOnlineAt: Number(incoming.lastOnlineAt) > 0
+        ? Number(incoming.lastOnlineAt)
+        : status === 'online' || previousStatus === 'online' ? now() : state.lastOnlineAt,
     }
     if (typeof incoming.viewVisible === 'boolean') viewVisible = incoming.viewVisible
     emit()
@@ -250,18 +259,16 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     reactToUser(userId: string, reaction = '♥') {
       void sendWithoutAck('reaction', { targetUserId: userId, reaction })
     },
-    async sendMessage(userId: string, text: string) {
+    // The chat shows the outcome on the bubble (src/social/socialOutbox.ts);
+    // a retry passes the same clientMessageId so the gateway can deduplicate.
+    async sendMessage(userId: string, text: string, clientMessageId?: string): Promise<SocialSendResult> {
       const cleanText = text.trim().slice(0, SOCIAL_MESSAGE_MAX_LENGTH)
-      if (!cleanText) return false
-      if (!online()) {
-        notify('error', SOCIAL_TEXT.messageOffline)
-        return false
-      }
-      const result = await send('message', { targetUserId: userId, text: cleanText, clientMessageId: newId() })
-      if (result.code === 'offline') notify('error', SOCIAL_TEXT.messageOffline)
-      else if (result.code === 'timeout') notify('error', SOCIAL_TEXT.messageTimeout)
-      else update({ feedback: messageAckFeedback(result, newId()) })
+      if (!cleanText) return { ok: false, code: 'invalid_payload' }
+      if (!online()) return { ok: false, code: 'offline' }
+      const result = await send('message', { targetUserId: userId, text: cleanText, clientMessageId: clientMessageId || newId() })
       return result.ok === true
+        ? { ok: true, duplicate: result.duplicate === true }
+        : { ok: false, code: result.code || 'rejected' }
     },
     markConversationRead(userId: string) {
       if (!online()) return
@@ -369,6 +376,11 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     signOut() {
       void send('sign-out').then((result) => {
         notify(result.ok ? 'info' : 'error', result.ok ? DESKTOP_TEXT.signedOut : DESKTOP_TEXT.signOutFailed)
+      })
+    },
+    openSettings(section: SocialSettingsSection) {
+      void send('open-settings', { section }).then((result) => {
+        if (!result.ok) notify('error', DESKTOP_TEXT.settingsFailed)
       })
     },
   }
