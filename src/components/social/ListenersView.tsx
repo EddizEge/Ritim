@@ -266,7 +266,13 @@ export function DesktopProfilePanel({ state, actions, hub, userId, onOpenChat, o
         <button type="button" className="is-danger" disabled={!online} onClick={() => setBlockOpen(true)}><Ban aria-hidden="true" />Engelle</button>
       </div>
       <ReportSheet open={reportOpen} name={user.displayName} desktop onClose={() => setReportOpen(false)} onSubmit={(reason, detail) => hub.reportUser(userId, reason, detail, lastIncomingId)} />
-      <BlockSheet open={blockOpen} name={user.displayName} desktop onClose={() => setBlockOpen(false)} onConfirm={() => { actions.blockUser(userId); setBlockOpen(false); hub.showToast('success', `${user.displayName} engellendi.`) }} />
+      <BlockSheet open={blockOpen} name={user.displayName} desktop onClose={() => setBlockOpen(false)} onConfirm={() => {
+        setBlockOpen(false)
+        const blockedName = user.displayName
+        void actions.blockUser(userId).then((result) => {
+          if (result.ok) hub.showToast('success', `${blockedName} engellendi.`)
+        })
+      }} />
     </div>
   )
 }

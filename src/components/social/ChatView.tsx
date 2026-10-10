@@ -144,9 +144,23 @@ export function ChatView({ state, actions, hub, userId, desktop, onBack }: ChatP
     inputRef.current?.focus()
   }
 
+  // The store shows the reaction at once and puts it back if the gateway
+  // refuses it (src/social/socialAckActions.ts).
   const react = (message: SocialMessage, reaction: SocialMessageReaction['reaction']) => {
-    actions.reactToMessage(userId, message.id, reaction)
+    void actions.reactToMessage(userId, message.id, reaction)
     setPickerFor('')
+  }
+
+  // The panel answers at once; a refused or unanswered response brings the
+  // request back (the store shows why).
+  const respond = (action: 'accept' | 'reject') => {
+    if (action === 'reject') setRejected(true)
+    else setAcceptedNotice('incoming')
+    void actions.respondToMessageRequest(userId, action).then((result) => {
+      if (result.ok) return
+      if (action === 'reject') setRejected(false)
+      else setAcceptedNotice((current) => (current === 'incoming' ? '' : current))
+    })
   }
 
   const lastIncomingId = [...conversation].reverse().find((message) => message.senderId === userId)?.id
@@ -175,9 +189,12 @@ export function ChatView({ state, actions, hub, userId, desktop, onBack }: ChatP
         desktop={desktop}
         onClose={() => setBlockOpen(false)}
         onConfirm={() => {
-          actions.blockUser(userId)
           setBlockOpen(false)
           setBlocked(true)
+          // Refused or unanswered: the chat comes back (the store shows why).
+          void actions.blockUser(userId).then((result) => {
+            if (!result.ok) setBlocked(false)
+          })
         }}
       />
     </>
@@ -327,8 +344,8 @@ export function ChatView({ state, actions, hub, userId, desktop, onBack }: ChatP
             </div>
           </div>
           <div className="rs-request-panel-actions">
-            <button type="button" className="rs-button is-request" disabled={!online} onClick={() => { actions.respondToMessageRequest(userId, 'reject'); setRejected(true) }}>Reddet</button>
-            <button type="button" className="rs-button is-primary" disabled={!online} onClick={() => { actions.respondToMessageRequest(userId, 'accept'); setAcceptedNotice('incoming') }}><Check aria-hidden="true" />Kabul et</button>
+            <button type="button" className="rs-button is-request" disabled={!online} onClick={() => respond('reject')}>Reddet</button>
+            <button type="button" className="rs-button is-primary" disabled={!online} onClick={() => respond('accept')}><Check aria-hidden="true" />Kabul et</button>
           </div>
           <div className="rs-request-panel-links">
             <button type="button" disabled={!online} onClick={() => setReportOpen(true)}>Şikâyet et</button>

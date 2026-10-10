@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { SOCIAL_TEXT } from '../../social/socialShared'
 import { createSocialOutbox, type SocialOutbox } from '../../social/socialOutbox'
-import type { SocialActions, SocialFeedback, SocialState } from '../../social/types'
+import type { SocialActionResult, SocialActions, SocialFeedback, SocialState } from '../../social/types'
 
 export type ToastItem = { id: string; tone: SocialFeedback['tone']; text: string }
+
+function withoutId(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  if (!set.has(id)) return set
+  const next = new Set(set)
+  next.delete(id)
+  return next
+}
 
 // One outbox per page: the phone's Social tab unmounts when you switch tabs
 // and a failed message must still be there (with its clientMessageId) when you
@@ -84,45 +91,51 @@ export function useSocialHub(state: SocialState, actions: SocialActions) {
     setDrafts((current) => (current[userId] === value ? current : { ...current, [userId]: value }))
   }, [])
 
+  // The heart shows as sent at once; if the gateway refuses (or never
+  // answers), it goes back unless an earlier heart already went through.
+  const heartedRef = useRef(hearted)
+  heartedRef.current = hearted
   const sendHeart = useCallback((userId: string) => {
-    actions.reactToUser(userId, '♥')
-    setHearted((current) => (current.has(userId) ? current : new Set([...current, userId])))
+    const added = !heartedRef.current.has(userId)
+    if (added) setHearted((current) => new Set([...current, userId]))
+    void actions.reactToUser(userId, '♥').then((result) => {
+      if (!result.ok && added) setHearted((current) => withoutId(current, userId))
+    })
   }, [actions])
 
   // The row fades and shrinks for 160 ms, then disappears and the action
-  // runs. If the gateway never removes it, it comes back after a while.
-  const leaveThen = useCallback((id: string, action: () => void) => {
+  // runs. A refused action brings it back at once; if the gateway never
+  // removes it, it comes back after a while.
+  const leaveThen = useCallback((id: string, action: () => Promise<SocialActionResult>) => {
     setLeaving((current) => new Set([...current, id]))
     timersRef.current.push(window.setTimeout(() => {
-      setLeaving((current) => {
-        const next = new Set(current)
-        next.delete(id)
-        return next
-      })
+      setLeaving((current) => withoutId(current, id))
       setGone((current) => new Set([...current, id]))
-      action()
+      void action().then((result) => {
+        if (!result.ok) setGone((current) => withoutId(current, id))
+      })
       timersRef.current.push(window.setTimeout(() => {
-        setGone((current) => {
-          const next = new Set(current)
-          next.delete(id)
-          return next
-        })
+        setGone((current) => withoutId(current, id))
       }, RESTORE_MS))
     }, LEAVE_MS))
   }, [])
 
+  // The success notice waits for the gateway's acknowledgement; a failure is
+  // reported by the store (socialErrorText) and the request card returns.
   const respondToRequest = useCallback((userId: string, name: string, action: 'accept' | 'reject') => {
-    leaveThen(`request:${userId}`, () => {
-      actions.respondToMessageRequest(userId, action)
-      showToast('success', action === 'accept'
-        ? `${name} isteğini kabul ettin. Artık yazışabilirsiniz.`
-        : `${name} isteği reddedildi; mesajları silindi.`)
-    })
+    leaveThen(`request:${userId}`, () => actions.respondToMessageRequest(userId, action).then((result) => {
+      if (result.ok) {
+        showToast('success', action === 'accept'
+          ? `${name} isteğini kabul ettin. Artık yazışabilirsiniz.`
+          : `${name} isteği reddedildi; mesajları silindi.`)
+      }
+      return result
+    }))
   }, [actions, leaveThen, showToast])
 
   const reportUser = useCallback((userId: string, reason: string, detail: string, messageId?: string) => {
     suppressFeedback(SOCIAL_TEXT.reportSaved)
-    actions.reportUser(userId, reason, detail, messageId)
+    return actions.reportUser(userId, reason, detail, messageId)
   }, [actions, suppressFeedback])
 
   return useMemo(() => ({

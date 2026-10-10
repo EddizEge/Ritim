@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check } from 'lucide-react'
 import { SOCIAL_REPORT_DETAIL_MAX_LENGTH } from '../../social/socialShared'
 import { REPORT_REASONS, accusative } from '../../social/socialModel'
+import type { SocialActionResult } from '../../social/types'
 import { usePresence } from './usePresence'
 
 const SHEET_EXIT_MS = 240
@@ -53,16 +54,20 @@ export function ReportSheet({ open, name, desktop, onClose, onSubmit }: {
   name: string
   desktop: boolean
   onClose: () => void
-  onSubmit: (reason: string, detail: string) => void
+  onSubmit: (reason: string, detail: string) => Promise<SocialActionResult>
 }) {
   const [reason, setReason] = useState<string>(REPORT_REASONS[0])
   const [detail, setDetail] = useState('')
   const [saved, setSaved] = useState(false)
+  const [sending, setSending] = useState(false)
+  const openRef = useRef(open)
+  openRef.current = open
   useEffect(() => {
     if (!open) return
     setReason(REPORT_REASONS[0])
     setDetail('')
     setSaved(false)
+    setSending(false)
   }, [open])
   return (
     <Sheet open={open} onClose={onClose} label={`${name} için şikâyet`} desktop={desktop}>
@@ -76,8 +81,15 @@ export function ReportSheet({ open, name, desktop, onClose, onSubmit }: {
       ) : (
         <form onSubmit={(event) => {
           event.preventDefault()
-          onSubmit(reason, detail)
-          setSaved(true)
+          if (sending) return
+          // "Kaydedildi" only after the gateway confirmed it; on a failure the
+          // form stays filled in and the store shows why.
+          setSending(true)
+          void onSubmit(reason, detail).then((result) => {
+            if (!openRef.current) return
+            setSending(false)
+            if (result.ok) setSaved(true)
+          })
         }}>
           <h2>{accusative(name)} şikâyet et</h2>
           <p className="rs-sheet-copy">Son mesajı şikâyete eklenir. {name} bundan haberdar edilmez.</p>
@@ -94,7 +106,7 @@ export function ReportSheet({ open, name, desktop, onClose, onSubmit }: {
           </label>
           <div className="rs-sheet-actions">
             <button type="button" className="rs-button is-secondary" onClick={onClose}>Vazgeç</button>
-            <button type="submit" className="rs-button is-primary">Şikâyeti gönder</button>
+            <button type="submit" className="rs-button is-primary" disabled={sending}>{sending ? 'Gönderiliyor…' : 'Şikâyeti gönder'}</button>
           </div>
         </form>
       )}
