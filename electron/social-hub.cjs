@@ -38,6 +38,13 @@ function objectPayload(value) {
 // "Listening together" follows the viewer's room membership, which is durable
 // in PostgreSQL. The Redis listening key expires after two minutes and used to
 // clear this flag while the membership stayed, so the toggle then left the room.
+// Store methods throw a plain Error with a Turkish message when a social rule
+// rejects the action. Driver and connection failures carry a `code` (SQLSTATE
+// or errno) and are answered as `server_error` instead.
+function isRuleRejection(error) {
+  return error instanceof Error && !error.code
+}
+
 function listeningTargetForViewer(viewerRooms, viewerAccess) {
   const ownerId = viewerRooms.find((room) => room.viewerRole === 'listener')?.ownerId
   if (!ownerId || viewerAccess?.get(ownerId)?.listening === false) return undefined
@@ -721,6 +728,33 @@ function createSocialHub(io, { store, onAbuse } = {}) {
     }
   }
 
+  // For events whose client may pass an acknowledgement callback as the last
+  // argument. The handler gets an object payload and returns nothing on
+  // success or a social:error code when validation or a rule rejects the
+  // event. The callback is answered once, after the handler's state broadcast,
+  // so `{ ok: true }` arrives after the new state. An unexpected failure
+  // answers `server_error` and is logged as before. Without a callback the
+  // event behaves as it did before acknowledgements existed.
+  // Codes beyond the existing social:error ones: `invalid_request` (malformed
+  // payload, self target or no social:join yet), `user_not_found` (target is
+  // not connected or unknown), `request_not_found` (no pending request from
+  // that user), `reaction_blocked` (block, privacy, conversation not accepted
+  // or message missing), `conversation_not_found` (mute needs an accepted
+  // conversation) and `server_error`.
+  function acknowledged(label, handler) {
+    return safely(label, async (...args) => {
+      const callback = typeof args.at(-1) === 'function' ? args.pop() : undefined
+      let code
+      try {
+        code = await handler(objectPayload(args[0]))
+      } catch (error) {
+        callback?.({ ok: false, code: 'server_error' })
+        throw error
+      }
+      callback?.(code ? { ok: false, code } : { ok: true })
+    })
+  }
+
   function sanitizeProfile(accountId, deviceRole, profile) {
     const displayName = cleanText(profile?.displayName, 60)
     if (!accountId || !displayName) return null
@@ -896,12 +930,12 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:message-reaction', safely('Mesaj tepkisi kaydedilemedi', async ({
+    socket.on('social:message-reaction', acknowledged('Mesaj tepkisi kaydedilemedi', async ({
       targetUserId,
       messageId,
       reaction,
-    } = {}) => {
-      if (!eventAllowed(socket, 'message-reaction', 40, 60_000)) return
+    }) => {
+      if (!eventAllowed(socket, 'message-reaction', 40, 60_000)) return 'rate_limited'
       const actorId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
       const selectedMessageId = cleanText(messageId, 80)
@@ -912,17 +946,22 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         || actorId === targetId
         || !selectedMessageId
         || !allowedReactions.has(reaction)
-      ) return
+      ) return 'invalid_request'
       if (store) {
-        await store.saveMessageReaction(actorId, targetId, selectedMessageId, reaction)
+        try {
+          await store.saveMessageReaction(actorId, targetId, selectedMessageId, reaction)
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'reaction_blocked'
+        }
       } else {
-        if (messageRequests.get(conversationKey(actorId, targetId))?.status !== 'accepted') return
-        if (blocks.has(`${actorId}:${targetId}`) || blocks.has(`${targetId}:${actorId}`)) return
+        if (messageRequests.get(conversationKey(actorId, targetId))?.status !== 'accepted') return 'reaction_blocked'
+        if (blocks.has(`${actorId}:${targetId}`) || blocks.has(`${targetId}:${actorId}`)) return 'reaction_blocked'
         const message = messages.find((candidate) => candidate.id === selectedMessageId && (
           (candidate.senderId === actorId && candidate.targetId === targetId)
           || (candidate.senderId === targetId && candidate.targetId === actorId)
         ))
-        if (!message) return
+        if (!message) return 'reaction_blocked'
         const current = message.reactions.find((item) => item.actorId === actorId)
         if (current?.reaction === reaction) {
           message.reactions = message.reactions.filter((item) => item.actorId !== actorId)
@@ -944,10 +983,10 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:notifications-read', safely('Bildirimler okunamadı', async () => {
-      if (!eventAllowed(socket, 'notifications-read', 60, 60_000)) return
+    socket.on('social:notifications-read', acknowledged('Bildirimler okunamadı', async () => {
+      if (!eventAllowed(socket, 'notifications-read', 60, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
-      if (!accountId) return
+      if (!accountId) return 'invalid_request'
       if (store) await store.markNotificationsRead(accountId)
       else {
         notifications.set(accountId, (notifications.get(accountId) || []).map((item) => ({
@@ -958,13 +997,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:notification-preferences', safely('Bildirim ayarları kaydedilemedi', async ({
+    socket.on('social:notification-preferences', acknowledged('Bildirim ayarları kaydedilemedi', async ({
       messagesEnabled,
       reactionsEnabled,
-    } = {}) => {
-      if (!eventAllowed(socket, 'notification-preferences', 20, 60_000)) return
+    }) => {
+      if (!eventAllowed(socket, 'notification-preferences', 20, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
-      if (!accountId) return
+      if (!accountId) return 'invalid_request'
       const selected = {
         messagesEnabled: messagesEnabled !== false,
         reactionsEnabled: reactionsEnabled !== false,
@@ -975,20 +1014,23 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:mute', safely('Sessize alma ayarı kaydedilemedi', async ({ targetUserId } = {}) => {
-      if (!eventAllowed(socket, 'mute', 20, 60_000)) return
+    socket.on('social:mute', acknowledged('Sessize alma ayarı kaydedilemedi', async ({ targetUserId }) => {
+      if (!eventAllowed(socket, 'mute', 20, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      if (
-        !accountId
-        || !targetId
-        || accountId === targetId
-        || (!store && !knownProfiles.has(targetId))
-      ) return
+      if (!accountId || !targetId || accountId === targetId) return 'invalid_request'
+      if (!store && !knownProfiles.has(targetId)) return 'user_not_found'
       if (store) {
-        await store.toggleMute(accountId, targetId)
+        try {
+          await store.toggleMute(accountId, targetId)
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'conversation_not_found'
+        }
       } else {
-        if (messageRequests.get(conversationKey(accountId, targetId))?.status !== 'accepted') return
+        if (messageRequests.get(conversationKey(accountId, targetId))?.status !== 'accepted') {
+          return 'conversation_not_found'
+        }
         const key = `${accountId}:${targetId}`
         if (mutedConversations.has(key)) mutedConversations.delete(key)
         else mutedConversations.add(key)
@@ -996,13 +1038,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:report', safely('Şikâyet kaydedilemedi', async ({
+    socket.on('social:report', acknowledged('Şikâyet kaydedilemedi', async ({
       targetUserId,
       reason,
       detail,
       messageId,
-    } = {}) => {
-      if (!eventAllowed(socket, 'report', 6, 60 * 60_000)) return
+    }) => {
+      if (!eventAllowed(socket, 'report', 6, 60 * 60_000)) return 'rate_limited'
       const reporterId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
       const cleanReason = cleanText(reason, 120)
@@ -1013,10 +1055,15 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         || !targetId
         || reporterId === targetId
         || cleanReason.length < 3
-        || (!store && !knownProfiles.has(targetId))
-      ) return
+      ) return 'invalid_request'
+      if (!store && !knownProfiles.has(targetId)) return 'user_not_found'
       if (store) {
-        await store.saveReport(reporterId, targetId, cleanReason, cleanDetail, cleanMessageId)
+        try {
+          await store.saveReport(reporterId, targetId, cleanReason, cleanDetail, cleanMessageId)
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'user_not_found'
+        }
       } else {
         reports.push({
           id: crypto.randomUUID(),
@@ -1033,11 +1080,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:request-response', safely('Mesaj isteği yanıtlanamadı', async ({
+    socket.on('social:request-response', acknowledged('Mesaj isteği yanıtlanamadı', async ({
       requesterUserId,
       action,
-    } = {}) => {
-      if (!eventAllowed(socket, 'request-response', 30, 60_000)) return
+    }) => {
+      if (!eventAllowed(socket, 'request-response', 30, 60_000)) return 'rate_limited'
       const recipientId = socket.data.socialAccountId
       const requesterId = cleanText(requesterUserId, 80)
       if (
@@ -1045,9 +1092,14 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         || !requesterId
         || requesterId === recipientId
         || !['accept', 'reject'].includes(action)
-      ) return
+      ) return 'invalid_request'
       if (store) {
-        await store.respondToMessageRequest(recipientId, requesterId, action)
+        try {
+          await store.respondToMessageRequest(recipientId, requesterId, action)
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'request_not_found'
+        }
       } else {
         const key = conversationKey(recipientId, requesterId)
         const request = messageRequests.get(key)
@@ -1056,7 +1108,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           || request.status !== 'pending'
           || request.requesterId !== requesterId
           || request.recipientId !== recipientId
-        ) return
+        ) return 'request_not_found'
         request.status = action === 'accept' ? 'accepted' : 'rejected'
         if (action === 'accept') {
           const lastMessage = messages.findLast((message) => (
@@ -1076,15 +1128,22 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:reaction', safely('Tepki kaydedilemedi', async ({ targetUserId, reaction } = {}) => {
-      if (!eventAllowed(socket, 'reaction', 30, 60_000)) return
+    socket.on('social:reaction', acknowledged('Tepki kaydedilemedi', async ({ targetUserId, reaction }) => {
+      if (!eventAllowed(socket, 'reaction', 30, 60_000)) return 'rate_limited'
       const senderId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      if (!senderId || !targetId || targetId === senderId || !accountProfiles().has(targetId)) return
+      if (!senderId || !targetId || targetId === senderId) return 'invalid_request'
+      if (!accountProfiles().has(targetId)) return 'user_not_found'
       const selectedReaction = cleanReaction(reaction)
-      if (store) await store.saveReaction({ actorId: senderId, targetId, reaction: selectedReaction })
-      else {
-        if (!memoryAccessRule(senderId, targetId).profile) return
+      if (store) {
+        try {
+          await store.saveReaction({ actorId: senderId, targetId, reaction: selectedReaction })
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'reaction_blocked'
+        }
+      } else {
+        if (!memoryAccessRule(senderId, targetId).profile) return 'reaction_blocked'
         const current = reactions.get(targetId) || { count: 0 }
         reactions.set(targetId, {
           count: Math.min(999, current.count + 1),
@@ -1099,11 +1158,12 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:read', safely('Okundu bilgisi kaydedilemedi', async ({ targetUserId } = {}) => {
-      if (!eventAllowed(socket, 'read', 120, 60_000)) return
+    socket.on('social:read', acknowledged('Okundu bilgisi kaydedilemedi', async ({ targetUserId }) => {
+      if (!eventAllowed(socket, 'read', 120, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      if (!accountId || !targetId || accountId === targetId || !accountProfiles().has(targetId)) return
+      if (!accountId || !targetId || accountId === targetId) return 'invalid_request'
+      if (!accountProfiles().has(targetId)) return 'user_not_found'
       if (store) {
         await store.markConversationRead(accountId, targetId)
       } else {
@@ -1116,11 +1176,11 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:listening', safely('Dinleme durumu güncellenemedi', async ({ targetUserId } = {}) => {
-      if (!eventAllowed(socket, 'listening', 20, 60_000)) return
+    socket.on('social:listening', acknowledged('Dinleme durumu güncellenemedi', async ({ targetUserId }) => {
+      if (!eventAllowed(socket, 'listening', 20, 60_000)) return 'rate_limited'
       const senderId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      if (!senderId) return
+      if (!senderId) return 'invalid_request'
       if (store) {
         try {
           if (!targetId || targetId === senderId) await store.clearListening(senderId)
@@ -1129,18 +1189,16 @@ function createSocialHub(io, { store, onAbuse } = {}) {
               .some((peer) => peer.data.socialDeviceRole === 'desktop')
             if (!ownerDesktopOnline) throw new Error('Oda sahibi bilgisayarı çevrimdışı.')
             await store.toggleListening(senderId, targetId)
-          }
+          } else return 'room_owner_offline'
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          socket.emit('social:error', {
-            code: /çevrimdışı/i.test(message)
-              ? 'room_owner_offline'
-              : /erişim/i.test(message)
-                ? 'room_access_denied'
-                : /dolu/i.test(message) ? 'room_full' : 'room_not_found',
-            event: 'listening',
-          })
-          return
+          const code = /çevrimdışı/i.test(message)
+            ? 'room_owner_offline'
+            : /erişim/i.test(message)
+              ? 'room_access_denied'
+              : /dolu/i.test(message) ? 'room_full' : 'room_not_found'
+          socket.emit('social:error', { code, event: 'listening' })
+          return code
         }
       } else if (!targetId || targetId === senderId || listening.get(senderId) === targetId) {
         listening.delete(senderId)
@@ -1151,22 +1209,22 @@ function createSocialHub(io, { store, onAbuse } = {}) {
           : 0
         if (!targetRoom) {
           socket.emit('social:error', { code: 'room_not_found', event: 'listening' })
-          return
+          return 'room_not_found'
         }
         if (!socketsForAccount(targetId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
           socket.emit('social:error', { code: 'room_owner_offline', event: 'listening' })
-          return
+          return 'room_owner_offline'
         }
         if (!memoryRoomAccessAllowed(senderId, targetId)) {
           socket.emit('social:error', { code: 'room_access_denied', event: 'listening' })
-          return
+          return 'room_access_denied'
         }
         if (memberCount >= MAX_ROOM_MEMBERS) {
           socket.emit('social:error', { code: 'room_full', event: 'listening' })
-          return
+          return 'room_full'
         }
         listening.set(senderId, targetId)
-      }
+      } else return 'room_owner_offline'
       await scheduleEmit()
     }))
 
@@ -1255,18 +1313,18 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:create-room', safely('Oda güncellenemedi', async ({ title, cover } = {}) => {
-      if (!eventAllowed(socket, 'create-room', 10, 60_000)) return
+    socket.on('social:create-room', acknowledged('Oda güncellenemedi', async ({ title, cover }) => {
+      if (!eventAllowed(socket, 'create-room', 10, 60_000)) return 'rate_limited'
       const ownerId = socket.data.socialAccountId
       const owner = accountProfiles().get(ownerId)
-      if (!ownerId || !owner) return
+      if (!ownerId || !owner) return 'invalid_request'
       const cleanTitle = cleanText(title, 100) || `${owner.displayName} dinliyor`
       const cleanCover = Math.max(0, Math.min(11, Number(cover) || 0))
       if (store) {
         const existing = (await store.loadRooms([ownerId])).some((room) => room.ownerId === ownerId)
         if (!existing && !socketsForAccount(ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
           socket.emit('social:error', { code: 'room_owner_offline', event: 'create-room' })
-          return
+          return 'room_owner_offline'
         }
         await store.toggleRoom(ownerId, cleanTitle, cleanCover)
       } else {
@@ -1283,7 +1341,7 @@ function createSocialHub(io, { store, onAbuse } = {}) {
         else {
           if (!socketsForAccount(ownerId).some((peer) => peer.data.socialDeviceRole === 'desktop')) {
             socket.emit('social:error', { code: 'room_owner_offline', event: 'create-room' })
-            return
+            return 'room_owner_offline'
           }
           listening.delete(ownerId)
           const id = `room-${crypto.randomUUID()}`
@@ -1552,13 +1610,13 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       ) await scheduleEmit()
     }))
 
-    socket.on('social:privacy', safely('Gizlilik ayarı güncellenemedi', async ({
+    socket.on('social:privacy', acknowledged('Gizlilik ayarı güncellenemedi', async ({
       profileVisibility,
       listeningVisibility,
-    } = {}) => {
-      if (!eventAllowed(socket, 'privacy', 12, 60_000)) return
+    }) => {
+      if (!eventAllowed(socket, 'privacy', 12, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
-      if (!accountId) return
+      if (!accountId) return 'invalid_request'
       const allowedValues = new Set(['everyone', 'contacts', 'hidden'])
       const preferences = {
         profileVisibility: allowedValues.has(profileVisibility) ? profileVisibility : 'everyone',
@@ -1578,19 +1636,21 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       await scheduleEmit()
     }))
 
-    socket.on('social:block', safely('Engelleme ayarı güncellenemedi', async ({ targetUserId } = {}) => {
-      if (!eventAllowed(socket, 'block', 12, 60_000)) return
+    socket.on('social:block', acknowledged('Engelleme ayarı güncellenemedi', async ({ targetUserId }) => {
+      if (!eventAllowed(socket, 'block', 12, 60_000)) return 'rate_limited'
       const accountId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
-      if (
-        !accountId
-        || !targetId
-        || accountId === targetId
-        || (!store && !knownProfiles.has(targetId))
-      ) return
+      if (!accountId || !targetId || accountId === targetId) return 'invalid_request'
+      if (!store && !knownProfiles.has(targetId)) return 'user_not_found'
       let blocked
-      if (store) blocked = await store.toggleBlock(accountId, targetId)
-      else {
+      if (store) {
+        try {
+          blocked = await store.toggleBlock(accountId, targetId)
+        } catch (error) {
+          if (!isRuleRejection(error)) throw error
+          return 'user_not_found'
+        }
+      } else {
         const key = `${accountId}:${targetId}`
         if (blocks.has(key)) {
           blocks.delete(key)
