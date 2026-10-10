@@ -72,6 +72,6 @@ Android Ritim ── yerel ağ / Socket.IO ── Windows Ritim ── resmi You
 
 YouTube Music’in sayfa yapısı Google tarafından değiştirildiğinde köprünün seçicileri güncellenmek zorunda kalabilir. Yerel Android derlemesi varsayılan debug imzasını, GitHub yayınları kalıcı Ritim sertifikasını kullanır; build variant adı tek başına imzayı belirlemez. Yerel PC–telefon kumandası aynı erişilebilir ağda çalışır; internet sosyal bağlantısı bu yerel kumandayı bir uzak ağ geçidine dönüştürmez.
 
-Beta 1'in son fiziksel kabul turu kullanıcı kararıyla sonraki aşamaya ertelendi; Beta 2 devir incelemesindeki hataları düzeltir. [Beta 2 yayın notu](releases/v0.9.1-beta.2.md), [Beta 1 yayın notu](releases/v0.9.1-beta.1.md), [yol haritası](v0.9-roadmap.md) ve [Claude teslim notu](CLAUDE_HANDOFF.md) kapsamı ve bekleyen işleri açıklar.
+Beta 1'in son fiziksel kabul turu kullanıcı kararıyla sonraki aşamaya ertelendi; Beta 2 devir incelemesindeki hataları düzeltti, Beta 3 sosyal bölümü yeniler. [Beta 3 yayın notu](releases/v0.9.1-beta.3.md), [Beta 2 yayın notu](releases/v0.9.1-beta.2.md), [Beta 1 yayın notu](releases/v0.9.1-beta.1.md), [yol haritası](v0.9-roadmap.md) ve [Claude teslim notu](CLAUDE_HANDOFF.md) kapsamı ve bekleyen işleri açıklar.
 
 Ritim bağımsız bir projedir; Google veya YouTube ile bağlantılı, onaylı ya da sponsorlu değildir.
