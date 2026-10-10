@@ -98,7 +98,9 @@ function resolveSocialAsset(distRoot, requestUrl) {
     return null
   }
   if (pathname === '/' || pathname === '') pathname = SOCIAL_PAGE_PATH
-  if (pathname.includes('\0')) return null
+  // A backslash is a path separator only on Windows; rejecting it everywhere
+  // keeps the mapping identical across platforms (Vite never emits one).
+  if (pathname.includes('\0') || pathname.includes('\\')) return null
   const root = path.resolve(distRoot)
   const filePath = path.resolve(root, `.${pathname}`)
   if (!filePath.startsWith(`${root}${path.sep}`)) return null
