@@ -398,7 +398,8 @@ test('bellek modunda odadan ayrılma erişim kalksa ve sahip çevrimdışı olsa
   assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'joined' })
   // Hiding the profile keeps listeners in the room but denies new joins.
   assert.deepEqual(await ask(owner, 'social:privacy', { profileVisibility: 'hidden', listeningVisibility: 'everyone' }), { ok: true })
-  assert.equal((await waitFor('ayrilma-dinleyici', () => true)).activeRoomId, roomId)
+  // The owner's own state arrives before its acknowledgement.
+  assert.equal((await waitFor('ayrilma-sahip', () => true)).rooms[0].memberCount, 2, 'dinleyici odada kalır')
   assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'left' })
   assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: false, code: 'room_access_denied' })
 
