@@ -84,41 +84,40 @@ function setup(results: Record<string, DesktopSocialActionResult | ((payload?: R
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
-test('mesaj taslağı yalnız ack ok ise temizlenir; ret, zaman aşımı ve çevrimdışı ayrı bildirilir', async () => {
+test('mesaj gönderimi ack sonucunu balona döndürür, ayrı bildirim üretmez; tekrar aynı clientMessageId ile gider', async () => {
   let next: DesktopSocialActionResult = { ok: false, code: 'message_request_pending' }
   const { store, calls } = setup({ message: () => next })
   store.applyIncoming(incoming())
 
-  assert.equal(await store.actions.sendMessage('ali', '  cevap  '), false)
-  assert.equal(store.getState().feedback?.text, socialErrorText('message_request_pending'))
-  assert.equal(store.getState().feedback?.tone, 'error')
+  assert.deepEqual(await store.actions.sendMessage('ali', '  cevap  '), { ok: false, code: 'message_request_pending' })
   assert.equal(calls[0].payload?.text, 'cevap')
   assert.match(String(calls[0].payload?.clientMessageId), /^id-/)
+  assert.equal(store.getState().feedback, undefined)
 
   next = { ok: false, code: 'timeout' }
-  assert.equal(await store.actions.sendMessage('ali', 'cevap'), false)
-  assert.equal(store.getState().feedback?.text, SOCIAL_TEXT.messageTimeout)
+  assert.deepEqual(await store.actions.sendMessage('ali', 'cevap', 'client-1'), { ok: false, code: 'timeout' })
+  assert.equal(calls[1].payload?.clientMessageId, 'client-1')
 
-  next = { ok: false, code: 'offline' }
-  assert.equal(await store.actions.sendMessage('ali', 'cevap'), false)
-  assert.equal(store.getState().feedback?.text, SOCIAL_TEXT.messageOffline)
+  // The retry reuses the id; the gateway reports the duplicate as delivered.
+  next = { ok: true, duplicate: true }
+  assert.deepEqual(await store.actions.sendMessage('ali', 'cevap', 'client-1'), { ok: true, duplicate: true })
+  assert.equal(calls[2].payload?.clientMessageId, 'client-1')
+  assert.equal(store.getState().feedback, undefined)
 
-  next = { ok: true, duplicate: false }
-  assert.equal(await store.actions.sendMessage('ali', 'cevap'), true)
-  assert.equal(store.getState().feedback?.text, SOCIAL_TEXT.messageDelivered)
-  assert.equal(store.getState().feedback?.tone, 'success')
-
-  assert.equal(await store.actions.sendMessage('ali', '   '), false)
+  next = { ok: false }
+  assert.deepEqual(await store.actions.sendMessage('ali', 'cevap'), { ok: false, code: 'rejected' })
+  assert.deepEqual(await store.actions.sendMessage('ali', '   '), { ok: false, code: 'invalid_payload' })
   assert.equal(calls.length, 4)
-  assert.equal(await store.actions.sendMessage('ali', 'x'.repeat(600)), true)
+  next = { ok: true, duplicate: false }
+  assert.deepEqual(await store.actions.sendMessage('ali', 'x'.repeat(600)), { ok: true, duplicate: false })
   assert.equal(String(calls[4].payload?.text).length, 500)
 })
 
 test('bağlantı yokken mesaj gönderilmez ve oda mesajı sessizce taslakta kalır', async () => {
   const { store, calls } = setup()
   store.applyIncoming(incoming({ connectionStatus: 'offline' }))
-  assert.equal(await store.actions.sendMessage('ali', 'selam'), false)
-  assert.equal(store.getState().feedback?.text, SOCIAL_TEXT.messageOffline)
+  assert.deepEqual(await store.actions.sendMessage('ali', 'selam'), { ok: false, code: 'offline' })
+  assert.equal(store.getState().feedback, undefined)
   assert.equal(await store.actions.sendRoomMessage('room-1', 'selam'), false)
   store.actions.markConversationRead('ali')
   store.actions.respondToMessageRequest('ali', 'accept')
@@ -283,6 +282,25 @@ test('Google giriş/çıkış ve yeniden bağlan ana süreç akışına gider; k
   assert.equal(store.getState().connectionStatus, 'connecting')
   await flush()
   assert.deepEqual(calls.map((call) => call.type), ['sign-in', 'sign-out', 'reconnect'])
+})
+
+test('son başarılı bağlantı zamanı tutulur, ana sürecin değeri önceliklidir; Sosyal ayarları ana süreçte açılır', async () => {
+  const { store, calls, advance } = setup({ 'open-settings': { ok: true } })
+  store.applyIncoming(incoming({ connectionStatus: 'connecting' }))
+  assert.equal(store.getState().lastOnlineAt, undefined)
+  store.applyIncoming(incoming())
+  assert.equal(store.getState().lastOnlineAt, 1_000)
+  advance(60_000)
+  store.applyIncoming(incoming({ connectionStatus: 'offline' }))
+  assert.equal(store.getState().lastOnlineAt, 61_000)
+  advance(60_000)
+  store.applyIncoming(incoming({ connectionStatus: 'connecting' }))
+  assert.equal(store.getState().lastOnlineAt, 61_000)
+  store.applyIncoming(incoming({ connectionStatus: 'offline', lastOnlineAt: 5_000 }))
+  assert.equal(store.getState().lastOnlineAt, 5_000)
+  store.actions.openSettings('notifications')
+  await flush()
+  assert.deepEqual(calls.at(-1), { type: 'open-settings', payload: { section: 'notifications' } })
 })
 
 test('start dinleyicileri bir kez kurar ve temizler; ilk durumu IPC ile alır', async () => {

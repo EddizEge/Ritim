@@ -26,10 +26,6 @@ export const SOCIAL_TEXT = {
   disconnected: 'Sosyal bağlantı kesildi. Müzik ve telefon kumandası çalışmaya devam ediyor.',
   roomClosed: 'Dinleme odası kapatıldı veya erişimin kaldırıldı.',
   reportSaved: 'Şikâyet güvenli şekilde kaydedildi.',
-  messageOffline: 'Mesaj gönderilemedi; Sosyal bağlantısı çevrimdışı.',
-  messageTimeout: 'Sunucu mesajı zamanında onaylamadı. Mesajın taslakta tutuldu.',
-  messageDelivered: 'Mesaj sunucuya ulaştı.',
-  messageDuplicate: 'Mesaj daha önce güvenli şekilde gönderilmiş.',
   roomMessageTimeout: 'Oda mesajı zamanında onaylanmadı; taslağın korunuyor.',
   roomJoined: 'Dinleme odasına katıldın.',
   roomLeft: 'Dinleme odasından ayrıldın.',
@@ -63,16 +59,6 @@ export function isAckHandledSocialError(event?: string) {
 
 export function socialFeedback(tone: SocialFeedback['tone'], text: string, id: string = crypto.randomUUID()): SocialFeedback {
   return { id, tone, text }
-}
-
-export function messageAckFeedback(result: SocialAckResult, id?: string) {
-  return socialFeedback(
-    result.ok ? 'success' : 'error',
-    result.ok
-      ? (result.duplicate ? SOCIAL_TEXT.messageDuplicate : SOCIAL_TEXT.messageDelivered)
-      : socialErrorText(result.code),
-    id,
-  )
 }
 
 export function roomMembershipFeedback(result: SocialAckResult, id?: string) {
