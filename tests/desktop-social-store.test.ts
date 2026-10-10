@@ -49,7 +49,9 @@ function incoming(patch: DesktopSocialIncomingState = {}): DesktopSocialIncoming
   }
 }
 
-function setup(results: Record<string, DesktopSocialActionResult | ((payload?: Record<string, unknown>) => DesktopSocialActionResult)> = {}) {
+type ActionAnswer = DesktopSocialActionResult | Promise<DesktopSocialActionResult>
+
+function setup(results: Record<string, DesktopSocialActionResult | ((payload?: Record<string, unknown>) => ActionAnswer)> = {}) {
   const calls: Call[] = []
   let clock = 1_000
   let ids = 0
@@ -223,7 +225,13 @@ test('sunucu hata olayları useSocial ile aynı süzülür; şikâyet kaydı bil
     store.handleEvent({ kind: 'error', code: 'rate_limited', event })
     assert.equal(store.getState().feedback, undefined, event)
   }
-  store.handleEvent({ kind: 'error', code: 'room_owner_offline', event: 'listening' })
+  // Every user action reports its error through the acknowledgement; the
+  // gateway's extra social:error for it must not show a second notice.
+  for (const event of ['listening', 'create-room', 'request-response', 'message-reaction', 'notifications-read', 'block', 'mute', 'report', 'privacy', 'reaction', 'read']) {
+    store.handleEvent({ kind: 'error', code: 'rate_limited', event })
+    assert.equal(store.getState().feedback, undefined, event)
+  }
+  store.handleEvent({ kind: 'error', code: 'room_owner_offline', event: '' })
   assert.equal(store.getState().feedback?.text, socialErrorText('room_owner_offline'))
   store.handleEvent({ kind: 'report-saved' })
   assert.equal(store.getState().feedback?.text, SOCIAL_TEXT.reportSaved)
@@ -314,4 +322,200 @@ test('start dinleyicileri bir kez kurar ve temizler; ilk durumu IPC ile alır', 
   assert.equal(store.getState().users.length, 2)
   stop()
   assert.equal(listenerCount(), 0)
+})
+
+function deferred() {
+  let resolve: (value: DesktopSocialActionResult) => void = () => {}
+  const promise = new Promise<DesktopSocialActionResult>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+const request = { userId: 'ali', direction: 'incoming' as const, preview: 'selam', sentAt: 1 }
+
+test('istek yanıtı: kart hemen kalkar; başarıda depo bildirim üretmez, hata ve zaman aşımında kart geri gelir', async () => {
+  for (const [answer, text] of [
+    [{ ok: true }, undefined],
+    [{ ok: false, code: 'request_not_found' }, socialErrorText('request_not_found')],
+    [{ ok: false, code: 'timeout' }, socialErrorText('timeout')],
+  ] as const) {
+    const gate = deferred()
+    const { store, calls } = setup({ 'request-response': () => gate.promise })
+    store.applyIncoming(incoming({ messageRequests: [request] }))
+    const pending = store.actions.respondToMessageRequest('ali', 'reject')
+    assert.deepEqual(store.getState().messageRequests, [], 'iyimser olarak gizlenir')
+    assert.equal(store.getState(), store.getState(), 'aynı durum nesnesi döner')
+    gate.resolve(answer)
+    const result = await pending
+    assert.equal(result.ok, answer.ok)
+    assert.deepEqual(calls, [{ type: 'request-response', payload: { requesterUserId: 'ali', action: 'reject' } }])
+    assert.equal(store.getState().feedback?.text, text)
+    assert.deepEqual(store.getState().messageRequests, answer.ok ? [] : [request])
+    if (answer.ok) {
+      // The gateway sent its new state before the acknowledgement; from the
+      // next snapshot on, only the gateway decides.
+      store.applyIncoming(incoming({ messageRequests: [request] }))
+      assert.deepEqual(store.getState().messageRequests, [request])
+    }
+  }
+})
+
+test('istek yanıtı çevrimdışıyken gönderilmez ve kartı gizlemez', async () => {
+  const { store, calls } = setup()
+  store.applyIncoming(incoming({ connectionStatus: 'offline', messageRequests: [request] }))
+  assert.deepEqual(await store.actions.respondToMessageRequest('ali', 'accept'), { ok: false, code: 'offline' })
+  assert.deepEqual(store.getState().messageRequests, [request])
+  assert.deepEqual(calls, [])
+  assert.equal(store.getState().feedback, undefined)
+})
+
+test('mesaj tepkisi hemen görünür; hata ve zaman aşımında eski hâline döner', async () => {
+  const message = { id: 'm1', senderId: 'ali', text: 'selam', sentAt: 1, reactions: [{ actorId: 'ali', reaction: '♥' as const }] }
+  for (const [answer, text] of [
+    [{ ok: true }, undefined],
+    [{ ok: false, code: 'reaction_blocked' }, socialErrorText('reaction_blocked')],
+    [{ ok: false, code: 'timeout' }, socialErrorText('timeout')],
+  ] as const) {
+    const gate = deferred()
+    const { store } = setup({ 'message-reaction': () => gate.promise })
+    store.applyIncoming(incoming({ conversations: { ali: [message] } }))
+    const pending = store.actions.reactToMessage('ali', 'm1', '🔥')
+    assert.deepEqual(store.getState().conversations.ali[0].reactions, [{ actorId: 'ali', reaction: '♥' }, { actorId: 'me', reaction: '🔥' }])
+    gate.resolve(answer)
+    assert.equal((await pending).ok, answer.ok)
+    assert.equal(store.getState().feedback?.text, text)
+    assert.deepEqual(
+      store.getState().conversations.ali[0].reactions,
+      answer.ok ? [{ actorId: 'ali', reaction: '♥' }, { actorId: 'me', reaction: '🔥' }] : message.reactions,
+    )
+  }
+
+  // The same emoji again removes it (gateway toggle); a refusal puts it back.
+  const own = { ...message, reactions: [{ actorId: 'me', reaction: '🔥' as const }] }
+  const gate = deferred()
+  const { store } = setup({ 'message-reaction': () => gate.promise })
+  store.applyIncoming(incoming({ conversations: { ali: [own] } }))
+  const pending = store.actions.reactToMessage('ali', 'm1', '🔥')
+  assert.deepEqual(store.getState().conversations.ali[0].reactions, [])
+  gate.resolve({ ok: false, code: 'rate_limited' })
+  await pending
+  assert.deepEqual(store.getState().conversations.ali[0].reactions, own.reactions)
+  assert.equal(store.getState().feedback?.text, socialErrorText('rate_limited'))
+})
+
+test('Tümünü okundu say noktaları hemen söndürür; hata ve zaman aşımında geri gelir', async () => {
+  const notifications = [
+    { id: 'n1', kind: 'message' as const, actorId: 'ali', body: 'selam', createdAt: 1, read: false },
+    { id: 'n2', kind: 'profile_reaction' as const, actorId: 'ayse', body: '♥', createdAt: 2, read: true },
+  ]
+  for (const [answer, text] of [
+    [{ ok: true }, undefined],
+    [{ ok: false, code: 'server_error' }, socialErrorText('server_error')],
+    [{ ok: false, code: 'timeout' }, socialErrorText('timeout')],
+  ] as const) {
+    const gate = deferred()
+    const { store, calls } = setup({ 'notifications-read': () => gate.promise })
+    store.applyIncoming(incoming({ notifications }))
+    const pending = store.actions.markNotificationsRead()
+    assert.deepEqual(store.getState().notifications.map((item) => item.read), [true, true])
+    // A notification that arrives meanwhile is not part of "all".
+    const late = { id: 'n3', kind: 'message' as const, actorId: 'ali', body: 'yeni', createdAt: 3, read: false }
+    store.applyIncoming(incoming({ notifications: [...notifications, late] }))
+    assert.deepEqual(store.getState().notifications.map((item) => item.read), [true, true, false])
+    gate.resolve(answer)
+    assert.equal((await pending).ok, answer.ok)
+    assert.deepEqual(calls.map((call) => call.type), ['notifications-read'])
+    assert.equal(store.getState().feedback?.text, text)
+    assert.deepEqual(store.getState().notifications.map((item) => item.read), answer.ok ? [true, true, false] : [false, true, false])
+  }
+})
+
+test('engelleme: sonuç arayüze döner; hata ve zaman aşımında Türkçe hata bildirimi çıkar', async () => {
+  for (const [answer, text] of [
+    [{ ok: true }, undefined],
+    [{ ok: false, code: 'user_not_found' }, socialErrorText('user_not_found')],
+    [{ ok: false, code: 'timeout' }, socialErrorText('timeout')],
+    [{ ok: false, code: 'offline' }, socialErrorText('offline')],
+  ] as const) {
+    const { store, calls } = setup({ block: answer })
+    store.applyIncoming(incoming())
+    assert.deepEqual(await store.actions.blockUser('ali'), answer.ok ? { ok: true } : { ok: false, code: answer.code })
+    assert.deepEqual(calls, [{ type: 'block', payload: { targetUserId: 'ali' } }])
+    assert.equal(store.getState().feedback?.text, text)
+  }
+  for (const code of ['invalid_request', 'user_not_found', 'request_not_found', 'reaction_blocked', 'conversation_not_found', 'server_error', 'timeout', 'offline']) {
+    assert.notEqual(socialErrorText(code), socialErrorText('bilinmeyen'), code)
+  }
+})
+
+test('oda üyeliği: katılma başarısı, ret ve zaman aşımı bildirilir', async () => {
+  for (const [answer, text] of [
+    [{ ok: true, status: 'joined' }, SOCIAL_TEXT.roomJoined],
+    [{ ok: false, code: 'room_access_denied' }, socialErrorText('room_access_denied')],
+    [{ ok: false, code: 'timeout' }, socialErrorText('timeout')],
+  ] as const) {
+    const { store } = setup({ 'room-membership': answer })
+    store.applyIncoming(incoming({ rooms: [room('room-1', 'ali')] }))
+    store.actions.joinRoom('room-1')
+    await flush()
+    assert.equal(store.getState().feedback?.text, text)
+    assert.equal(store.getState().feedback?.tone, answer.ok ? 'success' : 'error')
+  }
+})
+
+test('gizlilik ve bildirim tercihleri iyimser; reddedilince eski değere döner', async () => {
+  const { store } = setup({
+    privacy: { ok: false, code: 'rate_limited' },
+    'notification-preferences': { ok: false, code: 'timeout' },
+  })
+  store.applyIncoming(incoming())
+  const privacy = store.actions.updatePrivacy({ profileVisibility: 'hidden', listeningVisibility: 'contacts' })
+  assert.equal(store.getState().privacy.profileVisibility, 'hidden')
+  await privacy
+  assert.equal(store.getState().privacy.profileVisibility, 'everyone')
+  assert.equal(store.getState().feedback?.text, socialErrorText('rate_limited'))
+  const preferences = store.actions.updateNotificationPreferences({ messagesEnabled: false, reactionsEnabled: true, deviceEnabled: false })
+  assert.equal(store.getState().notificationPreferences.messagesEnabled, false)
+  await preferences
+  assert.equal(store.getState().notificationPreferences.messagesEnabled, true)
+  assert.equal(store.getState().feedback?.text, socialErrorText('timeout'))
+})
+
+test('profil kalbi, sessize alma, şikâyet ve oda hataları bildirilir; otomatik okundu bilgisi sessiz kalır', async () => {
+  const { store } = setup({
+    reaction: { ok: false, code: 'reaction_blocked' },
+    mute: { ok: false, code: 'conversation_not_found' },
+    report: { ok: true },
+    'create-room': { ok: false, code: 'room_owner_offline' },
+    listening: { ok: false, code: 'room_full' },
+    read: { ok: false, code: 'user_not_found' },
+  })
+  store.applyIncoming(incoming({ unreadCounts: { ali: 1 } }))
+  assert.deepEqual(await store.actions.reactToUser('ali'), { ok: false, code: 'reaction_blocked' })
+  assert.equal(store.getState().feedback?.text, socialErrorText('reaction_blocked'))
+  assert.deepEqual(await store.actions.toggleMute('ali'), { ok: false, code: 'conversation_not_found' })
+  assert.equal(store.getState().feedback?.text, socialErrorText('conversation_not_found'))
+  store.actions.clearFeedback()
+  assert.deepEqual(await store.actions.reportUser('ali', 'Spam'), { ok: true })
+  assert.equal(store.getState().feedback, undefined)
+  assert.deepEqual(await store.actions.createRoom(), { ok: false, code: 'room_owner_offline' })
+  assert.equal(store.getState().feedback?.text, socialErrorText('room_owner_offline'))
+  assert.deepEqual(await store.actions.toggleListeningWith('ali'), { ok: false, code: 'room_full' })
+  assert.equal(store.getState().feedback?.text, socialErrorText('room_full'))
+  store.actions.clearFeedback()
+  store.actions.markConversationRead('ali')
+  await flush()
+  assert.equal(store.getState().feedback, undefined)
+})
+
+test('başka hesaba geçilince bekleyen iyimser değişiklikler gösterilmez', async () => {
+  const gate = deferred()
+  const { store } = setup({ 'request-response': () => gate.promise })
+  store.applyIncoming(incoming({ messageRequests: [request] }))
+  const pending = store.actions.respondToMessageRequest('ali', 'accept')
+  assert.deepEqual(store.getState().messageRequests, [])
+  store.applyIncoming(incoming({ currentUser: user('baska'), messageRequests: [request] }))
+  assert.deepEqual(store.getState().messageRequests, [request])
+  gate.resolve({ ok: true })
+  await pending
+  assert.deepEqual(store.getState().messageRequests, [request])
 })

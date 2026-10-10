@@ -45,13 +45,40 @@ export function socialErrorText(code?: string) {
   if (code === 'room_owner_offline') return 'Oda sahibinin bilgisayarı çevrimdışı. Bağlandığında tekrar deneyebilirsin.'
   if (code === 'room_access_denied') return 'Bu dinleme odasına erişimin bulunmuyor.'
   if (code === 'room_message_too_long') return 'Oda mesajı en fazla 280 karakter olabilir.'
+  if (code === 'offline') return 'Sosyal bağlantı yok; işlem gönderilemedi. Bağlanınca tekrar dene.'
+  if (code === 'timeout') return 'Sunucu zamanında yanıt vermedi; işlem tamamlanmamış olabilir. Tekrar dene.'
+  if (code === 'invalid_request') return 'Bu işlem şu an yapılamıyor. Sosyal’i yenileyip tekrar dene.'
+  if (code === 'user_not_found') return 'Bu kullanıcı bulunamadı ya da şu an erişilemiyor.'
+  if (code === 'request_not_found') return 'Bu mesaj isteği artık geçerli değil.'
+  if (code === 'reaction_blocked') return 'Bu kişiye şu an tepki gönderemezsin.'
+  if (code === 'conversation_not_found') return 'Yalnız kabul edilmiş bir sohbeti sessize alabilirsin.'
+  if (code === 'server_error') return 'Ritim Sosyal sunucusunda bir sorun oluştu. Biraz sonra tekrar dene.'
   return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
 }
 
-// Profile refreshes run in the background, and message/room errors are
-// reported through their acknowledgement callbacks; a `social:error` for
-// these events must not show a second notice.
-const ACK_HANDLED_ERROR_EVENTS = new Set(['profile', 'message', 'room-message', 'room-reaction', 'room-membership'])
+// Profile refreshes run in the background, and every user action's error is
+// reported through its acknowledgement callback (socialAckActions.ts); a
+// `social:error` for these events (e.g. rate_limited) must not show a second
+// notice.
+const ACK_HANDLED_ERROR_EVENTS = new Set([
+  'profile',
+  'message',
+  'room-message',
+  'room-reaction',
+  'room-membership',
+  'request-response',
+  'read',
+  'message-reaction',
+  'notifications-read',
+  'mute',
+  'block',
+  'report',
+  'privacy',
+  'notification-preferences',
+  'listening',
+  'create-room',
+  'reaction',
+])
 
 export function isAckHandledSocialError(event?: string) {
   return Boolean(event && ACK_HANDLED_ERROR_EVENTS.has(event))
