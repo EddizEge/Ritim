@@ -12,7 +12,8 @@ import { Progress } from './Progress'
 import { isNativeMobile, type MobilePairingConfig } from '../mobileConfig'
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
 import { MobileSocialHub } from './SocialHub'
-import type { SocialActions, SocialState } from '../social/types'
+import type { SocialActions, SocialSettingsSection, SocialState } from '../social/types'
+import { messagesBadgeCount } from '../social/socialModel'
 import { MobileAppearanceSettings, MobileSettings, MobileUpdateAboutSettings } from './MobileSettings'
 import type { SocialAccountState } from '../hooks/useSocialAccount'
 import { useMobileArtwork } from '../appearanceContext'
@@ -299,9 +300,12 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
   const [activeTab, setActiveTab] = useState<InfoTab>('queue')
   const [searchOpen, setSearchOpen] = useState(false)
   const [socialOpen, setSocialOpen] = useState(false)
+  // Chat, room and notifications are full screens inside Social.
+  const [socialFullscreen, setSocialFullscreen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const socialUnreadCount = Object.values(socialState.unreadCounts).reduce((total, count) => total + count, 0)
-    + socialState.messageRequests.filter((request) => request.direction === 'incoming').length
+  const [settingsFocus, setSettingsFocus] = useState<SocialSettingsSection | ''>('')
+  const socialUnreadCount = messagesBadgeCount(socialState)
+  const socialSignedOut = socialAccount.status === 'ready' && !socialAccount.authenticated && socialState.connectionStatus !== 'online'
   const [searchQuery, setSearchQuery] = useState('')
   const [requestedSearchQuery, setRequestedSearchQuery] = useState('')
   const [navigationRetries, setNavigationRetries] = useState(0)
@@ -341,6 +345,29 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
     const timer = window.setTimeout(() => setNotice(''), 2200)
     return () => window.clearTimeout(timer)
   }, [notice])
+
+  // "Sosyal ayarları" shortcuts land on the matching Settings section.
+  useEffect(() => {
+    if (!settingsOpen || !settingsFocus) return
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`mobile-settings-${settingsFocus}`)?.scrollIntoView({ block: 'start' })
+    })
+    setSettingsFocus('')
+    return () => window.cancelAnimationFrame(frame)
+  }, [settingsFocus, settingsOpen])
+
+  const openSocialSettings = (section: SocialSettingsSection) => {
+    setSocialOpen(false)
+    setSocialFullscreen(false)
+    setSearchOpen(false)
+    setSettingsFocus(section)
+    setSettingsOpen(true)
+  }
+
+  const retrySocialSignIn = async () => {
+    await socialAccountActions.reconnect().catch(() => null)
+    socialActions.reconnectSocial()
+  }
 
   useEffect(() => {
     const feedback = state.actionFeedback
@@ -569,7 +596,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
 
   return (
     <div className="ytm-mobile-shell is-browser-open">
-      <header className="mobile-browse-header">
+      {!socialOpen ? <header className="mobile-browse-header">
         <div className="mobile-brand"><i><Play fill="currentColor" /></i><span>Ritim</span></div>
         <div className="mobile-header-actions">
           <button onClick={() => { setSocialOpen(false); setSearchOpen(true) }} aria-label="Ara"><Search /></button>
@@ -578,13 +605,21 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           {isNativeMobile ? <button className={mobileUpdate.updateAvailable ? 'has-update' : ''} onClick={() => void handleMobileUpdate()} aria-label="Güncellemeleri kontrol et">{mobileUpdate.updateAvailable ? <Download /> : <RefreshCw />}</button> : null}
           <button className="mobile-device-button" onClick={() => setConnectionOpen(true)} aria-label="PC bağlantısı"><MonitorSpeaker /><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} /></button>
         </div>
-      </header>
+      </header> : null}
 
       <main className={`mobile-browse-content ${socialOpen ? 'is-social' : ''} ${settingsOpen ? 'is-settings' : ''}`}>
         {settingsOpen ? (
           <><div className="mobile-settings-heading"><h1>Ayarlar</h1><p>Hesap, cihaz, görünüm, güncelleme ve gizlilik tercihlerin.</p></div><div className="mobile-settings-stack"><MobileAppearanceSettings /><MobileUpdateAboutSettings update={mobileUpdate} /><MobileSettings account={socialAccount} onRefresh={socialAccountActions.refresh} onReconnect={socialAccountActions.reconnect} onRevokeDevice={socialAccountActions.revokeDevice} onSignOut={socialAccountActions.signOut} social={socialState} socialActions={socialActions} /></div></>
         ) : socialOpen ? (
-          <MobileSocialHub state={socialState} actions={socialActions} />
+          <MobileSocialHub
+            state={socialState}
+            actions={socialActions}
+            signedOut={socialSignedOut}
+            onRetrySignIn={retrySocialSignIn}
+            onOpenSettings={openSocialSettings}
+            onFullscreenChange={setSocialFullscreen}
+            hasMiniPlayer={!idle}
+          />
         ) : (
           <>
             {requestedRoute === 'detail' ? (
@@ -610,7 +645,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         )}
       </main>
 
-      {!idle ? (
+      {!idle && !(socialOpen && socialFullscreen) ? (
         <div className="mobile-mini-player">
           <button className="mobile-mini-open" onClick={() => setPlayerOpen(true)} aria-label="Tam oynatıcıyı aç">
             <Cover index={track.cover} thumbnailUrl={track.thumbnailUrl} className="mobile-mini-cover" label="" />
@@ -621,7 +656,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
         </div>
       ) : null}
 
-      {!settingsOpen ? <nav className="ytm-bottom-nav mobile-main-nav" aria-label="Ritim gezinme">
+      {!settingsOpen && !(socialOpen && socialFullscreen) ? <nav className="ytm-bottom-nav mobile-main-nav" aria-label="Ritim gezinme">
         <button className={!socialOpen && requestedRoute === 'home' ? 'is-active' : ''} onClick={() => navigate('home')}><Home fill={!socialOpen && requestedRoute === 'home' ? 'currentColor' : 'none'} /><span>Ana Sayfa</span></button>
         <button className={!socialOpen && requestedRoute === 'explore' ? 'is-active' : ''} onClick={() => navigate('explore')}><Compass /><span>Keşfet</span></button>
         <button className={!socialOpen && requestedRoute === 'search' ? 'is-active' : ''} onClick={() => { setSocialOpen(false); setSearchOpen(true) }}><Search /><span>Ara</span></button>
