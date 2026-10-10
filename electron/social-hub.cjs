@@ -18,6 +18,17 @@ function cleanText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength)
 }
 
+// A profile reaction is stored and shown as a notification body; cutting it
+// at 8 UTF-16 units must not leave half of a surrogate pair behind.
+function cleanReaction(value) {
+  const selected = cleanText(value, 8)
+  return (/[\uD800-\uDBFF]$/.test(selected) ? selected.slice(0, -1) : selected) || '♥'
+}
+
+// Notification kinds switched off by the `reactionsEnabled` preference; every
+// other kind follows `messagesEnabled`. Same rule as server/social-store.ts.
+const REACTION_NOTIFICATION_KINDS = new Set(['reaction', 'profile_reaction'])
+
 // Clients can send any JSON value; handlers that destructure their payload
 // synchronously must never see null or a primitive.
 function objectPayload(value) {
@@ -164,12 +175,25 @@ function createSocialHub(io, { store, onAbuse } = {}) {
 
   function pushMemoryNotification(recipientId, notification) {
     const preferences = preferencesFor(recipientId)
+    const isReaction = REACTION_NOTIFICATION_KINDS.has(notification.kind)
     if (
-      (notification.kind === 'reaction' && !preferences.reactionsEnabled)
-      || (notification.kind !== 'reaction' && !preferences.messagesEnabled)
+      (isReaction && !preferences.reactionsEnabled)
+      || (!isReaction && !preferences.messagesEnabled)
       || (notification.actorId && mutedConversations.has(`${recipientId}:${notification.actorId}`))
     ) return
     const selected = notifications.get(recipientId) || []
+    // Repeated profile reactions from one person refresh their unread
+    // notification instead of stacking up (PostgreSQL: partial unique index).
+    const unreadIndex = notification.kind === 'profile_reaction'
+      ? selected.findIndex((item) => (
+          item.kind === 'profile_reaction' && !item.read && item.actorId === notification.actorId
+        ))
+      : -1
+    if (unreadIndex >= 0) {
+      const [current] = selected.splice(unreadIndex, 1)
+      selected.unshift({ ...current, body: notification.body, createdAt: Date.now() })
+      return
+    }
     selected.unshift({
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -1057,14 +1081,19 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       const senderId = socket.data.socialAccountId
       const targetId = cleanText(targetUserId, 80)
       if (!senderId || !targetId || targetId === senderId || !accountProfiles().has(targetId)) return
-      const cleanReaction = cleanText(reaction, 8) || '♥'
-      if (store) await store.saveReaction({ actorId: senderId, targetId, reaction: cleanReaction })
+      const selectedReaction = cleanReaction(reaction)
+      if (store) await store.saveReaction({ actorId: senderId, targetId, reaction: selectedReaction })
       else {
         if (!memoryAccessRule(senderId, targetId).profile) return
         const current = reactions.get(targetId) || { count: 0 }
         reactions.set(targetId, {
           count: Math.min(999, current.count + 1),
-          lastReaction: cleanReaction,
+          lastReaction: selectedReaction,
+        })
+        pushMemoryNotification(targetId, {
+          actorId: senderId,
+          kind: 'profile_reaction',
+          body: selectedReaction,
         })
       }
       await scheduleEmit()
