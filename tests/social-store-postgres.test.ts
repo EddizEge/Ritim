@@ -179,3 +179,23 @@ test('PostgreSQL profil tepkisi bildirimi okunmamışken birleşir, tercih ve se
     .filter((item) => item.kind === 'profile_reaction' && item.actorId === burst)
   assert.equal(burstNotifications.length, 1, 'eşzamanlı tepkiler de tek okunmamış satırda birleşir')
 })
+
+test('PostgreSQL odadan ayrılma erişim sonradan reddedilse de serbesttir', {
+  skip: !enabled,
+}, async (context) => {
+  const { store, join } = await withStore(context)
+  const owner = await join('leaveowner')
+  const listener = await join('leavelistener')
+
+  assert.equal(await store.toggleRoom(owner, 'Ayrılma odası', 3), true)
+  const [room] = await store.loadRooms([owner])
+  assert.equal(await store.toggleRoomMembership(listener, room.id), 'joined')
+
+  // Profile visibility does not remove listeners, so the member stays while
+  // usersCanInteract now denies them.
+  await store.updatePrivacy(owner, { profileVisibility: 'hidden', listeningVisibility: 'everyone' })
+  assert.equal(await store.isRoomListener(listener, room.id), true)
+  assert.equal(await store.toggleRoomMembership(listener, room.id), 'left')
+  assert.equal(await store.isRoomListener(listener, room.id), false)
+  await assert.rejects(store.toggleRoomMembership(listener, room.id), /erişim engellendi/)
+})

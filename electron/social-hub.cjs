@@ -1184,12 +1184,20 @@ function createSocialHub(io, { store, onAbuse } = {}) {
       if (store) {
         try {
           if (!targetId || targetId === senderId) await store.clearListening(senderId)
-          else if (accountProfiles().has(targetId)) {
-            const ownerDesktopOnline = socketsForAccount(targetId)
-              .some((peer) => peer.data.socialDeviceRole === 'desktop')
-            if (!ownerDesktopOnline) throw new Error('Oda sahibi bilgisayarı çevrimdışı.')
+          else {
+            // Leaving is always allowed, also while the owner is offline;
+            // only joining needs the owner's desktop.
+            const leaving = (await store.loadRooms([senderId, targetId])).some((room) => (
+              room.ownerId === targetId && room.memberIds.includes(senderId)
+            ))
+            if (!leaving) {
+              if (!accountProfiles().has(targetId)) return 'room_owner_offline'
+              const ownerDesktopOnline = socketsForAccount(targetId)
+                .some((peer) => peer.data.socialDeviceRole === 'desktop')
+              if (!ownerDesktopOnline) throw new Error('Oda sahibi bilgisayarı çevrimdışı.')
+            }
             await store.toggleListening(senderId, targetId)
-          } else return 'room_owner_offline'
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           const code = /çevrimdışı/i.test(message)

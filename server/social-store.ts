@@ -1768,29 +1768,6 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       const room = roomResult.rows[0]
       if (!room) throw new Error('Dinleme odası bulunamadı.')
       if (String(room.owner_id) === String(listenerId)) throw new Error('Oda sahibi odadan ayrılamaz.')
-      if (!await usersCanInteract(client, listenerId, room.owner_id)) {
-        throw new Error('Dinleme odasına erişim engellendi.')
-      }
-      const visibility = await client.query<{ listening_visibility: Visibility; is_contact: boolean }>(
-        `select $3::text as listening_visibility,
-                exists (
-                  select 1
-                  from ritim.message_requests request
-                  where request.status = 'accepted'
-                    and (
-                      (request.requester_id = $1 and request.recipient_id = $2)
-                      or (request.requester_id = $2 and request.recipient_id = $1)
-                    )
-                ) as is_contact
-         from ritim.users
-         where id = $2`,
-        [listenerId, room.owner_id, room.listening_visibility],
-      )
-      const targetVisibility = visibility.rows[0]
-      if (
-        targetVisibility?.listening_visibility === 'hidden'
-        || (targetVisibility?.listening_visibility === 'contacts' && !targetVisibility.is_contact)
-      ) throw new Error('Dinleme odasına erişim engellendi.')
 
       const currentMembership = await client.query<{ room_id: string; role: 'owner' | 'listener' }>(
         `select room_id, role
@@ -1803,6 +1780,35 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         throw new Error('Oda sahibi odadan ayrılamaz.')
       }
       const leaving = String(currentMembership.rows[0]?.room_id || '') === String(room.id)
+
+      // Leaving is always allowed. Access may have been revoked after the
+      // member joined (for example the owner hid their profile, which does
+      // not remove listeners); only joining is checked. Same as memory mode.
+      if (!leaving) {
+        if (!await usersCanInteract(client, listenerId, room.owner_id)) {
+          throw new Error('Dinleme odasına erişim engellendi.')
+        }
+        const visibility = await client.query<{ listening_visibility: Visibility; is_contact: boolean }>(
+          `select $3::text as listening_visibility,
+                  exists (
+                    select 1
+                    from ritim.message_requests request
+                    where request.status = 'accepted'
+                      and (
+                        (request.requester_id = $1 and request.recipient_id = $2)
+                        or (request.requester_id = $2 and request.recipient_id = $1)
+                      )
+                  ) as is_contact
+           from ritim.users
+           where id = $2`,
+          [listenerId, room.owner_id, room.listening_visibility],
+        )
+        const targetVisibility = visibility.rows[0]
+        if (
+          targetVisibility?.listening_visibility === 'hidden'
+          || (targetVisibility?.listening_visibility === 'contacts' && !targetVisibility.is_contact)
+        ) throw new Error('Dinleme odasına erişim engellendi.')
+      }
 
       await client.query(
         `update ritim.room_members
