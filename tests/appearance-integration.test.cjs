@@ -59,7 +59,7 @@ test('preload köprüleri yalnız gerekli görünüm kanallarını açar', async
 })
 
 test('ayarlar görünüm seçeneklerini Bu cihaz kapsamında sunar ve üç renderer canlı uygular', async () => {
-  const [settingsHtml, settingsSource, shellSource, settingsCss, shellCss, socialHook, sharedCss, socialCss] = await Promise.all([
+  const [settingsHtml, settingsSource, shellSource, settingsCss, shellCss, socialHook, sharedCss, desktopSocialCss, socialCss] = await Promise.all([
     fs.readFile(path.join(root, 'electron', 'settings.html'), 'utf8'),
     fs.readFile(path.join(root, 'electron', 'settings.js'), 'utf8'),
     fs.readFile(path.join(root, 'electron', 'shell.js'), 'utf8'),
@@ -68,6 +68,7 @@ test('ayarlar görünüm seçeneklerini Bu cihaz kapsamında sunar ve üç rende
     fs.readFile(path.join(root, 'src', 'desktopSocial', 'useDesktopSocialBridge.ts'), 'utf8'),
     fs.readFile(path.join(root, 'src', 'styles.css'), 'utf8'),
     fs.readFile(path.join(root, 'src', 'desktopSocial', 'desktopSocial.css'), 'utf8'),
+    fs.readFile(path.join(root, 'src', 'components', 'social', 'social.css'), 'utf8'),
   ])
   for (const id of ['appearance-theme', 'appearance-density', 'appearance-motion', 'appearance-artwork']) {
     assert.match(settingsHtml, new RegExp(`id="${id}"`))
@@ -96,12 +97,17 @@ test('ayarlar görünüm seçeneklerini Bu cihaz kapsamında sunar ve üç rende
   for (const key of ['ritimTheme', 'ritimDensity', 'ritimMotion', 'ritimArtwork', 'ritimResolvedTheme']) {
     assert.match(socialHook, new RegExp(`root\\.dataset\\.${key} =`))
   }
-  assert.match(sharedCss, /html\[data-ritim-artwork='hidden'\] \.social-track-cover/)
   assert.match(sharedCss, /html\[data-ritim-motion='reduced'\]/)
+  // Shared social interface (phone + PC): themes, density, motion, artwork.
+  assert.match(socialCss, /html\[data-ritim-artwork='hidden'\] \.rs-root \.rs-cover/)
+  assert.match(socialCss, /html\[data-ritim-motion='reduced'\] \.rs-root/)
+  assert.match(socialCss, /prefers-reduced-motion: reduce/)
   assert.match(socialCss, /data-ritim-resolved-theme='light'/)
   assert.match(socialCss, /data-ritim-resolved-theme='black'/)
   assert.match(socialCss, /data-ritim-density='compact'/)
   assert.match(socialCss, /data-ritim-artwork='reduced'/)
+  assert.match(desktopSocialCss, /data-ritim-resolved-theme='light'/)
+  assert.doesNotMatch(desktopSocialCss, /zoom/)
 })
 
 test('gizli kapak tercihi Android medya bildiriminden uzak görseli kaldırır', async () => {

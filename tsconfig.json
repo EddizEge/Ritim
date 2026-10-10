@@ -1,5 +1,12 @@
 {
-  "files": [],
+  // `npm test` runs through tsx, which applies this file to the paths it
+  // includes: component tests render the shared TSX with React's automatic
+  // runtime, like the app build. Type checking still uses the referenced
+  // projects (npm run build).
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  },
+  "include": ["tests", "src"],
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }

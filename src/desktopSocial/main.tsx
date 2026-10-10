@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { DesktopSocialApp, DesktopSocialUnavailable } from './DesktopSocialApp'
 import type { RitimSocialBridge } from './desktopSocialStore'
 import '../styles.css'
+import '../components/social/social.css'
 import './desktopSocial.css'
 
 declare global {
