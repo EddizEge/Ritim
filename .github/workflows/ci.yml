@@ -21,6 +21,23 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Opt-in social gateway tests against disposable PostgreSQL 17 + Redis 7
+  # containers on the runner. Credentials are generated per run; no secrets.
+  social-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Social gateway end-to-end (PostgreSQL + Redis)
+        run: bash deploy/ci/social-gateway-e2e.sh
+        env:
+          RITIM_CI_LOG_DIR: ${{ runner.temp }}/social-gateway-logs
+
   android:
     runs-on: ubuntu-latest
     steps:

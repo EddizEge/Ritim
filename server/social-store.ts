@@ -139,6 +139,9 @@ const PRESENCE_TTL_SECONDS = 60
 const PRESENCE_SET_TTL_SECONDS = 120
 const LISTENING_TTL_SECONDS = 120
 const MAX_ROOM_MEMBERS = 8
+// Each connected account keeps its own newest notifications; one busy account
+// must not push the others out of the shared snapshot query.
+export const NOTIFICATION_LIMIT_PER_ACCOUNT = 100
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function sha256(value: string) {
@@ -617,23 +620,31 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       created_at: Date
       read_at: Date | null
     }>(
-      `select
-         notification.public_id,
-         coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) as recipient_key,
-         coalesce(encode(actor.legacy_account_id_hash, 'hex'), actor.public_id::text) as actor_key,
-         notification.kind,
-         message.public_id as message_public_id,
-         notification.body,
-         notification.created_at,
-         notification.read_at
-       from ritim.social_notifications notification
-       join ritim.users recipient on recipient.id = notification.recipient_id
-       left join ritim.users actor on actor.id = notification.actor_id
-       left join ritim.messages message on message.id = notification.message_id
-       where coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) = any($1::text[])
-       order by notification.created_at desc, notification.id desc
-       limit 100`,
-      [[...accountByKey.keys()]],
+      `select public_id, recipient_key, actor_key, kind, message_public_id, body, created_at, read_at
+       from (
+         select
+           notification.public_id,
+           coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) as recipient_key,
+           coalesce(encode(actor.legacy_account_id_hash, 'hex'), actor.public_id::text) as actor_key,
+           notification.kind,
+           message.public_id as message_public_id,
+           notification.body,
+           notification.created_at,
+           notification.read_at,
+           notification.id,
+           row_number() over (
+             partition by notification.recipient_id
+             order by notification.created_at desc, notification.id desc
+           ) as notification_rank
+         from ritim.social_notifications notification
+         join ritim.users recipient on recipient.id = notification.recipient_id
+         left join ritim.users actor on actor.id = notification.actor_id
+         left join ritim.messages message on message.id = notification.message_id
+         where coalesce(encode(recipient.legacy_account_id_hash, 'hex'), recipient.public_id::text) = any($1::text[])
+       ) ranked
+       where notification_rank <= $2
+       order by recipient_key, created_at desc, id desc`,
+      [[...accountByKey.keys()], NOTIFICATION_LIMIT_PER_ACCOUNT],
     )
     for (const row of result.rows) {
       const recipientId = accountByKey.get(row.recipient_key)
@@ -1155,10 +1166,16 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
     return reactions
   }
 
-  async function loadAccess(accountIds: string[]) {
+  // `ownerKeys` are database account keys of room owners that are not
+  // connected (loadRooms reports an offline owner by that key). Their rules
+  // are returned under the same key so rooms stay private while the owner is
+  // away; a key without a user row gets no rule and callers treat it as hidden.
+  async function loadAccess(accountIds: string[], ownerKeys: string[] = []) {
     const access = new Map<string, Map<string, AccessRule>>()
     if (!accountIds.length) return access
     const accountByKey = new Map(accountIds.map((accountId) => [accountKey(accountId), accountId]))
+    const offlineOwnerKeys = [...new Set(ownerKeys)].filter((ownerKey) => !accountByKey.has(ownerKey))
+    for (const ownerKey of offlineOwnerKeys) accountByKey.set(ownerKey, ownerKey)
     const keys = [...accountByKey.keys()]
     const placeholders = keys.map((_value, index) => `$${index + 1}`).join(', ')
     const users = await pool.query<{
@@ -1211,9 +1228,13 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
       if (relationship.kind === 'block') blocked.add(pair)
       else contacts.add(pair)
     }
+    const targetIds = [
+      ...accountIds,
+      ...offlineOwnerKeys.filter((ownerKey) => preferences.has(ownerKey)),
+    ]
     for (const viewerId of accountIds) {
       const rules = new Map<string, AccessRule>()
-      for (const targetId of accountIds) {
+      for (const targetId of targetIds) {
         if (viewerId === targetId) {
           rules.set(targetId, { profile: true, listening: true })
           continue
