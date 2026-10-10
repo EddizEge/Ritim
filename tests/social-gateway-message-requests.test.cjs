@@ -117,3 +117,104 @@ test('PostgreSQL modunda kabul edilen konuşmadaki mesaja tepki verilir', { skip
     state.conversations[reactorId]?.[1]?.reactions?.some((reaction) => reaction.reaction === '🔥')
   ))
 })
+
+function ask(client, event, payload) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${event} onayı gelmedi`)), 6_000)
+    client.emit(event, payload, (value) => {
+      clearTimeout(timer)
+      resolve(value)
+    })
+  })
+}
+
+test('PostgreSQL modunda olaylar onay döner ve profil tepkisi bildirimi birleşir', { skip: !gatewayUrl }, async (context) => {
+  const states = new Map()
+  const senderName = `Beta3 Gönderen ${runId}`
+  const recipientName = `Beta3 Alıcı ${runId}`
+  const sender = await connect(senderName, states)
+  const recipient = await connect(recipientName, states)
+  context.after(() => {
+    sender.disconnect()
+    recipient.disconnect()
+  })
+
+  const recipientId = await userIdOf(states, senderName, recipientName)
+  const senderId = await userIdOf(states, recipientName, senderName)
+  assert.equal((await sendMessage(sender, recipientId, 'Onaylı istek')).ok, true)
+  await waitForState(states, recipientName, (state) => state.messageRequests[0]?.userId === senderId)
+  assert.deepEqual(
+    await ask(recipient, 'social:request-response', { requesterUserId: senderId, action: 'accept' }),
+    { ok: true },
+  )
+  assert.deepEqual(
+    await ask(recipient, 'social:request-response', { requesterUserId: senderId, action: 'accept' }),
+    { ok: false, code: 'request_not_found' },
+  )
+
+  assert.equal((await sendMessage(sender, recipientId, 'Tepki ver')).ok, true)
+  const withMessage = await waitForState(states, recipientName, (state) => state.conversations[senderId]?.length === 2)
+  assert.deepEqual(await ask(recipient, 'social:message-reaction', {
+    targetUserId: senderId,
+    messageId: withMessage.conversations[senderId][1].id,
+    reaction: '😂',
+  }), { ok: true })
+  assert.deepEqual(await ask(recipient, 'social:message-reaction', {
+    targetUserId: senderId,
+    messageId: crypto.randomUUID(),
+    reaction: '😂',
+  }), { ok: false, code: 'reaction_blocked' })
+
+  assert.deepEqual(await ask(sender, 'social:reaction', { targetUserId: recipientId, reaction: '🔥' }), { ok: true })
+  assert.deepEqual(await ask(sender, 'social:reaction', { targetUserId: recipientId, reaction: '♥' }), { ok: true })
+  const notified = await waitForState(states, recipientName, (state) => (
+    state.notifications.some((item) => item.kind === 'profile_reaction' && item.body === '♥')
+  ))
+  const profileReactions = notified.notifications.filter((item) => item.kind === 'profile_reaction')
+  assert.equal(profileReactions.length, 1, 'okunmamış profil tepkisi tek satırda birleşir')
+  assert.equal(profileReactions[0].actorId, senderId)
+  assert.equal(profileReactions[0].messageId, undefined)
+
+  assert.deepEqual(await ask(recipient, 'social:block', { targetUserId: senderId }), { ok: true })
+  assert.deepEqual(
+    await ask(sender, 'social:reaction', { targetUserId: recipientId, reaction: '👍' }),
+    { ok: false, code: 'reaction_blocked' },
+  )
+})
+
+test('PostgreSQL modunda odadan ayrılma erişim kalksa ve sahip çevrimdışı olsa da serbesttir', { skip: !gatewayUrl }, async (context) => {
+  const states = new Map()
+  const ownerName = `Beta3 Oda Sahibi ${runId}`
+  const listenerName = `Beta3 Dinleyici ${runId}`
+  const owner = await connect(ownerName, states)
+  const listener = await connect(listenerName, states)
+  context.after(() => {
+    owner.disconnect()
+    listener.disconnect()
+  })
+
+  const ownerId = await userIdOf(states, listenerName, ownerName)
+  assert.deepEqual(await ask(owner, 'social:create-room', { title: `Ayrılma ${runId}`, cover: 1 }), { ok: true })
+  const roomId = (await waitForState(states, listenerName, (state) => (
+    state.rooms.some((room) => room.ownerId === ownerId)
+  ))).rooms.find((room) => room.ownerId === ownerId).id
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'joined' })
+
+  assert.deepEqual(
+    await ask(owner, 'social:privacy', { profileVisibility: 'hidden', listeningVisibility: 'everyone' }),
+    { ok: true },
+  )
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'left' })
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: false, code: 'room_access_denied' })
+
+  assert.deepEqual(
+    await ask(owner, 'social:privacy', { profileVisibility: 'everyone', listeningVisibility: 'everyone' }),
+    { ok: true },
+  )
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: ownerId }), { ok: true })
+  await waitForState(states, listenerName, (state) => state.activeRoomId === roomId)
+  owner.disconnect()
+  await waitForState(states, listenerName, (state) => state.rooms[0]?.lifecycle === 'owner_offline')
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: ownerId }), { ok: true })
+  await waitForState(states, listenerName, (state) => !state.activeRoomId)
+})

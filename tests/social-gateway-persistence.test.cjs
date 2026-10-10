@@ -8,6 +8,7 @@ const messageText = 'Alpha2 kalıcı mesaj'
 const roomTitle = 'Alpha2 kalıcı oda'
 const playbackVideoId = 'alpha4-persistent-video'
 const roomMessageText = 'Alpha4 kalıcı oda mesajı'
+const profileReaction = '♥'
 const accountA = process.env.RITIM_SOCIAL_TEST_ACCOUNT_A || 'alpha2-persistence-account-a'
 const accountB = process.env.RITIM_SOCIAL_TEST_ACCOUNT_B || 'alpha2-persistence-account-b'
 const accessTokenA = process.env.RITIM_SOCIAL_TEST_ACCESS_TOKEN_A
@@ -109,6 +110,13 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
       }, resolve)
     })
     assert.equal(playback.ok, true)
+    // A second reaction while the first is unread refreshes the same row.
+    for (const reaction of ['🔥', profileReaction]) {
+      const reacted = await new Promise((resolve) => {
+        clientA.emit('social:reaction', { targetUserId: accountB, reaction }, resolve)
+      })
+      assert.deepEqual(reacted, { ok: true })
+    }
   }
 
   const persistedState = await waitForState(states, 'Alpha Bir', (state) => (
@@ -143,6 +151,19 @@ test('mesaj ve oda gateway yeniden başladıktan sonra PostgreSQL’den yükleni
     && state.rooms.some((room) => room.viewerRole === 'owner' && room.memberCount === 2)
   ))
   assert.equal(recipientState.unreadCounts[accountA] >= 1, true)
+  // The acknowledgement goes to the sender's socket; the recipient's state
+  // may land a moment later, so wait for the refreshed emoji.
+  const notifiedState = await waitForState(states, 'Alpha İki', (state) => (
+    state.notifications.some((item) => (
+      item.kind === 'profile_reaction' && item.actorId === accountA && item.body === profileReaction
+    ))
+  ))
+  const profileReactions = notifiedState.notifications
+    .filter((item) => item.kind === 'profile_reaction' && item.actorId === accountA)
+  assert.equal(profileReactions.length, 1, 'profil tepkisi bildirimi yeniden başlatmadan sonra da tek satırdır')
+  assert.equal(profileReactions[0].body, profileReaction)
+  assert.equal(profileReactions[0].read, false)
+  assert.equal(profileReactions[0].messageId, undefined)
 
   const listenerResult = await new Promise((resolve) => {
     clientA.emit('social:room-playback:result', {
