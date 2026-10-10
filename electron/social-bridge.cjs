@@ -4,24 +4,26 @@ const crypto = require('node:crypto')
 // token-bearing socket stays in the main process; the renderer names an action
 // and the bridge validates its payload before emitting the mapped event.
 // `ack: true` marks events whose gateway handler answers the acknowledgement
-// callback (electron/social-hub.cjs); the others are fire-and-forget.
+// callback (electron/social-hub.cjs) with `{ ok: true }` or `{ ok: false, code }`.
+// Every remote action is acknowledged; `emit` keeps a fire-and-forget path for
+// an entry that is not.
 const SOCIAL_ACTIONS = Object.freeze({
   message: { event: 'social:message', ack: true },
   'room-message': { event: 'social:room-message', ack: true },
   'room-reaction': { event: 'social:room-reaction', ack: true },
   'room-membership': { event: 'social:room-membership', ack: true },
-  reaction: { event: 'social:reaction', ack: false },
-  'message-reaction': { event: 'social:message-reaction', ack: false },
-  'request-response': { event: 'social:request-response', ack: false },
-  read: { event: 'social:read', ack: false },
-  'notifications-read': { event: 'social:notifications-read', ack: false },
-  privacy: { event: 'social:privacy', ack: false },
-  'notification-preferences': { event: 'social:notification-preferences', ack: false },
-  mute: { event: 'social:mute', ack: false },
-  report: { event: 'social:report', ack: false },
-  block: { event: 'social:block', ack: false },
-  listening: { event: 'social:listening', ack: false },
-  'create-room': { event: 'social:create-room', ack: false },
+  reaction: { event: 'social:reaction', ack: true },
+  'message-reaction': { event: 'social:message-reaction', ack: true },
+  'request-response': { event: 'social:request-response', ack: true },
+  read: { event: 'social:read', ack: true },
+  'notifications-read': { event: 'social:notifications-read', ack: true },
+  privacy: { event: 'social:privacy', ack: true },
+  'notification-preferences': { event: 'social:notification-preferences', ack: true },
+  mute: { event: 'social:mute', ack: true },
+  report: { event: 'social:report', ack: true },
+  block: { event: 'social:block', ack: true },
+  listening: { event: 'social:listening', ack: true },
+  'create-room': { event: 'social:create-room', ack: true },
 })
 
 // Handled by the main process itself (OAuth, reconnect, device preferences,
