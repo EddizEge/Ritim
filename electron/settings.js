@@ -563,6 +563,9 @@ byId('social-sign-out-button').addEventListener('click', async () => {
 settingsApi?.onUpdateStatus(renderUpdateStatus)
 settingsApi?.onSocialState(renderSocialState)
 settingsApi?.onAppearance(applyAppearancePreferences)
+settingsApi?.onOpenSection?.((section) => {
+  if (Object.hasOwn(sectionCopy, section)) openSection(section)
+})
 
 applyAppearancePreferences(appearancePreferences)
 renderProductInfo(fallbackData.productInfo)

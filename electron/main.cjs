@@ -13,6 +13,7 @@ const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData 
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const {
+  SETTINGS_SECTIONS,
   createSocialActionBridge,
   normalizeSocialAction,
   publicSocialAuthentication,
@@ -29,6 +30,8 @@ const {
   socialSchemePrivileges,
 } = require('./social-page.cjs')
 const { createSocialProfilePublisher } = require('./social-profile-policy.cjs')
+const { handleFromDisplayName } = require('./social-handle.cjs')
+const { desktopSocialNotificationContent } = require('./social-notifications.cjs')
 const { createYouTubeMusicBridge } = require('./ytmusic-bridge.cjs')
 const { createUpdateController } = require('./updater.cjs')
 const productInfo = require('../shared/product-info.json')
@@ -63,6 +66,8 @@ let socialAuthStatus = { configured: false, required: false, authenticated: fals
 let socialStartSequence = 0
 let latestSocialState
 let socialConnectionStatus = 'connecting'
+// "Son başarılı bağlantı" in the Social view, which may be opened later.
+let socialLastOnlineAt = 0
 let latestPlayerState
 let publishedPlaybackRoomId = ''
 let publishedPlaybackRevision = 0
@@ -294,7 +299,8 @@ function desktopSocialProfile() {
   return {
     id: accountId,
     displayName,
-    handle: `@${displayName.toLocaleLowerCase('tr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '') || 'ritimpc'}`,
+    // Empty when nothing usable remains; the gateway then derives it.
+    handle: handleFromDisplayName(displayName),
     initials: displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('tr') || 'PC',
     avatarUrl: accountProfile?.avatarUrl,
     avatarTone: 0,
@@ -482,6 +488,7 @@ function socialViewState() {
     },
     authentication: publicSocialAuthentication(socialAuthStatus),
     connectionStatus: socialConnectionStatus,
+    lastOnlineAt: socialLastOnlineAt || undefined,
   }
 }
 
@@ -499,6 +506,7 @@ function resetSocialSessionState() {
 }
 
 function broadcastSocialState(status, incomingState) {
+  if (status === 'online' || socialConnectionStatus === 'online') socialLastOnlineAt = Date.now()
   socialConnectionStatus = status
   const previousState = latestSocialState
   const previous = incomingState || previousState
@@ -549,19 +557,12 @@ function deliverDesktopSocialNotifications(previousState, nextState) {
   for (const notification of nextState.notifications || []) {
     if (notification.read || delivered.has(notification.id)) continue
     if (previousState && previousIds.has(notification.id)) continue
-    if (notification.kind === 'reaction' && nextState.notificationPreferences?.reactionsEnabled === false) continue
-    if (notification.kind !== 'reaction' && nextState.notificationPreferences?.messagesEnabled === false) continue
     const actor = nextState.users?.find((user) => user.id === notification.actorId)
     const actorName = actor?.displayName || 'Bir Ritim kullanıcısı'
-    const title = notification.kind === 'reaction'
-      ? `${actorName} mesajına tepki verdi`
-      : notification.kind === 'message_request'
-        ? `${actorName} mesaj isteği gönderdi`
-        : `${actorName} sana yazdı`
-    new Notification({
-      title,
-      body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
-    }).show()
+    // Unknown kinds and kinds switched off in preferences are not shown.
+    const content = desktopSocialNotificationContent(notification, actorName, nextState.notificationPreferences)
+    if (!content) continue
+    new Notification(content).show()
     delivered.add(notification.id)
     changed = true
   }
@@ -690,10 +691,14 @@ function createMusicView() {
   })
 }
 
-function createSettingsWindow() {
+// `section` comes only from the main process (Social view's 'open-settings'
+// action is validated in social-bridge.cjs); the page shows that section.
+function createSettingsWindow(section) {
+  const targetSection = SETTINGS_SECTIONS.has(section) ? section : ''
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.show()
     settingsWindow.focus()
+    if (targetSection) settingsWindow.webContents.send('settings:open-section', targetSection)
     return
   }
   settingsWindow = new BrowserWindow({
@@ -735,6 +740,11 @@ function createSettingsWindow() {
   settingsWindow.webContents.on('will-redirect', (event, url) => {
     if (url !== SETTINGS_PAGE_URL) event.preventDefault()
   })
+  if (targetSection) {
+    settingsWindow.webContents.once('did-finish-load', () => {
+      if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:open-section', targetSection)
+    })
+  }
   void settingsWindow.loadFile(path.join(__dirname, 'settings.html'))
 }
 
@@ -857,6 +867,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
       const result = setDesktopSocialNotifications(action.payload.enabled)
       return { ok: true, enabled: result.socialNotificationsEnabled, supported: result.supported }
     }
+    if (action.type === 'open-settings') {
+      createSettingsWindow(action.payload.section)
+      return { ok: true }
+    }
     if (action.type === 'create-room') {
       const track = latestPlayerState?.catalog?.[latestPlayerState?.trackId]
       return socialActionBridge.emit({
@@ -870,7 +884,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     return socialActionBridge.emit(action)
   }
 
-  ipcMain.on('settings:open', createSettingsWindow)
+  ipcMain.on('settings:open', () => createSettingsWindow())
   ipcMain.handle('shell:set-view', (_event, view) => setShellView(view))
   ipcMain.handle('shell:get-appearance', (event) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
