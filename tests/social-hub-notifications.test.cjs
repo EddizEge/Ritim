@@ -386,3 +386,27 @@ test('kalıcı store kural reddini koda, altyapı hatasını server_error yanıt
     'altyapı hatası eskisi gibi günlüğe yazılır',
   )
 })
+
+test('bellek modunda odadan ayrılma erişim kalksa ve sahip çevrimdışı olsa da serbesttir', async (context) => {
+  const { connect, waitFor } = await startHub(context)
+  const owner = await connect('ayrilma-sahip')
+  const listener = await connect('ayrilma-dinleyici')
+  await waitFor('ayrilma-sahip', (state) => state.users.length === 1)
+  assert.deepEqual(await ask(owner, 'social:create-room', { title: 'Ayrılma odası', cover: 1 }), { ok: true })
+  const roomId = (await waitFor('ayrilma-dinleyici', (state) => state.rooms.length === 1)).rooms[0].id
+
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'joined' })
+  // Hiding the profile keeps listeners in the room but denies new joins.
+  assert.deepEqual(await ask(owner, 'social:privacy', { profileVisibility: 'hidden', listeningVisibility: 'everyone' }), { ok: true })
+  assert.equal((await waitFor('ayrilma-dinleyici', () => true)).activeRoomId, roomId)
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'left' })
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: false, code: 'room_access_denied' })
+
+  assert.deepEqual(await ask(owner, 'social:privacy', { profileVisibility: 'everyone', listeningVisibility: 'everyone' }), { ok: true })
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: 'ayrilma-sahip' }), { ok: true })
+  owner.disconnect()
+  await waitFor('ayrilma-dinleyici', (state) => state.rooms[0]?.lifecycle === 'owner_offline')
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: 'ayrilma-sahip' }), { ok: true })
+  const leftState = await waitFor('ayrilma-dinleyici', (state) => !state.activeRoomId, 'ayrılma')
+  assert.equal(leftState.listeningWithUserId, undefined)
+})

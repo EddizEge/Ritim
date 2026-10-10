@@ -181,3 +181,40 @@ test('PostgreSQL modunda olaylar onay döner ve profil tepkisi bildirimi birleş
     { ok: false, code: 'reaction_blocked' },
   )
 })
+
+test('PostgreSQL modunda odadan ayrılma erişim kalksa ve sahip çevrimdışı olsa da serbesttir', { skip: !gatewayUrl }, async (context) => {
+  const states = new Map()
+  const ownerName = `Beta3 Oda Sahibi ${runId}`
+  const listenerName = `Beta3 Dinleyici ${runId}`
+  const owner = await connect(ownerName, states)
+  const listener = await connect(listenerName, states)
+  context.after(() => {
+    owner.disconnect()
+    listener.disconnect()
+  })
+
+  const ownerId = await userIdOf(states, listenerName, ownerName)
+  assert.deepEqual(await ask(owner, 'social:create-room', { title: `Ayrılma ${runId}`, cover: 1 }), { ok: true })
+  const roomId = (await waitForState(states, listenerName, (state) => (
+    state.rooms.some((room) => room.ownerId === ownerId)
+  ))).rooms.find((room) => room.ownerId === ownerId).id
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'joined' })
+
+  assert.deepEqual(
+    await ask(owner, 'social:privacy', { profileVisibility: 'hidden', listeningVisibility: 'everyone' }),
+    { ok: true },
+  )
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: true, status: 'left' })
+  assert.deepEqual(await ask(listener, 'social:room-membership', { roomId }), { ok: false, code: 'room_access_denied' })
+
+  assert.deepEqual(
+    await ask(owner, 'social:privacy', { profileVisibility: 'everyone', listeningVisibility: 'everyone' }),
+    { ok: true },
+  )
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: ownerId }), { ok: true })
+  await waitForState(states, listenerName, (state) => state.activeRoomId === roomId)
+  owner.disconnect()
+  await waitForState(states, listenerName, (state) => state.rooms[0]?.lifecycle === 'owner_offline')
+  assert.deepEqual(await ask(listener, 'social:listening', { targetUserId: ownerId }), { ok: true })
+  await waitForState(states, listenerName, (state) => !state.activeRoomId)
+})
