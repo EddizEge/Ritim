@@ -104,7 +104,7 @@ let socialHub: ReturnType<typeof createSocialHub> | undefined
 let authService: ReturnType<typeof createSocialAuthService> | undefined
 
 async function shutdown(signal: string) {
-  console.log(`[Ritim Social Alpha.4] ${signal} ile kapatiliyor.`)
+  console.log(`[Ritim Social] ${signal} ile kapatiliyor.`)
   socialHub?.close()
   await new Promise<void>((resolve) => httpServer.close(() => resolve()))
   await infrastructure.close()
@@ -162,7 +162,7 @@ async function main() {
   io.on('connection', (socket) => socialHub?.attach(socket))
   httpServer.listen(PORT, '0.0.0.0', () => {
     const mode = infrastructure.health().configured ? 'PostgreSQL + Redis' : 'bellek ici gelistirme'
-    console.log(`[Ritim Social Alpha.4] http://0.0.0.0:${PORT} • ${mode}`)
+    console.log(`[Ritim Social] http://0.0.0.0:${PORT} • ${mode}`)
   })
 }
 
@@ -170,7 +170,7 @@ process.once('SIGTERM', () => void shutdown('SIGTERM'))
 process.once('SIGINT', () => void shutdown('SIGINT'))
 
 void main().catch(async (error) => {
-  console.error('[Ritim Social Alpha.4] Baslatilamadi:', error instanceof Error ? error.message : error)
+  console.error('[Ritim Social] Baslatilamadi:', error instanceof Error ? error.message : error)
   await infrastructure.close()
   process.exit(1)
 })
