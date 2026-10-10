@@ -1,8 +1,7 @@
+import { createSocialAckActions } from '../social/socialAckActions'
 import {
   EXPECTED_ROOM_EXIT_MS,
   SOCIAL_MESSAGE_MAX_LENGTH,
-  SOCIAL_REPORT_DETAIL_MAX_LENGTH,
-  SOCIAL_REPORT_REASON_MAX_LENGTH,
   SOCIAL_ROOM_MESSAGE_MAX_LENGTH,
   SOCIAL_TEXT,
   isAckHandledSocialError,
@@ -14,6 +13,7 @@ import {
   type SocialSnapshot,
 } from '../social/socialShared'
 import type {
+  SocialActionResult,
   SocialActions,
   SocialAuthenticationSummary,
   SocialConnectionStatus,
@@ -175,28 +175,40 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     }
   }
 
-  // Fire-and-forget gateway events report problems through `social:error`;
-  // only local failures (not offline, which the banner already shows) are
-  // surfaced here.
-  async function sendWithoutAck(type: string, payload?: Record<string, unknown>) {
-    const result = await send(type, payload)
-    if (!result.ok && result.code !== 'offline') notify('error', socialErrorText(result.code))
-    return result
-  }
-
   function online() {
     return state.connectionStatus === 'online'
   }
 
+  // Acknowledged gateway actions and their optimistic overlay, shared with
+  // the phone (src/social/socialAckActions.ts). `state` stays the gateway
+  // snapshot; getState() shows it with the overlay.
+  const ack = createSocialAckActions({
+    send,
+    getState: () => state,
+    isOnline: online,
+    notifyError: (code) => notify('error', socialErrorText(code)),
+    onPendingChange: emit,
+    newId,
+  })
+
   function expectRoomExit(roomId?: string) {
-    if (roomId) expectedRoomExit = { roomId, until: now() + EXPECTED_ROOM_EXIT_MS }
+    if (!roomId) return false
+    expectedRoomExit = { roomId, until: now() + EXPECTED_ROOM_EXIT_MS }
+    return true
+  }
+
+  // A rejected leave or close keeps the room, so losing it later is
+  // unexpected again.
+  function forgetRoomExitOnFailure(expected: boolean, result: SocialActionResult) {
+    if (expected && !result.ok) expectedRoomExit = { roomId: '', until: 0 }
+    return result
   }
 
   function flushPendingReads() {
     if (!viewVisible || !online()) return
     for (const userId of pendingReads) {
       pendingReads.delete(userId)
-      if (state.unreadCounts[userId]) void sendWithoutAck('read', { targetUserId: userId })
+      if (state.unreadCounts[userId]) void ack.actions.markConversationRead(userId)
     }
   }
 
@@ -218,6 +230,7 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     })
     if (resetExpectedRoomExit) expectedRoomExit = { roomId: '', until: 0 }
     receivedState = true
+    const previousUserId = state.currentUser.id
     state = {
       ...snapshot,
       feedback: previousStatus === 'online' && status === 'offline'
@@ -232,6 +245,10 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
         : status === 'online' || previousStatus === 'online' ? now() : state.lastOnlineAt,
     }
     if (typeof incoming.viewVisible === 'boolean') viewVisible = incoming.viewVisible
+    // Another account must not see these optimistic changes; acknowledged
+    // ones are in a live snapshot already.
+    if (previousUserId && state.currentUser.id && previousUserId !== state.currentUser.id) ack.reset()
+    else if (status === 'online') ack.noteSnapshot()
     emit()
     flushPendingReads()
   }
@@ -257,7 +274,7 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
       update({ selectedUserId: userId })
     },
     reactToUser(userId: string, reaction = '♥') {
-      void sendWithoutAck('reaction', { targetUserId: userId, reaction })
+      return ack.actions.reactToUser(userId, reaction)
     },
     // The chat shows the outcome on the bubble (src/social/socialOutbox.ts);
     // a retry passes the same clientMessageId so the gateway can deduplicate.
@@ -277,30 +294,25 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
         pendingReads.add(userId)
         return
       }
-      void sendWithoutAck('read', { targetUserId: userId })
+      void ack.actions.markConversationRead(userId)
     },
     respondToMessageRequest(userId: string, action: 'accept' | 'reject') {
-      if (!online()) return
-      void sendWithoutAck('request-response', { requesterUserId: userId, action })
+      return ack.actions.respondToMessageRequest(userId, action)
     },
     reactToMessage(userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) {
-      if (!online()) return
-      void sendWithoutAck('message-reaction', { targetUserId: userId, messageId, reaction })
+      return ack.actions.reactToMessage(userId, messageId, reaction)
     },
     markNotificationsRead() {
-      if (!online()) return
-      void sendWithoutAck('notifications-read')
+      return ack.actions.markNotificationsRead()
     },
+    // Messages/reactions are account-wide (gateway); the Windows notification
+    // switch belongs to this PC (main process).
     updateNotificationPreferences(preferences: SocialNotificationPreferences) {
-      const deviceChanged = preferences.deviceEnabled !== state.notificationPreferences.deviceEnabled
-      update({ notificationPreferences: preferences })
-      if (online()) {
-        void sendWithoutAck('notification-preferences', {
-          messagesEnabled: preferences.messagesEnabled,
-          reactionsEnabled: preferences.reactionsEnabled,
-        })
+      if (preferences.deviceEnabled !== state.notificationPreferences.deviceEnabled) {
+        update({ notificationPreferences: { ...state.notificationPreferences, deviceEnabled: preferences.deviceEnabled } })
+        void setDeviceNotifications(preferences.deviceEnabled)
       }
-      if (deviceChanged) void setDeviceNotifications(preferences.deviceEnabled)
+      return ack.actions.updateNotificationPreferences(preferences)
     },
     // On the PC this is the same switch as Settings › Notifications: Windows
     // notifications are shown by the main process, not by this renderer.
@@ -308,25 +320,18 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
       void setDeviceNotifications(!state.notificationPreferences.deviceEnabled)
     },
     toggleMute(userId: string) {
-      if (!online()) return
-      void sendWithoutAck('mute', { targetUserId: userId })
+      return ack.actions.toggleMute(userId)
     },
     reportUser(userId: string, reason: string, detail = '', messageId = '') {
-      if (!online()) return
-      void sendWithoutAck('report', {
-        targetUserId: userId,
-        reason: reason.trim().slice(0, SOCIAL_REPORT_REASON_MAX_LENGTH),
-        detail: detail.trim().slice(0, SOCIAL_REPORT_DETAIL_MAX_LENGTH),
-        messageId: messageId || '',
-      })
+      return ack.actions.reportUser(userId, reason, detail, messageId)
     },
     clearFeedback() {
       if (state.feedback) update({ feedback: undefined })
     },
     toggleListeningWith(userId: string) {
       update({ selectedUserId: userId })
-      if (state.listeningWithUserId === userId) expectRoomExit(state.activeRoomId)
-      void sendWithoutAck('listening', { targetUserId: userId })
+      const expected = state.listeningWithUserId === userId && expectRoomExit(state.activeRoomId)
+      return ack.actions.toggleListeningWith(userId).then((result) => forgetRoomExitOnFailure(expected, result))
     },
     joinRoom(roomId: string) {
       if (!online()) return
@@ -352,16 +357,16 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     },
     createRoom() {
       // Closing your own room is an expected exit, not "the room was closed".
+      // Title and cover come from the PC's player in the main process.
       const ownedRoom = state.rooms.find((room) => room.viewerRole === 'owner')
-      if (ownedRoom) expectRoomExit(ownedRoom.id)
-      void sendWithoutAck('create-room')
+      const expected = expectRoomExit(ownedRoom?.id)
+      return ack.actions.createRoom().then((result) => forgetRoomExitOnFailure(expected, result))
     },
     updatePrivacy(privacy: SocialPrivacy) {
-      update({ privacy })
-      void sendWithoutAck('privacy', { ...privacy })
+      return ack.actions.updatePrivacy(privacy)
     },
     blockUser(userId: string) {
-      void sendWithoutAck('block', { targetUserId: userId })
+      return ack.actions.blockUser(userId)
     },
     reconnectSocial() {
       update({ connectionStatus: 'connecting' })
@@ -420,7 +425,7 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
   }
 
   return {
-    getState: () => state,
+    getState: () => ack.view(state),
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => {

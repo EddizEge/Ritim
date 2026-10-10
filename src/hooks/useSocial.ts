@@ -6,12 +6,10 @@ import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/
 import { handleFromDisplayName, initialsFromDisplayName } from '../social/handle'
 import { deviceNotificationContent } from '../social/socialModel'
 import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
+import { SOCIAL_ACK_EVENTS, createSocialAckActions, emitSocialAck, type SocialAckActions } from '../social/socialAckActions'
 import {
   EXPECTED_ROOM_EXIT_MS,
-  SOCIAL_ACK_TIMEOUT_MS,
   SOCIAL_MESSAGE_MAX_LENGTH,
-  SOCIAL_REPORT_DETAIL_MAX_LENGTH,
-  SOCIAL_REPORT_REASON_MAX_LENGTH,
   SOCIAL_ROOM_MESSAGE_MAX_LENGTH,
   SOCIAL_TEXT,
   isAckHandledSocialError,
@@ -20,7 +18,6 @@ import {
   socialErrorText,
   socialFeedback,
   type ExpectedRoomExit,
-  type SocialAckResult,
   type SocialSnapshot,
 } from '../social/socialShared'
 import type {
@@ -233,6 +230,38 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     profilePublisher.remember(profileRef.current)
   }, [accountId, deviceId, deviceRole, profilePublisher, socket])
 
+  // Acknowledged actions and their optimistic overlay, shared with the PC
+  // (src/social/socialAckActions.ts): same 5 s timeout, notices and rollback.
+  const baseState = useMemo<SocialState>(() => ({
+    ...snapshot,
+    connectionStatus,
+    lastOnlineAt,
+  }), [connectionStatus, lastOnlineAt, snapshot])
+  const baseStateRef = useRef(baseState)
+  baseStateRef.current = baseState
+  const socketRef = useRef(socket)
+  socketRef.current = socket
+  const [, setPendingVersion] = useState(0)
+  const ackRef = useRef<SocialAckActions | null>(null)
+  if (!ackRef.current) {
+    ackRef.current = createSocialAckActions({
+      send: (type, payload) => emitSocialAck(socketRef.current, SOCIAL_ACK_EVENTS[type], payload),
+      getState: () => baseStateRef.current,
+      isOnline: () => socketRef.current.connected,
+      notifyError: (code) => setSnapshot((current) => ({
+        ...current,
+        feedback: socialFeedback('error', socialErrorText(code)),
+      })),
+      onPendingChange: () => setPendingVersion((version) => version + 1),
+    })
+  }
+  const ack = ackRef.current
+
+  // Another account on this device must not see these optimistic changes.
+  useEffect(() => {
+    ack.reset()
+  }, [accountId, ack])
+
   useEffect(() => {
     let disposed = false
     let authRetryUsed = false
@@ -288,11 +317,13 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         if (resetExpectedRoomExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
         return merged
       })
+      // Acknowledged optimistic changes are in this snapshot now.
+      ack.noteSnapshot()
     }
     const onSocialError = (error: { code?: string; event?: string }) => {
       // Profil yenileme arka planda gerçekleşir; kullanıcı eylemi değildir.
-      // Mesaj hataları da acknowledgement callback'i üzerinden daha doğru
-      // biçimde ele alınır ve burada ikinci kez başarı/hata bildirimini ezmez.
+      // Kullanıcı eylemlerinin hataları acknowledgement callback'i üzerinden
+      // daha doğru biçimde ele alınır ve burada ikinci kez bildirilmez.
       if (isAckHandledSocialError(error?.event)) return
       setSnapshot((previous) => ({
         ...previous,
@@ -329,7 +360,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       window.removeEventListener('ritim:social-session-changed', onSessionChanged)
       socket.disconnect()
     }
-  }, [isCompanion, joinSocialAccount, pairing.syncUrl, pairing.token, socialUrl, socket])
+  }, [ack, isCompanion, joinSocialAccount, pairing.syncUrl, pairing.token, socialUrl, socket])
 
   useEffect(() => {
     // currentTrack.position changes every second; see profilePublishPolicy.ts.
@@ -400,70 +431,50 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
   }, [])
 
-  const reactToUser = useCallback((userId: string, reaction = '♥') => {
-    socket.emit('social:reaction', { targetUserId: userId, reaction })
-  }, [socket])
+  const reactToUser = useCallback((userId: string, reaction = '♥') => ack.actions.reactToUser(userId, reaction), [ack])
 
   // The chat shows the outcome on the message bubble itself (socialOutbox.ts),
   // so sending raises no separate notice.
-  const sendMessage = useCallback((userId: string, text: string, clientMessageId: string = crypto.randomUUID()): Promise<SocialSendResult> => {
+  const sendMessage = useCallback(async (userId: string, text: string, clientMessageId: string = crypto.randomUUID()): Promise<SocialSendResult> => {
     const cleanText = text.trim().slice(0, SOCIAL_MESSAGE_MAX_LENGTH)
-    if (!cleanText) return Promise.resolve({ ok: false, code: 'invalid_payload' })
-    if (!socket.connected) return Promise.resolve({ ok: false, code: 'offline' })
-    return new Promise((resolve) => {
-      let acknowledged = false
-      const timeout = window.setTimeout(() => {
-        if (acknowledged) return
-        acknowledged = true
-        resolve({ ok: false, code: 'timeout' })
-      }, SOCIAL_ACK_TIMEOUT_MS)
-      socket.emit('social:message', {
-        targetUserId: userId,
-        text: cleanText,
-        clientMessageId,
-      }, (result: SocialAckResult = {}) => {
-        if (acknowledged) return
-        acknowledged = true
-        window.clearTimeout(timeout)
-        resolve(result.ok
-          ? { ok: true, duplicate: Boolean(result.duplicate) }
-          : { ok: false, code: result.code || 'rejected' })
-      })
+    if (!cleanText) return { ok: false, code: 'invalid_payload' }
+    if (!socket.connected) return { ok: false, code: 'offline' }
+    const result = await emitSocialAck(socket, 'social:message', {
+      targetUserId: userId,
+      text: cleanText,
+      clientMessageId,
     })
+    return result.ok
+      ? { ok: true, duplicate: Boolean(result.duplicate) }
+      : { ok: false, code: result.code || 'rejected' }
   }, [socket])
 
   const markConversationRead = useCallback((userId: string) => {
-    if (!socket.connected) return
-    socket.emit('social:read', { targetUserId: userId })
-  }, [socket])
+    void ack.actions.markConversationRead(userId)
+  }, [ack])
 
-  const respondToMessageRequest = useCallback((userId: string, action: 'accept' | 'reject') => {
-    if (!socket.connected) return
-    socket.emit('social:request-response', { requesterUserId: userId, action })
-  }, [socket])
+  const respondToMessageRequest = useCallback((userId: string, action: 'accept' | 'reject') => (
+    ack.actions.respondToMessageRequest(userId, action)
+  ), [ack])
 
   const reactToMessage = useCallback((
     userId: string,
     messageId: string,
     reaction: SocialMessageReaction['reaction'],
-  ) => {
-    if (!socket.connected) return
-    socket.emit('social:message-reaction', { targetUserId: userId, messageId, reaction })
-  }, [socket])
+  ) => ack.actions.reactToMessage(userId, messageId, reaction), [ack])
 
-  const markNotificationsRead = useCallback(() => {
-    if (!socket.connected) return
-    socket.emit('social:notifications-read')
-  }, [socket])
+  const markNotificationsRead = useCallback(() => ack.actions.markNotificationsRead(), [ack])
 
+  // Messages/reactions are account-wide (gateway); the system notification
+  // switch belongs to this device.
   const updateNotificationPreferences = useCallback((preferences: SocialNotificationPreferences) => {
     saveDeviceNotifications(preferences.deviceEnabled)
-    setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
-    if (socket.connected) socket.emit('social:notification-preferences', {
-      messagesEnabled: preferences.messagesEnabled,
-      reactionsEnabled: preferences.reactionsEnabled,
-    })
-  }, [socket])
+    setSnapshot((current) => ({
+      ...current,
+      notificationPreferences: { ...current.notificationPreferences, deviceEnabled: preferences.deviceEnabled },
+    }))
+    return ack.actions.updateNotificationPreferences(preferences)
+  }, [ack])
 
   const requestDeviceNotifications = useCallback(() => {
     void (async () => {
@@ -496,20 +507,11 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     })()
   }, [])
 
-  const toggleMute = useCallback((userId: string) => {
-    if (!socket.connected) return
-    socket.emit('social:mute', { targetUserId: userId })
-  }, [socket])
+  const toggleMute = useCallback((userId: string) => ack.actions.toggleMute(userId), [ack])
 
-  const reportUser = useCallback((userId: string, reason: string, detail = '', messageId = '') => {
-    if (!socket.connected) return
-    socket.emit('social:report', {
-      targetUserId: userId,
-      reason: reason.trim().slice(0, SOCIAL_REPORT_REASON_MAX_LENGTH),
-      detail: detail.trim().slice(0, SOCIAL_REPORT_DETAIL_MAX_LENGTH),
-      messageId,
-    })
-  }, [socket])
+  const reportUser = useCallback((userId: string, reason: string, detail = '', messageId = '') => (
+    ack.actions.reportUser(userId, reason, detail, messageId)
+  ), [ack])
 
   const clearFeedback = useCallback(() => {
     setSnapshot((current) => ({ ...current, feedback: undefined }))
@@ -517,15 +519,15 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
 
   const toggleListeningWith = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
-    socket.emit('social:listening', { targetUserId: userId })
-  }, [socket])
+    return ack.actions.toggleListeningWith(userId)
+  }, [ack])
 
   const joinRoom = useCallback((roomId: string) => {
     if (!socket.connected) return
     if (activeRoomIdRef.current === roomId) {
       expectedRoomExitRef.current = { roomId, until: Date.now() + EXPECTED_ROOM_EXIT_MS }
     }
-    socket.emit('social:room-membership', { roomId }, (result: SocialAckResult = {}) => {
+    void emitSocialAck(socket, 'social:room-membership', { roomId }).then((result) => {
       if (!result.ok) expectedRoomExitRef.current = { roomId: '', until: 0 }
       setSnapshot((current) => ({
         ...current,
@@ -534,43 +536,27 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     })
   }, [socket])
 
-  const sendRoomMessage = useCallback((roomId: string, text: string): Promise<boolean> => {
+  const sendRoomMessage = useCallback(async (roomId: string, text: string): Promise<boolean> => {
     const message = text.trim().slice(0, SOCIAL_ROOM_MESSAGE_MAX_LENGTH)
-    if (!message || !socket.connected) return Promise.resolve(false)
-    return new Promise((resolve) => {
-      let acknowledged = false
-      const timeout = window.setTimeout(() => {
-        if (acknowledged) return
-        acknowledged = true
-        setSnapshot((current) => ({
-          ...current,
-          feedback: socialFeedback('error', SOCIAL_TEXT.roomMessageTimeout),
-        }))
-        resolve(false)
-      }, SOCIAL_ACK_TIMEOUT_MS)
-      socket.emit('social:room-message', {
-        roomId,
-        text: message,
-        clientMessageId: crypto.randomUUID(),
-      }, (result: SocialAckResult = {}) => {
-        if (acknowledged) return
-        acknowledged = true
-        window.clearTimeout(timeout)
-        if (!result.ok) {
-          setSnapshot((current) => ({
-            ...current,
-            feedback: socialFeedback('error', socialErrorText(result.code)),
-          }))
-        }
-        resolve(Boolean(result.ok))
-      })
+    if (!message || !socket.connected) return false
+    const result = await emitSocialAck(socket, 'social:room-message', {
+      roomId,
+      text: message,
+      clientMessageId: crypto.randomUUID(),
     })
+    if (!result.ok && result.code !== 'offline') {
+      setSnapshot((current) => ({
+        ...current,
+        feedback: socialFeedback('error', result.code === 'timeout' ? SOCIAL_TEXT.roomMessageTimeout : socialErrorText(result.code)),
+      }))
+    }
+    return result.ok
   }, [socket])
 
   const sendRoomReaction = useCallback((roomId: string, reaction: SocialRoomReaction['reaction']) => {
     if (!socket.connected) return
-    socket.emit('social:room-reaction', { roomId, reaction }, (result: SocialAckResult = {}) => {
-      if (result.ok) return
+    void emitSocialAck(socket, 'social:room-reaction', { roomId, reaction }).then((result) => {
+      if (result.ok || result.code === 'offline') return
       setSnapshot((current) => ({
         ...current,
         feedback: socialFeedback('error', socialErrorText(result.code)),
@@ -578,21 +564,14 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     })
   }, [socket])
 
-  const createRoom = useCallback(() => {
-    socket.emit('social:create-room', {
-      title: currentTrack.title || `${resolvedName} dinliyor`,
-      cover: currentTrack.cover,
-    })
-  }, [currentTrack.cover, currentTrack.title, resolvedName, socket])
+  const createRoom = useCallback(() => ack.actions.createRoom({
+    title: currentTrack.title || `${resolvedName} dinliyor`,
+    cover: currentTrack.cover,
+  }), [ack, currentTrack.cover, currentTrack.title, resolvedName])
 
-  const updatePrivacy = useCallback((privacy: SocialPrivacy) => {
-    setSnapshot((current) => ({ ...current, privacy }))
-    socket.emit('social:privacy', privacy)
-  }, [socket])
+  const updatePrivacy = useCallback((privacy: SocialPrivacy) => ack.actions.updatePrivacy(privacy), [ack])
 
-  const blockUser = useCallback((userId: string) => {
-    socket.emit('social:block', { targetUserId: userId })
-  }, [socket])
+  const blockUser = useCallback((userId: string) => ack.actions.blockUser(userId), [ack])
 
   const reconnectSocial = useCallback(() => {
     setConnectionStatus('connecting')
@@ -600,11 +579,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   }, [])
 
   return {
-    state: {
-      ...snapshot,
-      connectionStatus,
-      lastOnlineAt,
-    },
+    state: ack.view(baseState),
     actions: {
       selectUser,
       reactToUser,

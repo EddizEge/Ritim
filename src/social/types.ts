@@ -203,29 +203,37 @@ export type SocialSendResult = {
   duplicate?: boolean
 }
 
+// Acknowledgement of any other gateway action (src/social/socialAckActions.ts):
+// `ok` only after the gateway confirmed it; otherwise `code` is 'offline',
+// 'timeout' or the gateway's code.
+export type SocialActionResult = {
+  ok: boolean
+  code?: string
+}
+
 export type SocialSettingsSection = 'social' | 'notifications'
 
 export type SocialActions = {
   selectUser: (userId: string) => void
-  reactToUser: (userId: string, reaction?: string) => void
+  reactToUser: (userId: string, reaction?: string) => Promise<SocialActionResult>
   // Retrying passes the same clientMessageId; the gateway drops duplicates.
   sendMessage: (userId: string, text: string, clientMessageId?: string) => Promise<SocialSendResult>
   markConversationRead: (userId: string) => void
-  respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => void
-  reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => void
-  markNotificationsRead: () => void
-  updateNotificationPreferences: (preferences: SocialNotificationPreferences) => void
+  respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => Promise<SocialActionResult>
+  reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => Promise<SocialActionResult>
+  markNotificationsRead: () => Promise<SocialActionResult>
+  updateNotificationPreferences: (preferences: SocialNotificationPreferences) => Promise<SocialActionResult>
   requestDeviceNotifications: () => void
-  toggleMute: (userId: string) => void
-  reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => void
+  toggleMute: (userId: string) => Promise<SocialActionResult>
+  reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => Promise<SocialActionResult>
   clearFeedback: () => void
-  toggleListeningWith: (userId: string) => void
+  toggleListeningWith: (userId: string) => Promise<SocialActionResult>
   joinRoom: (roomId: string) => void
   sendRoomMessage: (roomId: string, text: string) => Promise<boolean>
   sendRoomReaction: (roomId: string, reaction: SocialRoomReaction['reaction']) => void
-  createRoom: () => void
-  updatePrivacy: (privacy: SocialPrivacy) => void
-  blockUser: (userId: string) => void
+  createRoom: () => Promise<SocialActionResult>
+  updatePrivacy: (privacy: SocialPrivacy) => Promise<SocialActionResult>
+  blockUser: (userId: string) => Promise<SocialActionResult>
   reconnectSocial: () => void
   signIn?: () => void
   signOut?: () => void
