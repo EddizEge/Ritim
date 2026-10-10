@@ -24,8 +24,10 @@ const SOCIAL_ACTIONS = Object.freeze({
   'create-room': { event: 'social:create-room', ack: false },
 })
 
-// Handled by the main process itself (OAuth, reconnect, device preferences).
-const LOCAL_SOCIAL_ACTIONS = Object.freeze(['reconnect', 'sign-in', 'sign-out', 'device-notifications'])
+// Handled by the main process itself (OAuth, reconnect, device preferences,
+// opening the Settings window on a social section).
+const LOCAL_SOCIAL_ACTIONS = Object.freeze(['reconnect', 'sign-in', 'sign-out', 'device-notifications', 'open-settings'])
+const SETTINGS_SECTIONS = new Set(['social', 'notifications'])
 
 const DEFAULT_ACK_TIMEOUT_MS = 5_000
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -154,6 +156,7 @@ const PAYLOAD_NORMALIZERS = {
     if (typeof payload.enabled !== 'boolean') throw new SocialPayloadError('invalid_payload')
     return { enabled: payload.enabled }
   },
+  'open-settings': (payload) => ({ section: oneOf(payload.section, SETTINGS_SECTIONS) }),
 }
 
 function normalizeSocialAction(type, payload) {
@@ -285,6 +288,7 @@ module.exports = {
   DEFAULT_ACK_TIMEOUT_MS,
   LIMITS,
   LOCAL_SOCIAL_ACTIONS,
+  SETTINGS_SECTIONS,
   SOCIAL_ACTIONS,
   createSocialActionBridge,
   normalizeSocialAction,

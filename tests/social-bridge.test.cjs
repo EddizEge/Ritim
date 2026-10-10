@@ -43,7 +43,7 @@ test('köprü yalnız izinli eylemleri sunucu olaylarına eşler', () => {
   for (const type of ['message', 'room-message', 'room-reaction', 'room-membership']) {
     assert.equal(SOCIAL_ACTIONS[type].ack, true)
   }
-  assert.deepEqual([...LOCAL_SOCIAL_ACTIONS].sort(), ['device-notifications', 'reconnect', 'sign-in', 'sign-out'])
+  assert.deepEqual([...LOCAL_SOCIAL_ACTIONS].sort(), ['device-notifications', 'open-settings', 'reconnect', 'sign-in', 'sign-out'])
   for (const forbidden of ['join', 'profile', 'room-playback:update', 'room-playback:result', 'clock:ping', '__proto__', 'constructor', 'toString']) {
     assert.deepEqual(normalizeSocialAction(forbidden, {}), { ok: false, code: 'unknown_action' })
   }
@@ -150,6 +150,20 @@ test('ack istemeyen olaylar hemen gönderilir; geçersiz istek sokete ulaşmaz',
   assert.deepEqual(await bridge.dispatch('sign-in', {}), { ok: false, code: 'unknown_action' })
   assert.deepEqual(await bridge.emit({ ok: true, local: true, type: 'sign-out' }), { ok: false, code: 'unknown_action' })
   assert.equal(socket.emitted.length, 2)
+})
+
+test('Sosyal ayarları kısayolu yalnız bilinen ayar bölümünü yerel eylem olarak açar', async () => {
+  assert.deepEqual(normalizeSocialAction('open-settings', { section: 'social' }), {
+    ok: true, type: 'open-settings', local: true, event: undefined, ack: false, payload: { section: 'social' },
+  })
+  assert.equal(normalizeSocialAction('open-settings', { section: 'notifications' }).ok, true)
+  for (const section of ['connection', 'about', '', '__proto__', 1, undefined]) {
+    assert.deepEqual(normalizeSocialAction('open-settings', { section }), { ok: false, code: 'invalid_payload' })
+  }
+  const socket = fakeSocket()
+  const bridge = createSocialActionBridge({ getSocket: () => socket })
+  assert.deepEqual(await bridge.dispatch('open-settings', { section: 'social' }), { ok: false, code: 'unknown_action' })
+  assert.equal(socket.emitted.length, 0)
 })
 
 test('sekme rozeti okunmamış konuşmalar ile gelen istekleri sayar', () => {
