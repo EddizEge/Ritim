@@ -32,4 +32,10 @@ contextBridge.exposeInMainWorld('ritimSettings', {
     ipcRenderer.on('settings:appearance', handler)
     return () => ipcRenderer.removeListener('settings:appearance', handler)
   },
+  // The Social view's "Sosyal ayarları" shortcuts open a given section.
+  onOpenSection: (listener) => {
+    const handler = (_event, section) => listener(section)
+    ipcRenderer.on('settings:open-section', handler)
+    return () => ipcRenderer.removeListener('settings:open-section', handler)
+  },
 })

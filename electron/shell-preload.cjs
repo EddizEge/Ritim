@@ -4,12 +4,11 @@ contextBridge.exposeInMainWorld('ritimShell', {
   openSettings: () => ipcRenderer.send('settings:open'),
   setView: (view) => ipcRenderer.invoke('shell:set-view', view),
   getAppearance: () => ipcRenderer.invoke('shell:get-appearance'),
-  getSocialState: () => ipcRenderer.invoke('shell:get-social-state'),
-  sendSocialAction: (type, payload) => ipcRenderer.send('shell:social-action', { type, payload }),
-  onSocialState: (callback) => {
-    const listener = (_event, state) => callback(state)
-    ipcRenderer.on('shell:social-state', listener)
-    return () => ipcRenderer.removeListener('shell:social-state', listener)
+  getSocialSummary: () => ipcRenderer.invoke('shell:get-social-summary'),
+  onSocialSummary: (callback) => {
+    const listener = (_event, summary) => callback(summary)
+    ipcRenderer.on('shell:social-summary', listener)
+    return () => ipcRenderer.removeListener('shell:social-summary', listener)
   },
   onViewChanged: (callback) => {
     const listener = (_event, view) => callback(view)

@@ -3,7 +3,23 @@ import { Capacitor } from '@capacitor/core'
 import { io } from 'socket.io-client'
 import type { MobilePairingConfig } from '../mobileConfig'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
+import { handleFromDisplayName, initialsFromDisplayName } from '../social/handle'
+import { deviceNotificationContent } from '../social/socialModel'
 import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
+import { SOCIAL_ACK_EVENTS, createSocialAckActions, emitSocialAck, type SocialAckActions } from '../social/socialAckActions'
+import {
+  EXPECTED_ROOM_EXIT_MS,
+  SOCIAL_MESSAGE_MAX_LENGTH,
+  SOCIAL_ROOM_MESSAGE_MAX_LENGTH,
+  SOCIAL_TEXT,
+  isAckHandledSocialError,
+  mergeIncomingSocialSnapshot,
+  roomMembershipFeedback,
+  socialErrorText,
+  socialFeedback,
+  type ExpectedRoomExit,
+  type SocialSnapshot,
+} from '../social/socialShared'
 import type {
   SocialActions,
   SocialMessageReaction,
@@ -11,6 +27,7 @@ import type {
   SocialNotificationPreferences,
   SocialPrivacy,
   SocialRoomReaction,
+  SocialSendResult,
   SocialState,
   SocialTrack,
   SocialUser,
@@ -23,8 +40,6 @@ type Options = {
   isCompanion: boolean
   pairing: MobilePairingConfig
 }
-
-type SocialSnapshot = Omit<SocialState, 'connectionStatus'>
 
 const PUBLIC_SOCIAL_URL = 'https://social.edizegemercan.com.tr'
 const DELIVERED_NOTIFICATION_IDS_KEY = 'ritim-social-delivered-notifications-v1'
@@ -55,29 +70,8 @@ function notificationNumber(id: string) {
   return Math.max(1, Math.abs(value))
 }
 
-function notificationTitle(notification: SocialNotification, actorName: string) {
-  if (notification.kind === 'reaction') return `${actorName} mesajına tepki verdi`
-  if (notification.kind === 'message_request') return `${actorName} mesaj isteği gönderdi`
-  return `${actorName} sana yazdı`
-}
-
-function socialErrorText(code?: string) {
-  if (code === 'rate_limited') return 'Çok hızlı işlem yaptın. Biraz bekleyip tekrar dene.'
-  if (code === 'message_request_pending') return 'Bu mesaj isteği henüz yanıt bekliyor.'
-  if (code === 'message_request_rejected') return 'Bu kullanıcı mesaj isteğini reddetti.'
-  if (code === 'message_too_long') return 'Mesaj en fazla 500 karakter olabilir.'
-  if (code === 'message_blocked') return 'Bu kullanıcıyla mesajlaşma kullanılamıyor.'
-  if (code === 'room_full') return 'Bu oda dolu; en fazla 8 kişi birlikte dinleyebilir.'
-  if (code === 'room_not_found') return 'Bu dinleme odası artık açık değil.'
-  if (code === 'room_owner') return 'Odanın sahibisin; ayrılmak için odayı kapatabilirsin.'
-  if (code === 'room_owner_offline') return 'Oda sahibinin bilgisayarı çevrimdışı. Bağlandığında tekrar deneyebilirsin.'
-  if (code === 'room_access_denied') return 'Bu dinleme odasına erişimin bulunmuyor.'
-  if (code === 'room_message_too_long') return 'Oda mesajı en fazla 280 karakter olabilir.'
-  return 'Sosyal işlem tamamlanamadı. Bağlantını kontrol edip tekrar dene.'
-}
-
-async function deliverDeviceNotification(notification: SocialNotification, actorName: string) {
-  const title = notificationTitle(notification, actorName)
+async function deliverDeviceNotification(notification: SocialNotification, content: { title: string; body: string }) {
+  const { title, body } = content
   if (Capacitor.isNativePlatform()) {
     const { LocalNotifications } = await import('@capacitor/local-notifications')
     const permission = await LocalNotifications.checkPermissions()
@@ -92,7 +86,7 @@ async function deliverDeviceNotification(notification: SocialNotification, actor
       notifications: [{
         id: notificationNumber(notification.id),
         title,
-        body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+        body,
         channelId: 'ritim-social',
         extra: { socialNotificationId: notification.id },
       }],
@@ -101,29 +95,10 @@ async function deliverDeviceNotification(notification: SocialNotification, actor
   }
   if (!('Notification' in window) || Notification.permission !== 'granted') return false
   new Notification(title, {
-    body: notification.kind === 'reaction' ? `${notification.body} tepkisi` : notification.body,
+    body,
     tag: `ritim-social-${notification.id}`,
   })
   return true
-}
-
-function profileInitials(displayName: string) {
-  const initials = displayName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toLocaleUpperCase('tr'))
-    .join('')
-  return initials || 'R'
-}
-
-function profileHandle(displayName: string, isCompanion: boolean) {
-  const normalized = displayName
-    .toLocaleLowerCase('tr')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '')
-  return `@${normalized || (isCompanion ? 'telefon' : 'ritimpc')}`
 }
 
 export function stableSocialAccountId(seed: string) {
@@ -185,12 +160,14 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const deviceRole = isCompanion ? 'companion' : 'desktop'
   const resolvedName = displayName?.trim() || (isCompanion ? 'Ritim Telefon' : 'Ritim Web')
   const [connectionStatus, setConnectionStatus] = useState<SocialState['connectionStatus']>(() => socket.connected ? 'online' : 'connecting')
+  const [lastOnlineAt, setLastOnlineAt] = useState<number | undefined>(undefined)
 
   const localProfile = useMemo<SocialUser>(() => ({
     id: accountId,
     displayName: resolvedName,
-    handle: profileHandle(resolvedName, isCompanion),
-    initials: profileInitials(resolvedName),
+    // Empty when nothing usable remains; the gateway then derives it.
+    handle: handleFromDisplayName(resolvedName),
+    initials: initialsFromDisplayName(resolvedName),
     avatarUrl,
     avatarTone: isCompanion ? 3 : 5,
     presence: 'online',
@@ -241,7 +218,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const playbackPublishRef = useRef({ roomId: '', revision: 0, signature: '' })
   const activeRoomIdRef = useRef(snapshot.activeRoomId)
   activeRoomIdRef.current = snapshot.activeRoomId
-  const expectedRoomExitRef = useRef({ roomId: '', until: 0 })
+  const expectedRoomExitRef = useRef<ExpectedRoomExit>({ roomId: '', until: 0 })
 
   const joinSocialAccount = useCallback(() => {
     socket.emit('social:join', {
@@ -252,6 +229,38 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     })
     profilePublisher.remember(profileRef.current)
   }, [accountId, deviceId, deviceRole, profilePublisher, socket])
+
+  // Acknowledged actions and their optimistic overlay, shared with the PC
+  // (src/social/socialAckActions.ts): same 5 s timeout, notices and rollback.
+  const baseState = useMemo<SocialState>(() => ({
+    ...snapshot,
+    connectionStatus,
+    lastOnlineAt,
+  }), [connectionStatus, lastOnlineAt, snapshot])
+  const baseStateRef = useRef(baseState)
+  baseStateRef.current = baseState
+  const socketRef = useRef(socket)
+  socketRef.current = socket
+  const [, setPendingVersion] = useState(0)
+  const ackRef = useRef<SocialAckActions | null>(null)
+  if (!ackRef.current) {
+    ackRef.current = createSocialAckActions({
+      send: (type, payload) => emitSocialAck(socketRef.current, SOCIAL_ACK_EVENTS[type], payload),
+      getState: () => baseStateRef.current,
+      isOnline: () => socketRef.current.connected,
+      notifyError: (code) => setSnapshot((current) => ({
+        ...current,
+        feedback: socialFeedback('error', socialErrorText(code)),
+      })),
+      onPendingChange: () => setPendingVersion((version) => version + 1),
+    })
+  }
+  const ack = ackRef.current
+
+  // Another account on this device must not see these optimistic changes.
+  useEffect(() => {
+    ack.reset()
+  }, [accountId, ack])
 
   useEffect(() => {
     let disposed = false
@@ -272,17 +281,15 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     connectSocialRef.current = () => void connectSocial()
     const onConnect = () => {
       setConnectionStatus('online')
+      setLastOnlineAt(Date.now())
       joinSocialAccount()
     }
     const onDisconnect = () => {
       setConnectionStatus('offline')
+      setLastOnlineAt(Date.now())
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'info',
-          text: 'Sosyal bağlantı kesildi. Müzik ve telefon kumandası çalışmaya devam ediyor.',
-        },
+        feedback: socialFeedback('info', SOCIAL_TEXT.disconnected),
         users: previous.users.map((user) => ({ ...user, presence: 'offline' })),
       }))
     }
@@ -299,64 +306,34 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     const onSessionChanged = () => void connectSocial()
     const onSocialState = (next: SocialSnapshot) => {
       setConnectionStatus('online')
+      setLastOnlineAt(Date.now())
       setSnapshot((previous) => {
-        const selected = selectedUserIdRef.current
-        const selectedStillExists = next.users.some((user) => user.id === selected)
-        const lostActiveRoom = Boolean(previous.activeRoomId && !next.activeRoomId)
-        const expectedExit = Boolean(
-          lostActiveRoom
-          && expectedRoomExitRef.current.roomId === previous.activeRoomId
-          && expectedRoomExitRef.current.until >= Date.now()
-        )
-        if (lostActiveRoom && !expectedExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
-        return {
-          ...next,
-          notificationPreferences: {
-            messagesEnabled: next.notificationPreferences?.messagesEnabled !== false,
-            reactionsEnabled: next.notificationPreferences?.reactionsEnabled !== false,
-            deviceEnabled: notificationPreferencesRef.current.deviceEnabled,
-          },
-          mutedUsers: next.mutedUsers || [],
-          reportSummary: next.reportSummary || { total: 0, recent: [] },
-          feedback: lostActiveRoom && !expectedExit
-            ? {
-                id: crypto.randomUUID(),
-                tone: 'info',
-                text: 'Dinleme odası kapatıldı veya erişimin kaldırıldı.',
-              }
-            : previous.feedback,
-          selectedUserId: selectedStillExists ? selected : next.selectedUserId,
-        }
+        const { snapshot: merged, resetExpectedRoomExit } = mergeIncomingSocialSnapshot(previous, next, {
+          selectedUserId: selectedUserIdRef.current,
+          expectedRoomExit: expectedRoomExitRef.current,
+          deviceEnabled: notificationPreferencesRef.current.deviceEnabled,
+          now: Date.now(),
+        })
+        if (resetExpectedRoomExit) expectedRoomExitRef.current = { roomId: '', until: 0 }
+        return merged
       })
+      // Acknowledged optimistic changes are in this snapshot now.
+      ack.noteSnapshot()
     }
     const onSocialError = (error: { code?: string; event?: string }) => {
       // Profil yenileme arka planda gerçekleşir; kullanıcı eylemi değildir.
-      // Mesaj hataları da acknowledgement callback'i üzerinden daha doğru
-      // biçimde ele alınır ve burada ikinci kez başarı/hata bildirimini ezmez.
-      if (
-        error?.event === 'profile'
-        || error?.event === 'message'
-        || error?.event === 'room-message'
-        || error?.event === 'room-reaction'
-        || error?.event === 'room-membership'
-      ) return
+      // Kullanıcı eylemlerinin hataları acknowledgement callback'i üzerinden
+      // daha doğru biçimde ele alınır ve burada ikinci kez bildirilmez.
+      if (isAckHandledSocialError(error?.event)) return
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: socialErrorText(error?.code),
-        },
+        feedback: socialFeedback('error', socialErrorText(error?.code)),
       }))
     }
     const onReportSaved = () => {
       setSnapshot((previous) => ({
         ...previous,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'success',
-          text: 'Şikâyet güvenli şekilde kaydedildi.',
-        },
+        feedback: socialFeedback('success', SOCIAL_TEXT.reportSaved),
       }))
     }
 
@@ -383,7 +360,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       window.removeEventListener('ritim:social-session-changed', onSessionChanged)
       socket.disconnect()
     }
-  }, [isCompanion, joinSocialAccount, pairing.syncUrl, pairing.token, socialUrl, socket])
+  }, [ack, isCompanion, joinSocialAccount, pairing.syncUrl, pairing.token, socialUrl, socket])
 
   useEffect(() => {
     // currentTrack.position changes every second; see profilePublishPolicy.ts.
@@ -434,7 +411,13 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     if (!pending.length) return
     void Promise.all(pending.map(async (notification) => {
       const actorName = snapshot.users.find((user) => user.id === notification.actorId)?.displayName || 'Bir Ritim kullanıcısı'
-      const delivered = await deliverDeviceNotification(notification, actorName).catch(() => false)
+      // Unknown kinds (and kinds switched off in preferences) are skipped once.
+      const content = deviceNotificationContent(notification, actorName, snapshot.notificationPreferences)
+      if (!content) {
+        deliveredNotificationSet.add(notification.id)
+        return
+      }
+      const delivered = await deliverDeviceNotification(notification, content).catch(() => false)
       if (delivered) deliveredNotificationSet.add(notification.id)
     })).then(() => {
       localStorage.setItem(
@@ -442,101 +425,56 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
         JSON.stringify([...deliveredNotificationSet].slice(-100)),
       )
     })
-  }, [deliveredNotificationSet, snapshot.notificationPreferences.deviceEnabled, snapshot.notifications, snapshot.users])
+  }, [deliveredNotificationSet, snapshot.notificationPreferences, snapshot.notifications, snapshot.users])
 
   const selectUser = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
   }, [])
 
-  const reactToUser = useCallback((userId: string, reaction = '♥') => {
-    socket.emit('social:reaction', { targetUserId: userId, reaction })
-  }, [socket])
+  const reactToUser = useCallback((userId: string, reaction = '♥') => ack.actions.reactToUser(userId, reaction), [ack])
 
-  const sendMessage = useCallback((userId: string, text: string): Promise<boolean> => {
-    const cleanText = text.trim().slice(0, 500)
-    if (!cleanText) return Promise.resolve(false)
-    if (!socket.connected) {
-      setSnapshot((current) => ({
-        ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: 'Mesaj gönderilemedi; Sosyal bağlantısı çevrimdışı.',
-        },
-      }))
-      return Promise.resolve(false)
-    }
-    const clientMessageId = crypto.randomUUID()
-    return new Promise((resolve) => {
-      let acknowledged = false
-      const timeout = window.setTimeout(() => {
-        if (acknowledged) return
-        acknowledged = true
-        setSnapshot((current) => ({
-          ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: 'error',
-            text: 'Sunucu mesajı zamanında onaylamadı. Mesajın taslakta tutuldu.',
-          },
-        }))
-        resolve(false)
-      }, 5_000)
-      socket.emit('social:message', {
-        targetUserId: userId,
-        text: cleanText,
-        clientMessageId,
-      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
-        if (acknowledged) return
-        acknowledged = true
-        window.clearTimeout(timeout)
-        setSnapshot((current) => ({
-          ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: result.ok ? 'success' : 'error',
-            text: result.ok
-              ? (result.duplicate ? 'Mesaj daha önce güvenli şekilde gönderilmiş.' : 'Mesaj sunucuya ulaştı.')
-              : socialErrorText(result.code),
-          },
-        }))
-        resolve(Boolean(result.ok))
-      })
+  // The chat shows the outcome on the message bubble itself (socialOutbox.ts),
+  // so sending raises no separate notice.
+  const sendMessage = useCallback(async (userId: string, text: string, clientMessageId: string = crypto.randomUUID()): Promise<SocialSendResult> => {
+    const cleanText = text.trim().slice(0, SOCIAL_MESSAGE_MAX_LENGTH)
+    if (!cleanText) return { ok: false, code: 'invalid_payload' }
+    if (!socket.connected) return { ok: false, code: 'offline' }
+    const result = await emitSocialAck(socket, 'social:message', {
+      targetUserId: userId,
+      text: cleanText,
+      clientMessageId,
     })
+    return result.ok
+      ? { ok: true, duplicate: Boolean(result.duplicate) }
+      : { ok: false, code: result.code || 'rejected' }
   }, [socket])
 
   const markConversationRead = useCallback((userId: string) => {
-    if (!socket.connected) return
-    socket.emit('social:read', { targetUserId: userId })
-  }, [socket])
+    void ack.actions.markConversationRead(userId)
+  }, [ack])
 
-  const respondToMessageRequest = useCallback((userId: string, action: 'accept' | 'reject') => {
-    if (!socket.connected) return
-    socket.emit('social:request-response', { requesterUserId: userId, action })
-  }, [socket])
+  const respondToMessageRequest = useCallback((userId: string, action: 'accept' | 'reject') => (
+    ack.actions.respondToMessageRequest(userId, action)
+  ), [ack])
 
   const reactToMessage = useCallback((
     userId: string,
     messageId: string,
     reaction: SocialMessageReaction['reaction'],
-  ) => {
-    if (!socket.connected) return
-    socket.emit('social:message-reaction', { targetUserId: userId, messageId, reaction })
-  }, [socket])
+  ) => ack.actions.reactToMessage(userId, messageId, reaction), [ack])
 
-  const markNotificationsRead = useCallback(() => {
-    if (!socket.connected) return
-    socket.emit('social:notifications-read')
-  }, [socket])
+  const markNotificationsRead = useCallback(() => ack.actions.markNotificationsRead(), [ack])
 
+  // Messages/reactions are account-wide (gateway); the system notification
+  // switch belongs to this device.
   const updateNotificationPreferences = useCallback((preferences: SocialNotificationPreferences) => {
     saveDeviceNotifications(preferences.deviceEnabled)
-    setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
-    if (socket.connected) socket.emit('social:notification-preferences', {
-      messagesEnabled: preferences.messagesEnabled,
-      reactionsEnabled: preferences.reactionsEnabled,
-    })
-  }, [socket])
+    setSnapshot((current) => ({
+      ...current,
+      notificationPreferences: { ...current.notificationPreferences, deviceEnabled: preferences.deviceEnabled },
+    }))
+    return ack.actions.updateNotificationPreferences(preferences)
+  }, [ack])
 
   const requestDeviceNotifications = useCallback(() => {
     void (async () => {
@@ -561,29 +499,19 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
       setSnapshot((current) => ({ ...current, notificationPreferences: preferences }))
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: granted ? 'success' : 'info',
-          text: granted ? 'Sistem bildirimleri açıldı.' : 'Sistem bildirimi izni verilmedi.',
-        },
+        feedback: socialFeedback(
+          granted ? 'success' : 'info',
+          granted ? SOCIAL_TEXT.deviceNotificationsOn : SOCIAL_TEXT.deviceNotificationsDenied,
+        ),
       }))
     })()
   }, [])
 
-  const toggleMute = useCallback((userId: string) => {
-    if (!socket.connected) return
-    socket.emit('social:mute', { targetUserId: userId })
-  }, [socket])
+  const toggleMute = useCallback((userId: string) => ack.actions.toggleMute(userId), [ack])
 
-  const reportUser = useCallback((userId: string, reason: string, detail = '', messageId = '') => {
-    if (!socket.connected) return
-    socket.emit('social:report', {
-      targetUserId: userId,
-      reason: reason.trim().slice(0, 120),
-      detail: detail.trim().slice(0, 2000),
-      messageId,
-    })
-  }, [socket])
+  const reportUser = useCallback((userId: string, reason: string, detail = '', messageId = '') => (
+    ack.actions.reportUser(userId, reason, detail, messageId)
+  ), [ack])
 
   const clearFeedback = useCallback(() => {
     setSnapshot((current) => ({ ...current, feedback: undefined }))
@@ -591,104 +519,59 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
 
   const toggleListeningWith = useCallback((userId: string) => {
     setSnapshot((current) => ({ ...current, selectedUserId: userId }))
-    socket.emit('social:listening', { targetUserId: userId })
-  }, [socket])
+    return ack.actions.toggleListeningWith(userId)
+  }, [ack])
 
   const joinRoom = useCallback((roomId: string) => {
     if (!socket.connected) return
     if (activeRoomIdRef.current === roomId) {
-      expectedRoomExitRef.current = { roomId, until: Date.now() + 5_000 }
+      expectedRoomExitRef.current = { roomId, until: Date.now() + EXPECTED_ROOM_EXIT_MS }
     }
-    socket.emit('social:room-membership', { roomId }, (result: {
-      ok?: boolean
-      code?: string
-      status?: 'joined' | 'left'
-    } = {}) => {
+    void emitSocialAck(socket, 'social:room-membership', { roomId }).then((result) => {
       if (!result.ok) expectedRoomExitRef.current = { roomId: '', until: 0 }
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: result.ok ? 'success' : 'error',
-          text: result.ok
-            ? (result.status === 'left' ? 'Dinleme odasından ayrıldın.' : 'Dinleme odasına katıldın.')
-            : socialErrorText(result.code),
-        },
+        feedback: roomMembershipFeedback(result),
       }))
     })
   }, [socket])
 
-  const sendRoomMessage = useCallback((roomId: string, text: string): Promise<boolean> => {
-    const message = text.trim().slice(0, 280)
-    if (!message || !socket.connected) return Promise.resolve(false)
-    return new Promise((resolve) => {
-      let acknowledged = false
-      const timeout = window.setTimeout(() => {
-        if (acknowledged) return
-        acknowledged = true
-        setSnapshot((current) => ({
-          ...current,
-          feedback: {
-            id: crypto.randomUUID(),
-            tone: 'error',
-            text: 'Oda mesajı zamanında onaylanmadı; taslağın korunuyor.',
-          },
-        }))
-        resolve(false)
-      }, 5_000)
-      socket.emit('social:room-message', {
-        roomId,
-        text: message,
-        clientMessageId: crypto.randomUUID(),
-      }, (result: { ok?: boolean; duplicate?: boolean; code?: string } = {}) => {
-        if (acknowledged) return
-        acknowledged = true
-        window.clearTimeout(timeout)
-        if (!result.ok) {
-          setSnapshot((current) => ({
-            ...current,
-            feedback: {
-              id: crypto.randomUUID(),
-              tone: 'error',
-              text: socialErrorText(result.code),
-            },
-          }))
-        }
-        resolve(Boolean(result.ok))
-      })
+  const sendRoomMessage = useCallback(async (roomId: string, text: string): Promise<boolean> => {
+    const message = text.trim().slice(0, SOCIAL_ROOM_MESSAGE_MAX_LENGTH)
+    if (!message || !socket.connected) return false
+    const result = await emitSocialAck(socket, 'social:room-message', {
+      roomId,
+      text: message,
+      clientMessageId: crypto.randomUUID(),
     })
+    if (!result.ok && result.code !== 'offline') {
+      setSnapshot((current) => ({
+        ...current,
+        feedback: socialFeedback('error', result.code === 'timeout' ? SOCIAL_TEXT.roomMessageTimeout : socialErrorText(result.code)),
+      }))
+    }
+    return result.ok
   }, [socket])
 
   const sendRoomReaction = useCallback((roomId: string, reaction: SocialRoomReaction['reaction']) => {
     if (!socket.connected) return
-    socket.emit('social:room-reaction', { roomId, reaction }, (result: { ok?: boolean; code?: string } = {}) => {
-      if (result.ok) return
+    void emitSocialAck(socket, 'social:room-reaction', { roomId, reaction }).then((result) => {
+      if (result.ok || result.code === 'offline') return
       setSnapshot((current) => ({
         ...current,
-        feedback: {
-          id: crypto.randomUUID(),
-          tone: 'error',
-          text: socialErrorText(result.code),
-        },
+        feedback: socialFeedback('error', socialErrorText(result.code)),
       }))
     })
   }, [socket])
 
-  const createRoom = useCallback(() => {
-    socket.emit('social:create-room', {
-      title: currentTrack.title || `${resolvedName} dinliyor`,
-      cover: currentTrack.cover,
-    })
-  }, [currentTrack.cover, currentTrack.title, resolvedName, socket])
+  const createRoom = useCallback(() => ack.actions.createRoom({
+    title: currentTrack.title || `${resolvedName} dinliyor`,
+    cover: currentTrack.cover,
+  }), [ack, currentTrack.cover, currentTrack.title, resolvedName])
 
-  const updatePrivacy = useCallback((privacy: SocialPrivacy) => {
-    setSnapshot((current) => ({ ...current, privacy }))
-    socket.emit('social:privacy', privacy)
-  }, [socket])
+  const updatePrivacy = useCallback((privacy: SocialPrivacy) => ack.actions.updatePrivacy(privacy), [ack])
 
-  const blockUser = useCallback((userId: string) => {
-    socket.emit('social:block', { targetUserId: userId })
-  }, [socket])
+  const blockUser = useCallback((userId: string) => ack.actions.blockUser(userId), [ack])
 
   const reconnectSocial = useCallback(() => {
     setConnectionStatus('connecting')
@@ -696,10 +579,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   }, [])
 
   return {
-    state: {
-      ...snapshot,
-      connectionStatus,
-    },
+    state: ack.view(baseState),
     actions: {
       selectUser,
       reactToUser,

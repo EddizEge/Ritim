@@ -1,0 +1,15 @@
+/* Electron Social view: the shared DesktopSocialHub (src/components/social)
+   fills the area below the shell's app bar (electron/shell.html) at its real
+   size; themes, density, motion and artwork come from social.css through the
+   data attributes set by useDesktopAppearance. */
+html, body, #root { height: 100%; }
+.desktop-social-body { overflow: hidden; background: #090909; }
+html[data-ritim-resolved-theme='black'] .desktop-social-body { background: #000; }
+html[data-ritim-resolved-theme='light'] { color-scheme: light; }
+html[data-ritim-resolved-theme='light'] .desktop-social-body { background: #f4f5f7; }
+
+.desktop-social-root { width: 100vw; height: 100vh; min-width: 0; }
+
+.desktop-social-unavailable { display: grid; place-content: center; gap: 8px; color: #c9cbcc; font-family: Manrope, 'Segoe UI', system-ui, sans-serif; text-align: center; }
+.desktop-social-unavailable h1 { margin: 0; font-size: 24px; }
+.desktop-social-unavailable p { margin: 0; color: #8b8e8f; font-size: 13.5px; }

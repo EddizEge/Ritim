@@ -103,9 +103,14 @@ export type SocialMessageRequest = {
   sentAt: number
 }
 
+// `profile_reaction` (someone left an emoji on your profile) carries the
+// emoji in `body` and has no `messageId`. Kinds this client does not know are
+// skipped by the interface and by system notifications.
+export type SocialNotificationKind = 'message_request' | 'message' | 'reaction' | 'profile_reaction'
+
 export type SocialNotification = {
   id: string
-  kind: 'message_request' | 'message' | 'reaction'
+  kind: SocialNotificationKind
   actorId?: string
   messageId?: string
   body: string
@@ -153,8 +158,18 @@ export type SocialAccountSummary = {
   warning?: string
 }
 
+// Only the Electron Social view fills this: the PC signs in to Ritim Social
+// itself, while phones join through the PC's companion ticket.
+export type SocialAuthenticationSummary = {
+  configured: boolean
+  required: boolean
+  authenticated: boolean
+  user?: Pick<SocialUser, 'id' | 'displayName' | 'handle' | 'initials' | 'avatarUrl' | 'avatarTone'>
+}
+
 export type SocialState = {
   connectionStatus: SocialConnectionStatus
+  authentication?: SocialAuthenticationSummary
   currentUser: SocialUser
   privacy: SocialPrivacy
   currentDeviceCount: number
@@ -176,27 +191,52 @@ export type SocialState = {
   selectedUserId: string
   listeningWithUserId?: string
   activeRoomId?: string
+  // Last moment this device was known to be connected to Ritim Social.
+  lastOnlineAt?: number
 }
+
+// Acknowledgement of a direct message; `code` explains a failure
+// ('offline', 'timeout', or a gateway code such as 'rate_limited').
+export type SocialSendResult = {
+  ok: boolean
+  code?: string
+  duplicate?: boolean
+}
+
+// Acknowledgement of any other gateway action (src/social/socialAckActions.ts):
+// `ok` only after the gateway confirmed it; otherwise `code` is 'offline',
+// 'timeout' or the gateway's code.
+export type SocialActionResult = {
+  ok: boolean
+  code?: string
+}
+
+export type SocialSettingsSection = 'social' | 'notifications'
 
 export type SocialActions = {
   selectUser: (userId: string) => void
-  reactToUser: (userId: string, reaction?: string) => void
-  sendMessage: (userId: string, text: string) => Promise<boolean>
+  reactToUser: (userId: string, reaction?: string) => Promise<SocialActionResult>
+  // Retrying passes the same clientMessageId; the gateway drops duplicates.
+  sendMessage: (userId: string, text: string, clientMessageId?: string) => Promise<SocialSendResult>
   markConversationRead: (userId: string) => void
-  respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => void
-  reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => void
-  markNotificationsRead: () => void
-  updateNotificationPreferences: (preferences: SocialNotificationPreferences) => void
+  respondToMessageRequest: (userId: string, action: 'accept' | 'reject') => Promise<SocialActionResult>
+  reactToMessage: (userId: string, messageId: string, reaction: SocialMessageReaction['reaction']) => Promise<SocialActionResult>
+  markNotificationsRead: () => Promise<SocialActionResult>
+  updateNotificationPreferences: (preferences: SocialNotificationPreferences) => Promise<SocialActionResult>
   requestDeviceNotifications: () => void
-  toggleMute: (userId: string) => void
-  reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => void
+  toggleMute: (userId: string) => Promise<SocialActionResult>
+  reportUser: (userId: string, reason: string, detail?: string, messageId?: string) => Promise<SocialActionResult>
   clearFeedback: () => void
-  toggleListeningWith: (userId: string) => void
+  toggleListeningWith: (userId: string) => Promise<SocialActionResult>
   joinRoom: (roomId: string) => void
   sendRoomMessage: (roomId: string, text: string) => Promise<boolean>
   sendRoomReaction: (roomId: string, reaction: SocialRoomReaction['reaction']) => void
-  createRoom: () => void
-  updatePrivacy: (privacy: SocialPrivacy) => void
-  blockUser: (userId: string) => void
+  createRoom: () => Promise<SocialActionResult>
+  updatePrivacy: (privacy: SocialPrivacy) => Promise<SocialActionResult>
+  blockUser: (userId: string) => Promise<SocialActionResult>
   reconnectSocial: () => void
+  signIn?: () => void
+  signOut?: () => void
+  // PC only: opens the Settings window on the given section.
+  openSettings?: (section: SocialSettingsSection) => void
 }

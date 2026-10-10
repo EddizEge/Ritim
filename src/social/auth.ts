@@ -349,7 +349,8 @@ export async function getSocialAccount(options: SocialAuthOptions) {
       user: {
         id: session.user.id,
         displayName: session.user.displayName,
-        handle: session.user.handle || '@ritim',
+        // No invented handle: an empty one lets the gateway derive it.
+        handle: session.user.handle || '',
         initials: session.user.initials || sessionInitials(session.user.displayName),
         avatarUrl: session.user.avatarUrl,
         avatarTone: Number(session.user.avatarTone) || 0,
