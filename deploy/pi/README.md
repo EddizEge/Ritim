@@ -110,6 +110,25 @@ uca doğrulama için `RITIM_AUTH_REQUIRED=false` ile başlatılan gateway'e kar�
 `RITIM_SOCIAL_TEST_URL=<adres> node --test tests/social-gateway-message-requests.test.cjs`
 çalıştırılabilir; üretim gateway'ine bu test yöneltilmez.
 
+Aşama 3 profil tepkisi bildirimi geçişi:
+
+```sh
+docker compose --env-file .env -f compose.alpha2.yml exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < postgres/init/090_profile_reaction_notifications.sql
+```
+
+`090` geçişi `ritim.social_notifications.kind` CHECK kısıtını
+`social_notifications_kind_check` adıyla yeniden kurar ve listeye
+`profile_reaction` türünü ekler. Ayrıca aynı kişiden gelen okunmamış profil
+tepkisini tek satırda tutan kısmi benzersiz indeksi
+(`social_notifications_profile_reaction_unread_idx`) oluşturur; gateway yeni
+tepkide bu satırın emojisini ve zamanını günceller. Yeni tablo ya da yetki
+eklemez. Betik idempotenttir ve tek işlem içinde çalışır. Sıra: önce şifreli
+yedek, sonra `090`, en son gateway imajını yeniden derleyip başlatma. Yeni
+gateway bu indeks olmadan profil tepkisini kaydedemez; bu yüzden `090`
+gateway'den önce uygulanmalıdır.
+
 CI'daki `social-gateway` işi aynı opt-in testleri her çalıştırmada geçici
 PostgreSQL 17 + Redis 7 container'larına karşı koşar:
 `bash deploy/ci/social-gateway-e2e.sh`. Betik bu klasördeki `init` geçişlerini

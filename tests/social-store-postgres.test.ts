@@ -109,3 +109,93 @@ test('PostgreSQL erişimi çevrimdışı oda sahibi için de hesaplanır; bilinm
   const contactsOnly = await store.loadAccess(viewers, [ownerKey])
   assert.deepEqual(contactsOnly.get(outsider)?.get(ownerKey), { profile: true, listening: false })
 })
+
+test('PostgreSQL profil tepkisi bildirimi okunmamışken birleşir, tercih ve sessize almaya uyar', {
+  skip: !enabled,
+}, async (context) => {
+  const { store, join } = await withStore(context)
+  const target = await join('ptarget')
+  const fan = await join('pfan')
+  const friend = await join('pfriend')
+  const blocked = await join('pblocked')
+  // Actor ids resolve only for accounts in the snapshot, as in the gateway.
+  const profileReactions = async () => (await store.loadNotifications([target, fan, friend, blocked])).get(target)!
+    .filter((item) => item.kind === 'profile_reaction')
+
+  await store.saveReaction({ actorId: fan, targetId: target, reaction: '🔥' })
+  const [first] = await profileReactions()
+  assert.equal(first.actorId, fan)
+  assert.equal(first.body, '🔥')
+  assert.equal(first.messageId, undefined)
+  assert.equal(first.read, false)
+
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await store.saveReaction({ actorId: fan, targetId: target, reaction: '♥' })
+  const merged = await profileReactions()
+  assert.equal(merged.length, 1, 'okunmamış tepki varken yeni satır eklenmez')
+  assert.equal(merged[0].id, first.id)
+  assert.equal(merged[0].body, '♥')
+  assert.ok(merged[0].createdAt > first.createdAt)
+
+  await store.markNotificationsRead(target)
+  await store.saveReaction({ actorId: fan, targetId: target, reaction: '👍' })
+  const afterRead = await profileReactions()
+  assert.deepEqual(afterRead.map((item) => [item.body, item.read]), [['👍', false], ['♥', true]])
+
+  await store.updateNotificationPreferences(target, { messagesEnabled: true, reactionsEnabled: false, deviceEnabled: false })
+  await store.markNotificationsRead(target)
+  await store.saveReaction({ actorId: fan, targetId: target, reaction: '😂' })
+  assert.equal((await profileReactions()).length, 2, 'tepki bildirimi kapalıyken yazılmaz')
+  await store.updateNotificationPreferences(target, { messagesEnabled: false, reactionsEnabled: true, deviceEnabled: false })
+
+  await store.saveMessage({
+    id: crypto.randomUUID(),
+    senderId: friend,
+    targetId: target,
+    text: 'Merhaba',
+    sentAt: Date.now(),
+    reactions: [],
+  })
+  await store.respondToMessageRequest(target, friend, 'accept')
+  await store.toggleMute(target, friend)
+  await store.saveReaction({ actorId: friend, targetId: target, reaction: '🔥' })
+  assert.equal(
+    (await profileReactions()).filter((item) => item.actorId === friend).length,
+    0,
+    'sessize alınan kişinin tepkisi bildirim üretmez',
+  )
+
+  assert.equal(await store.toggleBlock(target, blocked), true)
+  await assert.rejects(store.saveReaction({ actorId: blocked, targetId: target, reaction: '🔥' }), /engellendi/)
+  assert.equal((await profileReactions()).filter((item) => item.actorId === blocked).length, 0)
+  const reactionCount = (await store.loadReactions([target])).get(target)?.count
+  assert.equal(reactionCount, 5, 'reddedilen tepki sayılmaz; sessize alınan sayılır')
+
+  const burst = await join('pburst')
+  await Promise.all(['🔥', '♥', '😂', '👍', '🎵'].map((reaction) => (
+    store.saveReaction({ actorId: burst, targetId: target, reaction })
+  )))
+  const burstNotifications = (await store.loadNotifications([target, burst])).get(target)!
+    .filter((item) => item.kind === 'profile_reaction' && item.actorId === burst)
+  assert.equal(burstNotifications.length, 1, 'eşzamanlı tepkiler de tek okunmamış satırda birleşir')
+})
+
+test('PostgreSQL odadan ayrılma erişim sonradan reddedilse de serbesttir', {
+  skip: !enabled,
+}, async (context) => {
+  const { store, join } = await withStore(context)
+  const owner = await join('leaveowner')
+  const listener = await join('leavelistener')
+
+  assert.equal(await store.toggleRoom(owner, 'Ayrılma odası', 3), true)
+  const [room] = await store.loadRooms([owner])
+  assert.equal(await store.toggleRoomMembership(listener, room.id), 'joined')
+
+  // Profile visibility does not remove listeners, so the member stays while
+  // usersCanInteract now denies them.
+  await store.updatePrivacy(owner, { profileVisibility: 'hidden', listeningVisibility: 'everyone' })
+  assert.equal(await store.isRoomListener(listener, room.id), true)
+  assert.equal(await store.toggleRoomMembership(listener, room.id), 'left')
+  assert.equal(await store.isRoomListener(listener, room.id), false)
+  await assert.rejects(store.toggleRoomMembership(listener, room.id), /erişim engellendi/)
+})
