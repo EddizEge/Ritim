@@ -1,12 +1,12 @@
 const fallbackData = {
-  appVersion: '0.9.1-beta.2',
+  appVersion: '0.9.1-beta.3',
   computerName: 'EDİZ-PC',
   electronVersion: '43',
   room: 'EDIZ-4821',
   serverReady: true,
   updateStatus: {
     state: 'development', message: 'Güncelleme denetimi paketlenmiş uygulamada çalışır.',
-    currentVersion: '0.9.1-beta.2', availableVersion: '', channel: 'beta', lastCheckedAt: '',
+    currentVersion: '0.9.1-beta.3', availableVersion: '', channel: 'beta', lastCheckedAt: '',
     percent: 0, downloadedBytes: 0, totalBytes: 0, canDownload: false, canInstall: false,
   },
   pairing: {
