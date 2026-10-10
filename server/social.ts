@@ -19,6 +19,7 @@ import {
   isOriginAllowed,
   logAbuse,
   readSocialSecurityConfig,
+  resolveClientAddress,
   securityHeaders,
 } from './social-security.js'
 import { createDurableSocialStore } from './social-store.js'
@@ -90,10 +91,11 @@ const io = new Server(httpServer, {
         windowMs: 0,
       })
     }
-    const forwardedAddress = securityConfig.trustProxy
-      ? String(request.headers['cf-connecting-ip'] || request.headers['x-forwarded-for'] || '').split(',')[0].trim()
-      : ''
-    const gate = socketConnectionGate(forwardedAddress || request.socket.remoteAddress)
+    const gate = socketConnectionGate(resolveClientAddress(
+      request.socket.remoteAddress,
+      request.headers['x-forwarded-for'],
+      securityConfig.trustProxy,
+    ))
     callback(null, allowed && gate.allowed)
   },
   maxHttpBufferSize: 100_000,
