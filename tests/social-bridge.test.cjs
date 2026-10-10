@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 const {
+  DEFAULT_ACK_TIMEOUT_MS,
   LOCAL_SOCIAL_ACTIONS,
   SOCIAL_ACTIONS,
   createSocialActionBridge,
@@ -40,9 +41,8 @@ test('köprü yalnız izinli eylemleri sunucu olaylarına eşler', () => {
   for (const type of ['request-response', 'read', 'message-reaction', 'notifications-read', 'room-membership']) {
     assert.ok(SOCIAL_ACTIONS[type], `${type} eksik olay bağlanmalı`)
   }
-  for (const type of ['message', 'room-message', 'room-reaction', 'room-membership']) {
-    assert.equal(SOCIAL_ACTIONS[type].ack, true)
-  }
+  // The gateway acknowledges every one of them now.
+  for (const [type, { ack }] of Object.entries(SOCIAL_ACTIONS)) assert.equal(ack, true, `${type} ack beklemeli`)
   assert.deepEqual([...LOCAL_SOCIAL_ACTIONS].sort(), ['device-notifications', 'open-settings', 'reconnect', 'sign-in', 'sign-out'])
   for (const forbidden of ['join', 'profile', 'room-playback:update', 'room-playback:result', 'clock:ping', '__proto__', 'constructor', 'toString']) {
     assert.deepEqual(normalizeSocialAction(forbidden, {}), { ok: false, code: 'unknown_action' })
@@ -137,19 +137,80 @@ test('ack gelmezse zaman aşımı, soket yoksa çevrimdışı döner', async () 
   assert.deepEqual(await throwing.dispatch('message', { targetUserId: 'u', text: 'selam' }), { ok: false, code: 'offline' })
 })
 
-test('ack istemeyen olaylar hemen gönderilir; geçersiz istek sokete ulaşmaz', async () => {
+test('istek, okundu, tepki, bildirim, ayar ve moderasyon olayları sunucunun onayını aktarır', async () => {
+  const answers = {
+    'social:request-response': { ok: true },
+    'social:read': { ok: false, code: 'user_not_found' },
+    'social:message-reaction': { ok: false, code: 'reaction_blocked' },
+    'social:notifications-read': { ok: true },
+    'social:mute': { ok: false, code: 'conversation_not_found' },
+    'social:block': { ok: true },
+    'social:report': { ok: false, code: 'rate_limited' },
+    'social:privacy': { ok: true },
+    'social:notification-preferences': { ok: false, code: 'server_error' },
+    'social:listening': { ok: false, code: 'room_full' },
+    'social:create-room': { ok: false, code: 'room_owner_offline' },
+    'social:reaction': { ok: false, code: 'invalid_request' },
+  }
+  const socket = fakeSocket({ ack: (event, _payload, callback) => callback({ ...answers[event], secret: 'atılır' }) })
+  const bridge = createSocialActionBridge({ getSocket: () => socket })
+  const results = {
+    'request-response': await bridge.dispatch('request-response', { requesterUserId: 'u', action: 'reject' }),
+    read: await bridge.dispatch('read', { targetUserId: 'u' }),
+    'message-reaction': await bridge.dispatch('message-reaction', { targetUserId: 'u', messageId: 'm', reaction: '🔥' }),
+    'notifications-read': await bridge.dispatch('notifications-read'),
+    mute: await bridge.dispatch('mute', { targetUserId: 'u' }),
+    block: await bridge.dispatch('block', { targetUserId: 'u' }),
+    report: await bridge.dispatch('report', { targetUserId: 'u', reason: 'Spam' }),
+    privacy: await bridge.dispatch('privacy', { profileVisibility: 'contacts', listeningVisibility: 'hidden' }),
+    'notification-preferences': await bridge.dispatch('notification-preferences', { messagesEnabled: false, reactionsEnabled: true }),
+    listening: await bridge.dispatch('listening', { targetUserId: 'u' }),
+    'create-room': await bridge.dispatch('create-room', {}),
+    reaction: await bridge.dispatch('reaction', { targetUserId: 'u' }),
+  }
+  for (const [type, result] of Object.entries(results)) {
+    assert.deepEqual(result, answers[SOCIAL_ACTIONS[type].event], type)
+  }
+  assert.ok(socket.emitted.every((item) => item.hasCallback))
+  assert.equal(socket.emitted.length, Object.keys(answers).length)
+})
+
+test('onay olayları 5 sn içinde yanıt yoksa zaman aşımı, bağlantı yoksa çevrimdışı döner', async (t) => {
+  assert.equal(DEFAULT_ACK_TIMEOUT_MS, 5_000)
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const silent = fakeSocket()
+  const bridge = createSocialActionBridge({ getSocket: () => silent })
+  const pending = bridge.dispatch('request-response', { requesterUserId: 'u', action: 'accept' })
+  const pendingBlock = bridge.dispatch('block', { targetUserId: 'u' })
+  t.mock.timers.tick(4_999)
+  let settled = false
+  void pending.then(() => { settled = true })
+  await Promise.resolve()
+  assert.equal(settled, false)
+  t.mock.timers.tick(1)
+  assert.deepEqual(await pending, { ok: false, code: 'timeout' })
+  assert.deepEqual(await pendingBlock, { ok: false, code: 'timeout' })
+  t.mock.timers.reset()
+
+  const offline = createSocialActionBridge({ getSocket: () => fakeSocket({ connected: false }) })
+  for (const [type, payload] of [
+    ['notifications-read', {}],
+    ['message-reaction', { targetUserId: 'u', messageId: 'm', reaction: '♥' }],
+    ['mute', { targetUserId: 'u' }],
+  ]) {
+    assert.deepEqual(await offline.dispatch(type, payload), { ok: false, code: 'offline' }, type)
+  }
+})
+
+test('onaysız bir olay hemen gönderilir; geçersiz istek sokete ulaşmaz', async () => {
   const socket = fakeSocket()
   const bridge = createSocialActionBridge({ getSocket: () => socket })
-  assert.deepEqual(await bridge.dispatch('read', { targetUserId: 'u' }), { ok: true, acknowledged: false })
-  assert.deepEqual(await bridge.dispatch('request-response', { requesterUserId: 'u', action: 'reject' }), { ok: true, acknowledged: false })
-  assert.deepEqual(socket.emitted.map((item) => [item.event, item.hasCallback]), [
-    ['social:read', false],
-    ['social:request-response', false],
-  ])
+  assert.deepEqual(await bridge.emit({ ok: true, local: false, type: 'x', event: 'social:x', ack: false, payload: {} }), { ok: true, acknowledged: false })
+  assert.deepEqual(socket.emitted.map((item) => [item.event, item.hasCallback]), [['social:x', false]])
   assert.deepEqual(await bridge.dispatch('read', { targetUserId: '' }), { ok: false, code: 'invalid_payload' })
   assert.deepEqual(await bridge.dispatch('sign-in', {}), { ok: false, code: 'unknown_action' })
   assert.deepEqual(await bridge.emit({ ok: true, local: true, type: 'sign-out' }), { ok: false, code: 'unknown_action' })
-  assert.equal(socket.emitted.length, 2)
+  assert.equal(socket.emitted.length, 1)
 })
 
 test('Sosyal ayarları kısayolu yalnız bilinen ayar bölümünü yerel eylem olarak açar', async () => {
