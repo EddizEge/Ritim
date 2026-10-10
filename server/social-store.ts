@@ -51,7 +51,7 @@ type StoredMessageRequest = {
 
 type StoredNotification = {
   id: string
-  kind: 'message_request' | 'message' | 'reaction'
+  kind: 'message_request' | 'message' | 'reaction' | 'profile_reaction'
   actorId?: string
   messageId?: string
   body: string
@@ -1128,6 +1128,34 @@ export function createDurableSocialStore(pool: Pool, redis: RedisClient) {
         `insert into ritim.reactions (actor_id, target_id, reaction)
          values ($1, $2, $3)`,
         [actorId, targetId, value.reaction],
+      )
+      // Same filters as message reaction notifications: the `reactionsEnabled`
+      // preference and a muted direct conversation. An unread profile reaction
+      // from the same person is refreshed instead of duplicated; the partial
+      // unique index comes from 090_profile_reaction_notifications.sql.
+      await client.query(
+        `insert into ritim.social_notifications (
+           recipient_id, actor_id, kind, body
+         )
+         select $1, $2, 'profile_reaction', $3
+         where coalesce((
+           select preferences.reactions_enabled
+           from ritim.notification_preferences preferences
+           where preferences.user_id = $1
+         ), true)
+           and not exists (
+             select 1
+             from ritim.conversation_members recipient_member
+             join ritim.conversation_members actor_member
+               on actor_member.conversation_id = recipient_member.conversation_id
+              and actor_member.user_id = $2
+             where recipient_member.user_id = $1
+               and recipient_member.muted_until > now()
+           )
+         on conflict (recipient_id, actor_id)
+           where kind = 'profile_reaction' and read_at is null
+         do update set body = excluded.body, created_at = now()`,
+        [targetId, actorId, value.reaction],
       )
     })
   }
