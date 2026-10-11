@@ -11,6 +11,7 @@ const { createDiscordPresence } = require('./discord-presence.cjs')
 const { createDevicePreferences } = require('./device-preferences.cjs')
 const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData } = require('./pairing-security.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
+const { createSettingsSocialActionHandler } = require('./settings-ipc.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const {
   SETTINGS_SECTIONS,
@@ -916,14 +917,12 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
     return handleSocialAction(selected.type, selected.payload)
   })
-  // The Settings window keeps its own moderation and preference controls.
-  const settingsSocialActions = new Set(['privacy', 'notification-preferences', 'mute', 'block'])
-  ipcMain.on('settings:social-action', (event, request) => {
-    if (!isTrustedSettingsSender(event)) return
-    const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
-    if (!settingsSocialActions.has(selected.type)) return
-    void handleSocialAction(selected.type, selected.payload)
-  })
+  // The Settings window keeps its own moderation and preference controls and
+  // waits for the gateway's acknowledgement (settings-ipc.cjs).
+  ipcMain.handle('settings:social-action', createSettingsSocialActionHandler({
+    isTrustedSender: isTrustedSettingsSender,
+    handleSocialAction,
+  }))
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const socialAccount = await socialAuth?.account().catch((error) => ({
