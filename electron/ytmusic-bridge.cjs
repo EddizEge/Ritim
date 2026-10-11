@@ -11,6 +11,8 @@ const {
   readPlayerControlsInPage,
   toRitimRepeat,
 } = require('./ytmusic-player-controls.cjs')
+// ESM; Electron 43 / Node 24 require(esm) ile yüklenir, telefon da aynı dosyayı kullanır.
+const { mergeCatalogTracks, pruneCatalog } = require('../shared/player-catalog.mjs')
 
 // Sayfadaki oynatıcı API'si. Klasik düzende `ytmusic-player.playerApi`; yeni düzende
 // (ytmusic-miniplayer; 2026-10-11 girişsiz oturumda ana sayfada ve /watch'ta görüldü)
@@ -1810,9 +1812,11 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       }
       else if (title) queueTracks.unshift(track)
       if (queueTracks.length === 0) queueTracks.push(track)
-      const catalog = { ...state.catalog, ...Object.fromEntries(queueTracks.map((item) => [item.id, item])) }
-      catalog[id] = { ...catalog[id], ...track }
+      const mergedCatalog = mergeCatalogTracks(state.catalog, queueTracks)
+      mergedCatalog[id] = { ...mergedCatalog[id], ...track }
       const queueIds = queueTracks.map((item) => item.id)
+      // Katalog her güncellemeyle telefona gider: çalan parça ve sıra dışında yalnız en yeni kayıtlar kalır.
+      const catalog = pruneCatalog(mergedCatalog, { trackId: id, queue: queueIds, liked: state.liked })
       const isAudible = webContents.isCurrentlyAudible()
       const isPlaying = isAudible || (typeof media.paused === 'boolean'
         ? !media.paused
