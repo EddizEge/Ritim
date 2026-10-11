@@ -12,6 +12,12 @@ const {
   toRitimRepeat,
 } = require('./ytmusic-player-controls.cjs')
 
+// Sayfadaki oynatıcı API'si. Klasik düzende `ytmusic-player.playerApi`; yeni düzende
+// (ytmusic-miniplayer; 2026-10-11 girişsiz oturumda ana sayfada ve /watch'ta görüldü)
+// o yoktur, `#movie_player` aynı işlevleri sunar: getVideoData, getCurrentTime, seekTo,
+// get/setVolume, isMuted/unMute, playVideo/pauseVideo, getPlayerState.
+const PLAYER_API_JS = "(document.querySelector('ytmusic-player')?.playerApi || document.getElementById('movie_player'))"
+
 function trackId(title, artist) {
   return `ytmusic:${crypto.createHash('sha1').update(`${title}|${artist}`).digest('hex').slice(0, 14)}`
 }
@@ -83,7 +89,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   async function readControlVideoId() {
     if (destroyed || webContents.isDestroyed()) return ''
     return String(await webContents.executeJavaScript(`(() => {
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi || document.getElementById('movie_player');
+      const playerApi = ${PLAYER_API_JS};
       let data = {};
       try { data = playerApi?.getVideoData?.() || {}; } catch {}
       let videoId = String(data.video_id || data.videoId || '');
@@ -142,7 +148,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     let stableTitle = ''
     while (!destroyed && !webContents.isDestroyed() && Date.now() - startedAt < timeout) {
       const snapshot = await webContents.executeJavaScript(`(() => {
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const data = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
         const currentVideoId = String(data.video_id || data.videoId || '');
         const currentTitle = String(data.title || navigator.mediaSession?.metadata?.title || '').trim();
@@ -176,7 +182,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
 
   async function clickPlayerButton(kind) {
     const before = await webContents.executeJavaScript(`(() => {
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       const data = playerApi?.getVideoData?.() || {};
       return { videoId: String(data.video_id || data.videoId || ''), position: Number(playerApi?.getCurrentTime?.()) || 0 };
     })()`, true)
@@ -192,7 +198,8 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const fallback = [...document.querySelectorAll('ytmusic-player-bar button, ytmusic-player-bar tp-yt-paper-icon-button')]
         .find((item) => labels.test(item.getAttribute('aria-label') || item.getAttribute('title') || ''));
       const button = candidates.find((item) => !item.disabled && item.getAttribute('aria-disabled') !== 'true') || fallback;
-      if (!button) return false;
+      // Klasik düğme yoksa yeni düzen (ytmusic-wiz-player-controls) düğmesi.
+      if (!button) return (${clickPlayerControlInPage})(document, kind);
       button.click();
       return true;
     })()`, true)
@@ -201,7 +208,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       let changed = null
       while (!destroyed && !webContents.isDestroyed() && Date.now() - startedAt < 5500) {
         const current = await webContents.executeJavaScript(`(() => {
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const data = playerApi?.getVideoData?.() || {};
         return { videoId: String(data.video_id || data.videoId || ''), title: String(data.title || ''), position: Number(playerApi?.getCurrentTime?.()) || 0 };
       })()`, true)
@@ -233,7 +240,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     if (destroyed || webContents.isDestroyed() || sequence !== volumeCommandSequence) return null
     return webContents.executeJavaScript(`(() => {
       const level = ${JSON.stringify(level)};
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       let appliedByApi = false;
       try {
         if (level > 0 && typeof playerApi?.unMute === 'function') playerApi.unMute();
@@ -826,7 +833,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       let index = queueState.items.findIndex((entry) => target.videoId && unwrap(entry)?.videoId === target.videoId);
       if (index < 0) index = queueState.items.findIndex((entry) => target.title && runs(unwrap(entry)?.title) === target.title);
       if (index < 0) return { success: false, message: target.title + ' sıra içinde bulunamadı' };
-      const currentVideoId = String(document.querySelector('ytmusic-player')?.playerApi?.getVideoData?.()?.video_id || '');
+      const currentVideoId = String(${PLAYER_API_JS}?.getVideoData?.()?.video_id || '');
       const currentIndex = queueState.items.findIndex((entry) => unwrap(entry)?.videoId === currentVideoId);
       if (action === 'remove') {
         if (index === currentIndex) return { success: false, message: 'Çalan parça sıradan kaldırılamaz' };
@@ -901,7 +908,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const unwrap = (entry) => entry?.playlistPanelVideoRenderer
         || entry?.playlistPanelVideoWrapperRenderer?.primaryRenderer?.playlistPanelVideoRenderer
         || null;
-      const currentVideoId = String(document.querySelector('ytmusic-player')?.playerApi?.getVideoData?.()?.video_id || '');
+      const currentVideoId = String(${PLAYER_API_JS}?.getVideoData?.()?.video_id || '');
       const currentIndex = queueState.items.findIndex((entry) => unwrap(entry)?.videoId === currentVideoId);
       if (currentIndex < 0) return { success: false, message: 'Çalan parça YouTube Music sırasında bulunamadı' };
       const template = structuredClone(unwrap(queueState.items[currentIndex]));
@@ -1056,7 +1063,19 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           .then(() => 'playing')
           .catch(() => 'blocked');
       })()`, true)
-      if (result === 'missing' || result === 'blocked') sendKey('MediaPlayPause')
+      if (result === 'missing' || result === 'blocked') {
+        // Medya öğesi yoksa ya da oynatma engellendiyse: oynatıcı API'si, yeni düzen düğmesi, en son medya tuşu.
+        const fallback = await webContents.executeJavaScript(`(() => {
+          const playerApi = ${PLAYER_API_JS};
+          try {
+            const playing = Number(playerApi?.getPlayerState?.()) === 1;
+            if (playing && typeof playerApi?.pauseVideo === 'function') { playerApi.pauseVideo(); return 'api'; }
+            if (!playing && typeof playerApi?.playVideo === 'function') { playerApi.playVideo(); return 'api'; }
+          } catch {}
+          return (${clickPlayerControlInPage})(document, 'playPause') ? 'button' : '';
+        })()`, true)
+        if (!fallback) sendKey('MediaPlayPause')
+      }
       setTimeout(() => void capture(), 120)
     }
     if (command.type === 'next') await clickPlayerButton('next')
@@ -1079,7 +1098,12 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       await webContents.executeJavaScript(`(() => {
         const media = [...document.querySelectorAll('video, audio')]
           .find((item) => Number.isFinite(item.duration) && item.duration > 0);
-        if (!media) return false;
+        if (!media) {
+          const playerApi = ${PLAYER_API_JS};
+          if (typeof playerApi?.seekTo !== 'function') return false;
+          playerApi.seekTo(${JSON.stringify(seconds)}, true);
+          return true;
+        }
         media.currentTime = Math.min(${JSON.stringify(seconds)}, media.duration || ${JSON.stringify(seconds)});
         return true;
       })()`, true)
@@ -1249,7 +1273,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
 
     const playerSnapshot = await webContents.executeJavaScript(`(() => {
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       const data = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
       const media = [...document.querySelectorAll('video, audio')]
         .find((item) => Number.isFinite(item.duration) && item.duration > 0);
@@ -1390,7 +1414,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           : '';
         const elements = [...document.querySelectorAll('video, audio')];
         const player = elements.find((item) => Number.isFinite(item.duration) && item.duration > 0) || elements[0];
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const playerData = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
         let playerApiVolume = Number.NaN;
         try {
