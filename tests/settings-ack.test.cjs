@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
-const { runAcknowledgedChange, socialActionErrorMessage } = require('../electron/settings-ack.js')
+const { rollbackValue, runAcknowledgedChange, socialActionErrorMessage } = require('../electron/settings-ack.js')
 const { SETTINGS_SOCIAL_ACTIONS, createSettingsSocialActionHandler } = require('../electron/settings-ipc.cjs')
 const { createSocialActionBridge, normalizeSocialAction } = require('../electron/social-bridge.cjs')
 
@@ -66,6 +66,86 @@ test('IPC hatası ya da boş yanıt da değişikliği geri alır', async () => {
   assert.deepEqual(thrown.applied, ['hidden', 'everyone'])
   const empty = changeHarness(undefined)
   assert.deepEqual(await empty.run(), { ok: false, code: 'rejected' })
+})
+
+// The Settings page: socialState changes optimistically, and a newer
+// settings:social-state may land while the ack is pending.
+function pendingChange({ state, previous, next, latest, apply, reply }) {
+  let answer
+  const sent = new Promise((resolve) => { answer = resolve })
+  const run = runAcknowledgedChange({
+    previous,
+    next,
+    latest,
+    apply,
+    send: () => sent,
+    onError: () => {},
+  })
+  return { run, refuse: () => answer(reply || { ok: false, code: 'timeout' }), state }
+}
+
+test('ret: yalnız değişen gizlilik alanı geri döner, bekleme sırasında gelen yeni durum korunur', async () => {
+  const page = { privacy: { profileVisibility: 'everyone', listeningVisibility: 'everyone' } }
+  const change = pendingChange({
+    previous: { ...page.privacy },
+    next: { profileVisibility: 'hidden', listeningVisibility: 'everyone' },
+    latest: () => ({ ...page.privacy }),
+    apply: (privacy) => { page.privacy = { ...page.privacy, ...privacy } },
+  })
+  assert.equal(page.privacy.profileVisibility, 'hidden')
+  // settings:social-state from the phone: listening visibility changed meanwhile.
+  page.privacy = { profileVisibility: 'hidden', listeningVisibility: 'friends' }
+  change.refuse()
+  assert.deepEqual(await change.run, { ok: false, code: 'timeout' })
+  assert.deepEqual(page.privacy, { profileVisibility: 'everyone', listeningVisibility: 'friends' })
+})
+
+test('ret: değişen alana bu arada başka bir değer geldiyse o yeni değer kalır', () => {
+  const previous = { messagesEnabled: true, reactionsEnabled: true }
+  const next = { messagesEnabled: false, reactionsEnabled: true }
+  assert.deepEqual(
+    rollbackValue(previous, next, { messagesEnabled: false, reactionsEnabled: false }),
+    { messagesEnabled: true, reactionsEnabled: false },
+  )
+  // Server pushed its own value for the failed field: it wins over the snapshot.
+  assert.deepEqual(
+    rollbackValue({ profileVisibility: 'everyone' }, { profileVisibility: 'hidden' }, { profileVisibility: 'friends' }),
+    { profileVisibility: 'friends' },
+  )
+  assert.equal(rollbackValue('everyone', 'hidden', 'friends'), 'everyone')
+})
+
+test('ret: engel listesinden kaldırılan kişi geri gelir, bu arada eklenen kişi silinmez', async () => {
+  const a = { id: 'a', displayName: 'A' }
+  const b = { id: 'b', displayName: 'B' }
+  const c = { id: 'c', displayName: 'C' }
+  const d = { id: 'd', displayName: 'D' }
+  const page = { blockedUsers: [a, b, c] }
+  const previous = page.blockedUsers
+  const change = pendingChange({
+    previous,
+    next: previous.filter((user) => user.id !== 'b'),
+    latest: () => page.blockedUsers,
+    apply: (users) => { page.blockedUsers = users },
+  })
+  assert.deepEqual(page.blockedUsers.map((user) => user.id), ['a', 'c'])
+  page.blockedUsers = [a, c, d]
+  change.refuse()
+  await change.run
+  assert.deepEqual(page.blockedUsers.map((user) => user.id), ['a', 'b', 'c', 'd'])
+  // Already back in the newer list: not added twice.
+  assert.deepEqual(rollbackValue([a, b], [a], [b, a]).map((user) => user.id), ['b', 'a'])
+})
+
+test('latest verilmezse eski davranış: değişiklikten önceki görüntü geri yüklenir', async () => {
+  const applied = []
+  await runAcknowledgedChange({
+    previous: { x: 1 },
+    next: { x: 2 },
+    apply: (value) => applied.push(value),
+    send: async () => ({ ok: false, code: 'rejected' }),
+  })
+  assert.deepEqual(applied, [{ x: 2 }, { x: 1 }])
 })
 
 function settingsHandler({ connected = true, reply, trusted = true, timeoutMs = 40 } = {}) {
@@ -135,4 +215,6 @@ test('Ayarlar penceresi sosyal değişiklikleri ack yolundan gönderir', () => {
   assert.deepEqual(sends.sort(), ['actionType', 'notification-preferences', 'privacy'])
   assert.doesNotMatch(settings, /settingsApi\?\.sendSocialAction/)
   assert.equal((settings.match(/void runSocialChange\(\{/g) || []).length, 3)
+  // Every change rolls back on top of the latest social state.
+  assert.equal((settings.match(/\n\s+latest: \(\) => /g) || []).length, 3)
 })
