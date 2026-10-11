@@ -1,6 +1,24 @@
 const crypto = require('node:crypto')
 const { io } = require('socket.io-client')
 const { planRoomPlaybackCorrection } = require('./room-playback-sync.cjs')
+const {
+  applyLikeCommand,
+  applyRepeatCommand,
+  clickPlayerControlInPage,
+  nextRepeatMode,
+  normalizeLikeStatus,
+  normalizeRepeatMode,
+  readPlayerControlsInPage,
+  toRitimRepeat,
+} = require('./ytmusic-player-controls.cjs')
+// ESM; Electron 43 / Node 24 require(esm) ile yüklenir, telefon da aynı dosyayı kullanır.
+const { mergeCatalogTracks, pruneCatalog } = require('../shared/player-catalog.mjs')
+
+// Sayfadaki oynatıcı API'si. Klasik düzende `ytmusic-player.playerApi`; yeni düzende
+// (ytmusic-miniplayer; 2026-10-11 girişsiz oturumda ana sayfada ve /watch'ta görüldü)
+// o yoktur, `#movie_player` aynı işlevleri sunar: getVideoData, getCurrentTime, seekTo,
+// get/setVolume, isMuted/unMute, playVideo/pauseVideo, getPlayerState.
+const PLAYER_API_JS = "(document.querySelector('ytmusic-player')?.playerApi || document.getElementById('movie_player'))"
 
 function trackId(title, artist) {
   return `ytmusic:${crypto.createHash('sha1').update(`${title}|${artist}`).digest('hex').slice(0, 14)}`
@@ -12,14 +30,29 @@ function parseDuration(value) {
   return parts.reduce((total, part) => total * 60 + part, 0)
 }
 
+function offlineSyncSocket() {
+  return { on() {}, emit() {}, close() {} }
+}
+
+// Short and never the desktop key, whatever the server sent.
+function safeSyncMessage(message, syncUrl) {
+  let text = typeof message === 'string' ? message.slice(0, 160) : ''
+  let desktopKey = ''
+  try { desktopKey = new URL(syncUrl).searchParams.get('desktopKey') || '' } catch {}
+  if (desktopKey && text.includes(desktopKey)) text = ''
+  return text.replace(/desktopKey=[^\s&]*/gi, 'desktopKey=…')
+}
+
 function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ-4821', syncUrl = 'http://127.0.0.1:8787' }) {
   const idleTrack = {
     id: 'ytmusic:idle', title: 'YouTube Music', artist: 'Bir parça çal', collection: 'music.youtube.com',
     duration: 0, cover: 0, source: 'ytmusic',
   }
   let state = {
+    // Karıştır YouTube Music'te kalıcı mod değil, tek seferlik eylemdir: shuffle hep false.
+    // liked yalnız çalan parçayı içerir; likeStatus/repeat/adPlaying sayfadan okunur.
     trackId: idleTrack.id, isPlaying: false, position: 0, volume: 68, shuffle: false, repeat: 'off',
-    liked: [], queue: [idleTrack.id], catalog: { [idleTrack.id]: idleTrack },
+    liked: [], adPlaying: false, queue: [idleTrack.id], catalog: { [idleTrack.id]: idleTrack },
     browse: { route: 'home', title: 'Ana Sayfa', url: 'https://music.youtube.com/', filters: [], sections: [], updatedAt: 0 },
     lyrics: { trackId: idleTrack.id, status: 'idle', lines: [] },
     related: { trackId: idleTrack.id, status: 'idle', items: [] },
@@ -47,10 +80,18 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   const appliedCommandIds = new Set()
   const inFlightCommandIds = new Set()
   const coalescedCommandTasks = new Map()
-  const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
+  // No local Sync server (its port is held by another process, or it did not
+  // start): no socket at all, so the desktop key in syncUrl never reaches a
+  // foreign process. YouTube Music, Discord and rooms keep working.
+  const socket = syncUrl ? io(syncUrl, { timeout: 3000, reconnectionDelay: 900 }) : offlineSyncSocket()
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
   socket.on('connect', join)
+  // The server refused the desktop role and dropped the socket; it does not
+  // reconnect on its own. Say so once, without the URL (it holds the key).
+  socket.on('pairing:error', (message) => {
+    console.warn('[Ritim] Yerel Sync sunucusu PC köprüsünü kabul etmedi; telefon kumandası bu oturumda çalışmayacak:', safeSyncMessage(message, syncUrl))
+  })
   socket.on('player:state', (incoming) => {
     if (!incoming || typeof incoming !== 'object') return
     state = { ...state, ...incoming }
@@ -68,13 +109,69 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     return new Promise((resolve) => setTimeout(resolve, milliseconds))
   }
 
+  async function readControlVideoId() {
+    if (destroyed || webContents.isDestroyed()) return ''
+    return String(await webContents.executeJavaScript(`(() => {
+      const playerApi = ${PLAYER_API_JS};
+      let data = {};
+      try { data = playerApi?.getVideoData?.() || {}; } catch {}
+      let videoId = String(data.video_id || data.videoId || '');
+      try { videoId = videoId || new URL(location.href).searchParams.get('v') || ''; } catch {}
+      return videoId;
+    })()`, true) || '')
+  }
+
+  async function readControls(videoId) {
+    if (destroyed || webContents.isDestroyed()) throw new Error('YouTube Music görünümü kapalı')
+    return webContents.executeJavaScript(`(${readPlayerControlsInPage})(document, ${JSON.stringify(videoId)})`, true)
+  }
+
+  async function clickControl(kind) {
+    if (destroyed || webContents.isDestroyed()) return false
+    const clicked = Boolean(await webContents.executeJavaScript(`(${clickPlayerControlInPage})(document, ${JSON.stringify(kind)})`, true))
+    // Düğme yoksa YouTube Music kısayolu (canlıda doğrulandı: R tekrar modunu döndürür).
+    // Basış başarı sayılmaz; sonucu çağıran depodan / öznitelikten doğrular.
+    if (!clicked && kind === 'repeat') {
+      sendKey('R')
+      return true
+    }
+    return clicked
+  }
+
+  function publishControls(videoId, controls) {
+    const current = state.catalog?.[state.trackId]
+    const sameTrack = Boolean(videoId) && (current?.youtubeVideoId === videoId || state.trackId === `ytmusic:video:${videoId}`)
+    const likeStatus = normalizeLikeStatus(controls?.likeStatus)
+    const repeatMode = normalizeRepeatMode(controls?.repeatMode)
+    state = {
+      ...state,
+      ...(sameTrack && likeStatus ? { likeStatus, liked: likeStatus === 'LIKE' ? [state.trackId] : [] } : {}),
+      ...(repeatMode ? { repeat: toRitimRepeat(repeatMode) } : {}),
+      adPlaying: Boolean(controls?.adPlaying),
+      shuffle: false,
+    }
+    publishState()
+  }
+
+  async function setLike(target) {
+    const videoId = await readControlVideoId()
+    const controls = await applyLikeCommand({ target, videoId, read: () => readControls(videoId), click: clickControl })
+    publishControls(videoId, controls)
+  }
+
+  async function setRepeat(target) {
+    const videoId = await readControlVideoId()
+    const controls = await applyRepeatCommand({ target, read: () => readControls(videoId), click: clickControl })
+    publishControls(videoId, controls)
+  }
+
   async function waitForPlayerTrack(videoId, title = '', timeout = 7500) {
     const startedAt = Date.now()
     let stableSamples = 0
     let stableTitle = ''
     while (!destroyed && !webContents.isDestroyed() && Date.now() - startedAt < timeout) {
       const snapshot = await webContents.executeJavaScript(`(() => {
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const data = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
         const currentVideoId = String(data.video_id || data.videoId || '');
         const currentTitle = String(data.title || navigator.mediaSession?.metadata?.title || '').trim();
@@ -108,7 +205,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
 
   async function clickPlayerButton(kind) {
     const before = await webContents.executeJavaScript(`(() => {
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       const data = playerApi?.getVideoData?.() || {};
       return { videoId: String(data.video_id || data.videoId || ''), position: Number(playerApi?.getCurrentTime?.()) || 0 };
     })()`, true)
@@ -124,7 +221,8 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const fallback = [...document.querySelectorAll('ytmusic-player-bar button, ytmusic-player-bar tp-yt-paper-icon-button')]
         .find((item) => labels.test(item.getAttribute('aria-label') || item.getAttribute('title') || ''));
       const button = candidates.find((item) => !item.disabled && item.getAttribute('aria-disabled') !== 'true') || fallback;
-      if (!button) return false;
+      // Klasik düğme yoksa yeni düzen (ytmusic-wiz-player-controls) düğmesi.
+      if (!button) return (${clickPlayerControlInPage})(document, kind);
       button.click();
       return true;
     })()`, true)
@@ -133,7 +231,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       let changed = null
       while (!destroyed && !webContents.isDestroyed() && Date.now() - startedAt < 5500) {
         const current = await webContents.executeJavaScript(`(() => {
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const data = playerApi?.getVideoData?.() || {};
         return { videoId: String(data.video_id || data.videoId || ''), title: String(data.title || ''), position: Number(playerApi?.getCurrentTime?.()) || 0 };
       })()`, true)
@@ -165,7 +263,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     if (destroyed || webContents.isDestroyed() || sequence !== volumeCommandSequence) return null
     return webContents.executeJavaScript(`(() => {
       const level = ${JSON.stringify(level)};
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       let appliedByApi = false;
       try {
         if (level > 0 && typeof playerApi?.unMute === 'function') playerApi.unMute();
@@ -758,7 +856,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       let index = queueState.items.findIndex((entry) => target.videoId && unwrap(entry)?.videoId === target.videoId);
       if (index < 0) index = queueState.items.findIndex((entry) => target.title && runs(unwrap(entry)?.title) === target.title);
       if (index < 0) return { success: false, message: target.title + ' sıra içinde bulunamadı' };
-      const currentVideoId = String(document.querySelector('ytmusic-player')?.playerApi?.getVideoData?.()?.video_id || '');
+      const currentVideoId = String(${PLAYER_API_JS}?.getVideoData?.()?.video_id || '');
       const currentIndex = queueState.items.findIndex((entry) => unwrap(entry)?.videoId === currentVideoId);
       if (action === 'remove') {
         if (index === currentIndex) return { success: false, message: 'Çalan parça sıradan kaldırılamaz' };
@@ -833,7 +931,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const unwrap = (entry) => entry?.playlistPanelVideoRenderer
         || entry?.playlistPanelVideoWrapperRenderer?.primaryRenderer?.playlistPanelVideoRenderer
         || null;
-      const currentVideoId = String(document.querySelector('ytmusic-player')?.playerApi?.getVideoData?.()?.video_id || '');
+      const currentVideoId = String(${PLAYER_API_JS}?.getVideoData?.()?.video_id || '');
       const currentIndex = queueState.items.findIndex((entry) => unwrap(entry)?.videoId === currentVideoId);
       if (currentIndex < 0) return { success: false, message: 'Çalan parça YouTube Music sırasında bulunamadı' };
       const template = structuredClone(unwrap(queueState.items[currentIndex]));
@@ -988,19 +1086,47 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           .then(() => 'playing')
           .catch(() => 'blocked');
       })()`, true)
-      if (result === 'missing' || result === 'blocked') sendKey('MediaPlayPause')
+      if (result === 'missing' || result === 'blocked') {
+        // Medya öğesi yoksa ya da oynatma engellendiyse: oynatıcı API'si, yeni düzen düğmesi, en son medya tuşu.
+        const fallback = await webContents.executeJavaScript(`(() => {
+          const playerApi = ${PLAYER_API_JS};
+          try {
+            const playing = Number(playerApi?.getPlayerState?.()) === 1;
+            if (playing && typeof playerApi?.pauseVideo === 'function') { playerApi.pauseVideo(); return 'api'; }
+            if (!playing && typeof playerApi?.playVideo === 'function') { playerApi.playVideo(); return 'api'; }
+          } catch {}
+          return (${clickPlayerControlInPage})(document, 'playPause') ? 'button' : '';
+        })()`, true)
+        if (!fallback) sendKey('MediaPlayPause')
+      }
       setTimeout(() => void capture(), 120)
     }
     if (command.type === 'next') await clickPlayerButton('next')
     if (command.type === 'previous') await clickPlayerButton('previous')
-    if (command.type === 'toggleShuffle') sendKey('S')
-    if (command.type === 'cycleRepeat') sendKey('R')
+    if (command.type === 'toggleShuffle') {
+      // Tek seferlik karıştırma: gerçek düğme, bulunamazsa YouTube Music kısayolu.
+      if (!(await clickControl('shuffle'))) sendKey('S')
+      setTimeout(() => void capture(), 150)
+    }
+    if (command.type === 'like') await setLike(command.value)
+    if (command.type === 'repeat') await setRepeat(command.value)
+    if (command.type === 'cycleRepeat') {
+      // Eski telefon sürümleri için: bir sonraki moda geç.
+      const videoId = await readControlVideoId()
+      const controls = await readControls(videoId)
+      await setRepeat(nextRepeatMode(controls?.repeatMode || 'NONE'))
+    }
     if (command.type === 'seek' && Number.isFinite(Number(command.value))) {
       const seconds = Math.max(0, Number(command.value))
       await webContents.executeJavaScript(`(() => {
         const media = [...document.querySelectorAll('video, audio')]
           .find((item) => Number.isFinite(item.duration) && item.duration > 0);
-        if (!media) return false;
+        if (!media) {
+          const playerApi = ${PLAYER_API_JS};
+          if (typeof playerApi?.seekTo !== 'function') return false;
+          playerApi.seekTo(${JSON.stringify(seconds)}, true);
+          return true;
+        }
         media.currentTime = Math.min(${JSON.stringify(seconds)}, media.duration || ${JSON.stringify(seconds)});
         return true;
       })()`, true)
@@ -1170,7 +1296,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
 
     const playerSnapshot = await webContents.executeJavaScript(`(() => {
-      const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+      const playerApi = ${PLAYER_API_JS};
       const data = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
       const media = [...document.querySelectorAll('video, audio')]
         .find((item) => Number.isFinite(item.duration) && item.duration > 0);
@@ -1311,7 +1437,7 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           : '';
         const elements = [...document.querySelectorAll('video, audio')];
         const player = elements.find((item) => Number.isFinite(item.duration) && item.duration > 0) || elements[0];
-        const playerApi = document.querySelector('ytmusic-player')?.playerApi;
+        const playerApi = ${PLAYER_API_JS};
         const playerData = typeof playerApi?.getVideoData === 'function' ? playerApi.getVideoData() || {} : {};
         let playerApiVolume = Number.NaN;
         try {
@@ -1627,6 +1753,9 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           volume: Number.isFinite(playerApiVolume) ? playerApiVolume : player ? (player.muted ? 0 : player.volume * 100) : 68,
           paused: player ? player.paused : null,
           currentVideoId,
+          controls: (() => {
+            try { return (${readPlayerControlsInPage})(document, currentVideoId); } catch { return null; }
+          })(),
           queueAligned: selectedByVideoIndex >= 0 || selectedReduxIndex >= 0,
           queue,
           lyricsLines,
@@ -1704,9 +1833,11 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       }
       else if (title) queueTracks.unshift(track)
       if (queueTracks.length === 0) queueTracks.push(track)
-      const catalog = { ...state.catalog, ...Object.fromEntries(queueTracks.map((item) => [item.id, item])) }
-      catalog[id] = { ...catalog[id], ...track }
+      const mergedCatalog = mergeCatalogTracks(state.catalog, queueTracks)
+      mergedCatalog[id] = { ...mergedCatalog[id], ...track }
       const queueIds = queueTracks.map((item) => item.id)
+      // Katalog her güncellemeyle telefona gider: çalan parça ve sıra dışında yalnız en yeni kayıtlar kalır.
+      const catalog = pruneCatalog(mergedCatalog, { trackId: id, queue: queueIds, liked: state.liked })
       const isAudible = webContents.isCurrentlyAudible()
       const isPlaying = isAudible || (typeof media.paused === 'boolean'
         ? !media.paused
@@ -1752,15 +1883,23 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const related = relatedItems.length
         ? { trackId: id, status: 'ready', items: relatedItems }
         : previousRelated
+      const controls = media.controls && typeof media.controls === 'object' ? media.controls : null
+      const capturedLikeStatus = normalizeLikeStatus(controls?.likeStatus)
+      const likeStatus = capturedLikeStatus || (id === state.trackId ? state.likeStatus || '' : '')
+      const repeatMode = normalizeRepeatMode(controls?.repeatMode)
+      const repeat = repeatMode ? toRitimRepeat(repeatMode) : state.repeat
+      const adPlaying = Boolean(controls?.adPlaying)
+      const liked = likeStatus === 'LIKE' ? [id] : []
       const lyricsSignature = JSON.stringify([lyrics.status, lyrics.lines])
       const relatedSignature = JSON.stringify([related.status, related.items])
       const accountSignature = JSON.stringify(accountProfile)
-      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature, accountSignature])
+      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature, accountSignature, likeStatus, repeat, adPlaying])
       if (signature === lastSignature) return
       lastSignature = signature
       state = {
         ...state, trackId: id, isPlaying, position, volume, queue: queueIds,
-        catalog, browse, lyrics, related, accountProfile, updatedAt: Date.now(),
+        catalog, browse, lyrics, related, accountProfile,
+        liked, likeStatus: likeStatus || undefined, repeat, shuffle: false, adPlaying, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
       onState?.(state)

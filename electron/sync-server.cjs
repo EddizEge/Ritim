@@ -15,6 +15,33 @@ function isLoopback(address) {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
+// The PC app's own bridge proves the desktop role with a key that is random
+// per launch and lives only in this process's memory: never logged, never on
+// disk, never in a QR code. Loopback alone is not proof; any local process or
+// web page can reach 127.0.0.1.
+function createDesktopKey() {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+// The bridge's socket.io-client sends URL query values in its handshake.
+function desktopSyncUrl(baseUrl, desktopKey) {
+  const url = new URL(baseUrl)
+  url.searchParams.set('desktopKey', desktopKey)
+  return url.toString()
+}
+
+// The PC bridge's address, only while this process's own server is
+// listening. Otherwise '' (the bridge opens no socket): whatever else holds
+// the port must not receive the desktop key.
+function bridgeSyncUrl(server, baseUrl, desktopKey) {
+  if (!server?.listening || !desktopKey) return ''
+  return desktopSyncUrl(baseUrl, desktopKey)
+}
+
+function handshakeDesktopKey(socket) {
+  return socket.handshake.auth?.desktopKey || socket.handshake.query?.desktopKey || ''
+}
+
 function safeRoom(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24)
 }
@@ -31,10 +58,13 @@ function objectPayload(value) {
 
 function startSyncServer(distPath, port = 8787, {
   pairingToken = '',
+  desktopKey = '',
   getSocialCompanionTicket,
   commandOwnerTimeoutMs = 30000,
 } = {}) {
   let currentPairingToken = String(pairingToken || '')
+  // Without a key from the caller nobody can join as desktop.
+  const activeDesktopKey = String(desktopKey || '') || createDesktopKey()
   const app = express()
   app.use(cors({
     origin: true,
@@ -108,10 +138,13 @@ function startSyncServer(distPath, port = 8787, {
       const { room, role, state, token } = objectPayload(payload)
       const normalizedRoom = safeRoom(room)
       if (!normalizedRoom) return
-      const remoteAddress = socket.handshake.address
       const normalizedRole = role === 'companion' ? 'companion' : 'desktop'
-      const tokenRequired = currentPairingToken && (normalizedRole === 'companion' || !isLoopback(remoteAddress))
-      if (tokenRequired && !safeEqual(token, currentPairingToken)) {
+      if (normalizedRole === 'desktop' && !safeEqual(handshakeDesktopKey(socket), activeDesktopKey)) {
+        socket.emit('pairing:error', 'Bu bağlantı Ritim PC uygulaması olarak doğrulanamadı.')
+        socket.disconnect(true)
+        return
+      }
+      if (normalizedRole === 'companion' && currentPairingToken && !safeEqual(token, currentPairingToken)) {
         socket.emit('pairing:error', 'Bu QR kodun süresi dolmuş. PC’den yeni QR kodu tara.')
         socket.disconnect(true)
         return
@@ -242,8 +275,10 @@ function startSyncServer(distPath, port = 8787, {
     }
     currentPairingToken = normalizedToken
     server.pairingToken = currentPairingToken
+    // Every phone, and anything else reaching the server over the LAN, was
+    // admitted under the old key. Only the PC app's own loopback bridge stays.
     for (const socket of io.sockets.sockets.values()) {
-      if (socket.data.role !== 'companion') continue
+      if (socket.data.role !== 'companion' && isLoopback(socket.handshake.address)) continue
       socket.emit('pairing:error', 'PC eşleme anahtarını yeniledi. Yeni QR kodu tara.')
       socket.disconnect(true)
     }
@@ -253,4 +288,4 @@ function startSyncServer(distPath, port = 8787, {
   return server
 }
 
-module.exports = { startSyncServer }
+module.exports = { bridgeSyncUrl, createDesktopKey, desktopSyncUrl, startSyncServer }

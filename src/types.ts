@@ -1,4 +1,5 @@
 export type RepeatMode = 'off' | 'all' | 'one'
+export type LikeStatus = 'LIKE' | 'DISLIKE' | 'INDIFFERENT'
 
 export type Track = {
   id: string
@@ -142,6 +143,8 @@ export type PlayerState = {
   shuffle: boolean
   repeat: RepeatMode
   liked: string[]
+  likeStatus?: LikeStatus
+  adPlaying?: boolean
   queue: string[]
   catalog: Record<string, Track>
   browse?: MusicBrowseState

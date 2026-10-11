@@ -41,6 +41,8 @@ class MemorySecureStorage implements MobilePairingSecureStorage {
   }
 
   async remove({ key }: { key: string }) { this.values.delete(key) }
+
+  async reset() { this.values.clear() }
 }
 
 test('pairing link produces a normalized version 2 record with the PC name', () => {

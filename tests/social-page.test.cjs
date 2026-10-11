@@ -3,6 +3,7 @@ const path = require('node:path')
 const test = require('node:test')
 const {
   SOCIAL_PAGE_CSP,
+  SOCIAL_PARTITION,
   createSocialProtocolHandler,
   isExternalWebUrl,
   isSocialPageUrl,
@@ -84,4 +85,9 @@ test('protokol yanıtı CSP ekler, eksik dosyada 404 döner ve yazma isteklerini
   assert.equal((await handler(new Request('ritim-app://social/assets/missing.js'))).status, 404)
   assert.equal((await handler(new Request('ritim-app://social/..%5csecret.json'))).status, 404)
   assert.equal((await handler({ method: 'POST', url: 'ritim-app://social/desktop-social.html' })).status, 405)
+})
+
+test('sosyal görünüm bölümü kalıcıdır: gönderilemeyen mesajlar yeniden başlatmada kalır', () => {
+  assert.equal(SOCIAL_PARTITION, 'persist:ritim-social')
+  assert.notEqual(SOCIAL_PARTITION, 'persist:ritim-youtube-music')
 })

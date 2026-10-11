@@ -191,6 +191,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .player-controls .play-button { width: 38px; height: 38px; border-radius: 50%; color: #090909; background: white; }
 .player-controls .play-button svg { width: 19px; height: 19px; }
 .repeat-one { position: absolute; inset: 9px auto auto 10px; color: inherit; font-size: 7px; font-weight: 800; }
+.player-controls button:disabled, .ytm-like:disabled { opacity: .38; cursor: default; }
 .progress-wrap { display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px; align-items: center; gap: 8px; color: #b8b9ba; font-size: 9px; }
 .progress-wrap span:last-child { text-align: right; }
 .range { --range-value: 0%; width: 100%; height: 14px; margin: 0; appearance: none; background: transparent; cursor: pointer; }
@@ -438,6 +439,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-main-nav { min-height: 74px; background: rgba(8, 8, 8, .96); }
 .mobile-main-nav button.is-active { color: #fff !important; }
 .mobile-main-nav button.is-active svg { color: #fff; }
+.mobile-main-nav button.is-active > span:last-child { font-weight: 800; }
 .mobile-loading { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 10px 18px; }
 .mobile-loading i { display: block; aspect-ratio: 1; border-radius: 4px; background: linear-gradient(100deg, #181818 20%, #262626 45%, #181818 70%); background-size: 240% 100%; animation: mobile-shimmer 1.25s linear infinite; }
 .mobile-loading p { grid-column: 1 / -1; margin: 8px 0; color: #929292; font-size: 12px; }
@@ -554,6 +556,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .native-pairing-message { margin-top: 14px; padding: 11px 12px; border-radius: 10px; color: #ddd; background: #282828; font-size: 11px; line-height: 1.45; }
 .native-update-button { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; margin-top: 18px; padding: 10px; color: #a9a9a9; background: transparent; font-size: 11px; }
 .native-update-button svg { width: 16px; }
+.native-pairing-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.native-pairing-cancel,
+.native-pairing-confirm { min-height: 48px; border-radius: 24px; font-size: 13px; font-weight: 800; }
+.native-pairing-cancel { border: 1px solid #3a3a3a; color: #e7e7e7; background: transparent; }
+.native-pairing-confirm { color: #fff; background: #d7193d; }
+.native-pairing-cancel:disabled,
+.native-pairing-confirm:disabled { opacity: .6; }
 
 .feedback-overlay { position: fixed; z-index: 50; inset: 0; width: min(100%, 460px); margin: auto; overflow-y: auto; color: #fff; background: #090909; overscroll-behavior: contain; }
 .feedback-overlay > header { position: sticky; z-index: 1; top: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 76px; padding: max(10px, env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid #242424; background: rgba(9, 9, 9, .94); backdrop-filter: blur(18px); }
@@ -777,8 +786,13 @@ html[data-ritim-motion='reduced'] *::after { scroll-behavior: auto !important; t
   html[data-ritim-theme='system'] .mobile-playlist-options button { color: var(--mobile-text); }
   html[data-ritim-theme='system'] .ytm-info-tabs,
   html[data-ritim-theme='system'] .ytm-bottom-nav { border-color: var(--mobile-line); }
+  /* Alt menü: seçili olmayanlar 5.7:1, seçili 5.6:1 (WCAG AA, #fafafb üstünde). */
+  html[data-ritim-theme='system'] .mobile-main-nav button { color: #5f646d; }
   html[data-ritim-theme='system'] .mobile-main-nav button.is-active,
-  html[data-ritim-theme='system'] .mobile-main-nav button.is-active svg { color: #d91842 !important; }
+  html[data-ritim-theme='system'] .mobile-main-nav button.is-active svg { color: #c8143b !important; }
+  html[data-ritim-theme='system'] .mobile-nav-icon > i { border-color: #fafafb; }
+  html[data-ritim-theme='system'] .mobile-empty-state { color: var(--mobile-muted); }
+  html[data-ritim-theme='system'] .mobile-empty-state h2 { color: var(--mobile-text); }
   html[data-ritim-theme='system'] .mobile-mini-player { color: var(--mobile-text); border-color: var(--mobile-line); background: rgba(232, 234, 238, .97); }
   html[data-ritim-theme='system'] .mobile-detail-hero::after { background: linear-gradient(180deg, transparent, var(--mobile-bg) 92%); }
 }

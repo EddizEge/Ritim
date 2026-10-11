@@ -7,6 +7,7 @@ import { useNativeMediaSession } from './hooks/useNativeMediaSession'
 import { useYouTubeLibrary } from './hooks/useYouTubeLibrary'
 import { App as CapacitorApp } from '@capacitor/app'
 import { NativePairing } from './components/NativePairing'
+import { PairingUnreadable } from './components/PairingUnreadable'
 import {
   clearMobilePairing,
   clearMobilePairingCaches,
@@ -15,11 +16,14 @@ import {
   isNativeMobile,
   parsePairingLink,
   readMobilePairing,
+  resetMobileSecureStorage,
   saveMobilePairing,
   webDevelopmentPairing,
   type MobilePairingConfig,
 } from './mobileConfig'
 import { getTrack } from './data'
+import { isSecureStorageUnavailable } from './secureStorageRead'
+import { repairUnreadablePairing } from './pairingRecovery'
 import { configuredSocialUrl, useSocial } from './hooks/useSocial'
 import { useSocialAccount } from './hooks/useSocialAccount'
 import { clearSocialIdentityForPairingReset, signOutExistingSocialSession } from './social/auth'
@@ -84,6 +88,10 @@ export default function App() {
   const responsiveCompanion = useCompanionMode()
   const companion = isNativeMobile || responsiveCompanion
   const [pairing, setPairing] = useState<MobilePairingConfig | null | undefined>(undefined)
+  // The Keystore could not be read (locked, busy): the saved pairing is kept
+  // and the user can try again instead of being asked to pair anew.
+  const [pairingUnreadable, setPairingUnreadable] = useState(false)
+  const [pairingReadAttempt, setPairingReadAttempt] = useState(0)
   const [appearance, setAppearance] = useState(readAppearancePreferences)
   const pairingMutationRef = useRef(createPairingMutationQueue())
 
@@ -165,7 +173,9 @@ export default function App() {
       if (!disposed) setPairing(initial)
     })().catch((error) => {
       console.warn('[Ritim] Kayıtlı telefon eşlemesi okunamadı:', error)
-      if (!disposed) setPairing(null)
+      if (disposed) return
+      if (isNativeMobile && isSecureStorageUnavailable(error)) setPairingUnreadable(true)
+      else setPairing(null)
     })
     if (isNativeMobile) {
       void CapacitorApp.addListener('appUrlOpen', ({ url }) => { void processUrl(url) })
@@ -179,7 +189,7 @@ export default function App() {
       disposed = true
       void removeListener?.()
     }
-  }, [applyIncomingPairing, enqueuePairingMutation])
+  }, [applyIncomingPairing, enqueuePairingMutation, pairingReadAttempt])
 
   const acceptPairing = useCallback((next: MobilePairingConfig) => (
     enqueuePairingMutation(() => applyIncomingPairing(next))
@@ -205,6 +215,24 @@ export default function App() {
     })
   }
 
+  if (pairingUnreadable) {
+    return (
+      <PairingUnreadable
+        onRetry={() => { setPairingUnreadable(false); setPairing(undefined); setPairingReadAttempt((attempt) => attempt + 1) }}
+        // Only after the user confirmed: forget the unreadable pairing, wipe
+        // the secure storage and its key, and open the QR screen, even if
+        // removing the old records failed.
+        onRepair={() => repairUnreadablePairing({
+          clearPairing: () => enqueuePairingMutation(() => clearMobilePairing()),
+          clearSocialIdentity: () => clearSocialIdentityForPairingReset(),
+          resetSecureStorage: () => enqueuePairingMutation(() => resetMobileSecureStorage()),
+        }, () => {
+          setPairingUnreadable(false)
+          setPairing(null)
+        })}
+      />
+    )
+  }
   if (pairing === undefined) {
     return <main className="native-pairing-shell"><section className="native-pairing-card"><p>Ritim bağlantısı hazırlanıyor…</p></section></main>
   }
