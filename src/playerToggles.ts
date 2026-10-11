@@ -4,7 +4,11 @@ import type { PlayerState, RepeatMode } from './types'
 // Telefondaki kalp ve tekrar düğmelerinin iyimser durumu. PC yetkilidir:
 // iyimser değer, PC'den aynı değer gelene dek gösterilir; komut başarısız
 // olursa ya da bu süre içinde doğrulanmazsa PC'nin son değerine dönülür.
-export const TOGGLE_CONFIRM_TIMEOUT_MS = 8000
+// PC'nin YouTube Music'te basıp depodan doğrulaması birkaç saniye sürebilir;
+// süre kısa kalırsa kalp önce eski değere döner, sonra doğrulanınca yeniden
+// yanar (titreme). Sıra korunur: bu süre < telefon komut zaman aşımı (20 sn,
+// usePlayerSync.ts) < sunucunun komut sahibini tuttuğu süre (30 sn).
+export const TOGGLE_CONFIRM_TIMEOUT_MS = 15000
 
 export const NEXT_REPEAT: Record<RepeatMode, RepeatMode> = { off: 'all', all: 'one', one: 'off' }
 
