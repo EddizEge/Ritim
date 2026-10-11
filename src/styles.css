@@ -555,6 +555,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .native-pairing-message { margin-top: 14px; padding: 11px 12px; border-radius: 10px; color: #ddd; background: #282828; font-size: 11px; line-height: 1.45; }
 .native-update-button { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; margin-top: 18px; padding: 10px; color: #a9a9a9; background: transparent; font-size: 11px; }
 .native-update-button svg { width: 16px; }
+.native-pairing-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.native-pairing-cancel,
+.native-pairing-confirm { min-height: 48px; border-radius: 24px; font-size: 13px; font-weight: 800; }
+.native-pairing-cancel { border: 1px solid #3a3a3a; color: #e7e7e7; background: transparent; }
+.native-pairing-confirm { color: #fff; background: #d7193d; }
+.native-pairing-cancel:disabled,
+.native-pairing-confirm:disabled { opacity: .6; }
 
 .feedback-overlay { position: fixed; z-index: 50; inset: 0; width: min(100%, 460px); margin: auto; overflow-y: auto; color: #fff; background: #090909; overscroll-behavior: contain; }
 .feedback-overlay > header { position: sticky; z-index: 1; top: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 76px; padding: max(10px, env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid #242424; background: rgba(9, 9, 9, .94); backdrop-filter: blur(18px); }
