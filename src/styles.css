@@ -438,6 +438,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-main-nav { min-height: 74px; background: rgba(8, 8, 8, .96); }
 .mobile-main-nav button.is-active { color: #fff !important; }
 .mobile-main-nav button.is-active svg { color: #fff; }
+.mobile-main-nav button.is-active > span:last-child { font-weight: 800; }
 .mobile-loading { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 10px 18px; }
 .mobile-loading i { display: block; aspect-ratio: 1; border-radius: 4px; background: linear-gradient(100deg, #181818 20%, #262626 45%, #181818 70%); background-size: 240% 100%; animation: mobile-shimmer 1.25s linear infinite; }
 .mobile-loading p { grid-column: 1 / -1; margin: 8px 0; color: #929292; font-size: 12px; }
@@ -777,8 +778,13 @@ html[data-ritim-motion='reduced'] *::after { scroll-behavior: auto !important; t
   html[data-ritim-theme='system'] .mobile-playlist-options button { color: var(--mobile-text); }
   html[data-ritim-theme='system'] .ytm-info-tabs,
   html[data-ritim-theme='system'] .ytm-bottom-nav { border-color: var(--mobile-line); }
+  /* Alt menü: seçili olmayanlar 5.7:1, seçili 5.6:1 (WCAG AA, #fafafb üstünde). */
+  html[data-ritim-theme='system'] .mobile-main-nav button { color: #5f646d; }
   html[data-ritim-theme='system'] .mobile-main-nav button.is-active,
-  html[data-ritim-theme='system'] .mobile-main-nav button.is-active svg { color: #d91842 !important; }
+  html[data-ritim-theme='system'] .mobile-main-nav button.is-active svg { color: #c8143b !important; }
+  html[data-ritim-theme='system'] .mobile-nav-icon > i { border-color: #fafafb; }
+  html[data-ritim-theme='system'] .mobile-empty-state { color: var(--mobile-muted); }
+  html[data-ritim-theme='system'] .mobile-empty-state h2 { color: var(--mobile-text); }
   html[data-ritim-theme='system'] .mobile-mini-player { color: var(--mobile-text); border-color: var(--mobile-line); background: rgba(232, 234, 238, .97); }
   html[data-ritim-theme='system'] .mobile-detail-hero::after { background: linear-gradient(180deg, transparent, var(--mobile-bg) 92%); }
 }
