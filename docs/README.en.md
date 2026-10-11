@@ -32,7 +32,7 @@ Windows Firewall may ask for local-network access on first connection. Allow it 
 
 ## Updates
 
-The packaged Windows app checks GitHub Releases. **Settings → Updates** separates checking, downloading, and **Restart and install**. Beta builds use the Beta channel. Moving from the historical Alpha builds to Beta 1 requires one manual installation.
+The packaged Windows app checks GitHub Releases. **Settings → Updates** separates checking, downloading, and **Restart and install**. Stable installs receive only stable releases; Beta installs receive Beta, RC and stable releases. Versions are never downgraded. Moving from the historical Alpha builds to Beta 1 required one manual installation.
 
 The Android app selects an eligible GitHub release and tracks its download through the system Download Manager. Installation starts with user approval. Published APKs use Ritim's permanent signing certificate; a locally debug-signed development installation cannot be updated in place with that APK.
 
@@ -72,6 +72,6 @@ Android Ritim ── local network / Socket.IO ── Windows Ritim ── offic
 
 If Google changes YouTube Music’s page structure, the bridge selectors may need an update. Local Android builds default to a debug certificate; GitHub releases use Ritim's permanent certificate. The build variant name alone does not identify the signer. The PC and phone must be reachable on the same local network for local remote control; the social gateway does not relay that LAN connection.
 
-At the user's request, Beta 1's final physical acceptance round is deferred; Beta 2 fixed the issues found in the handoff review, Beta 3 rebuilt the social section and Beta 4 is the last fix prerelease before the stable 0.9.1. See the [Beta 4 release notes](releases/v0.9.1-beta.4.md), [Beta 3 release notes](releases/v0.9.1-beta.3.md), [Beta 2 release notes](releases/v0.9.1-beta.2.md), [Beta 1 release notes](releases/v0.9.1-beta.1.md), [roadmap](v0.9-roadmap.md), and [Claude handoff](CLAUDE_HANDOFF.md) for the scope and remaining work.
+0.9.1 is the first stable release of v0.9. The final physical acceptance round, deferred at the user's request since Beta 1, was not completed before it; the untested items are listed in the release notes. See the [0.9.1 release notes](releases/v0.9.1.md), [Beta 4 release notes](releases/v0.9.1-beta.4.md), [Beta 3 release notes](releases/v0.9.1-beta.3.md), [Beta 2 release notes](releases/v0.9.1-beta.2.md), [Beta 1 release notes](releases/v0.9.1-beta.1.md), [roadmap](v0.9-roadmap.md), and [Claude handoff](CLAUDE_HANDOFF.md) for the scope and remaining work.
 
 Ritim is an independent project and is not affiliated with, endorsed by, or sponsored by Google or YouTube.
