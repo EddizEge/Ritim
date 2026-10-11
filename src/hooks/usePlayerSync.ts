@@ -3,6 +3,7 @@ import { App as CapacitorApp } from '@capacitor/app'
 import { io } from 'socket.io-client'
 import { getTrack, initialPlayerState } from '../data'
 import { isNativeMobile, type MobilePairingConfig } from '../mobileConfig'
+import { boundedCatalog, readCachedPlayerState, writeCachedPlayerState } from '../playerCache'
 import {
   NEXT_REPEAT,
   TOGGLE_CONFIRM_TIMEOUT_MS,
@@ -18,37 +19,12 @@ import {
 import type { PlayerActions, PlayerState, SyncCommand, SyncCommandAck, SyncHealth, Track } from '../types'
 
 const VOLUME_ACK_TIMEOUT_MS = 6000
-const PLAYER_CACHE_KEY = 'ritim-player-cache-v2'
 const COMMAND_TIMEOUT_MS = 20000
 const TRACK_ACK_TIMEOUT_MS = 15000
 const REPLACEABLE_COMMAND_DELAY_MS = 120
 const REPLACEABLE_COMMANDS = new Set(['seek', 'setVolume'])
 const COALESCIBLE_COMMANDS = new Set(['loadMoreBrowse', 'requestLyrics', 'requestRelated'])
 let commandSequence = 0
-
-function readCachedPlayerState() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(PLAYER_CACHE_KEY) || '') as { version?: number; state?: PlayerState }
-    if (cached.version !== 2 || !cached.state?.catalog || !Array.isArray(cached.state.queue)) return null
-    return cached.state
-  } catch {
-    return null
-  }
-}
-
-function writeCachedPlayerState(state: PlayerState) {
-  try {
-    const browse = state.browse ? {
-      ...state.browse,
-      sections: state.browse.sections.slice(0, 18).map((section) => ({ ...section, items: section.items.slice(0, 80) })),
-    } : undefined
-    localStorage.setItem(PLAYER_CACHE_KEY, JSON.stringify({
-      version: 2,
-      savedAt: Date.now(),
-      state: { ...state, browse, position: 0, isPlaying: false },
-    }))
-  } catch {}
-}
 
 function createCommand(type: string, value?: number | string): SyncCommand {
   return { id: `${Date.now().toString(36)}-${(++commandSequence).toString(36)}`, type, value, issuedAt: Date.now() }
@@ -203,7 +179,12 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
             isPlaying: true,
             position: current.position,
             queue: current.queue,
-            catalog: { ...nextState.catalog, ...current.catalog },
+            catalog: boundedCatalog({
+              trackId: current.trackId,
+              queue: current.queue,
+              liked: nextState.liked,
+              catalog: { ...nextState.catalog, ...current.catalog },
+            }),
           }))
           return
         }
@@ -596,11 +577,13 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     replaceQueue: (newTracks: Track[], startTrackId?: string) => commit((previous) => {
       if (newTracks.length === 0) return previous
       const newCatalog = { ...previous.catalog, ...Object.fromEntries(newTracks.map((track) => [track.id, track])) }
+      const queue = newTracks.map((track) => track.id)
+      const trackId = startTrackId && newCatalog[startTrackId] ? startTrackId : newTracks[0].id
       return {
         ...previous,
-        catalog: newCatalog,
-        queue: newTracks.map((track) => track.id),
-        trackId: startTrackId && newCatalog[startTrackId] ? startTrackId : newTracks[0].id,
+        catalog: boundedCatalog({ trackId, queue, liked: previous.liked, catalog: newCatalog }),
+        queue,
+        trackId,
         position: 0,
         isPlaying: true,
       }
