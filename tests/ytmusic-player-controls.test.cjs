@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const { io } = require('socket.io-client')
-const { startSyncServer } = require('../electron/sync-server.cjs')
+const { createDesktopKey, desktopSyncUrl, startSyncServer } = require('../electron/sync-server.cjs')
 const { createYouTubeMusicBridge } = require('../electron/ytmusic-bridge.cjs')
 const {
   applyLikeCommand,
@@ -389,13 +389,16 @@ function fakeWebContents(page) {
 test('telefon komutu sync sunucusu ve köprü üzerinden gerçek düğmeye basar, durum ve ack döner', async (context) => {
   const distPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ritim-kalp-'))
   await fs.writeFile(path.join(distPath, 'index.html'), '<!doctype html><title>Ritim test</title>')
-  const server = startSyncServer(distPath, 0)
+  // The desktop role needs the per-launch key (sync-server.cjs), as in main.cjs.
+  const desktopKey = createDesktopKey()
+  const server = startSyncServer(distPath, 0, { desktopKey })
   await new Promise((resolve) => server.once('listening', resolve))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
+  const desktopUrl = desktopSyncUrl(baseUrl, desktopKey)
   const room = 'KALP-ROOM'
   const trackId = `ytmusic:video:${VIDEO_ID}`
   const page = fakePage({ store: liveStore() })
-  const seed = await connectClient(baseUrl)
+  const seed = await connectClient(desktopUrl)
   const companion = await connectClient(baseUrl)
   let bridge
   context.after(async () => {
@@ -428,7 +431,7 @@ test('telefon komutu sync sunucusu ve köprü üzerinden gerçek düğmeye basar
     bridge = createYouTubeMusicBridge({
       webContents: fakeWebContents(page),
       room,
-      syncUrl: baseUrl,
+      syncUrl: desktopUrl,
       onState: (state) => {
         bridgeStates.push(state)
         if (state.trackId === trackId) resolve()
