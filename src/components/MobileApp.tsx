@@ -8,6 +8,7 @@ import type { LyricsState, MusicBrowseFilter, MusicBrowseHeader, MusicBrowseItem
 import { Cover } from './Cover'
 import { FeedbackSheet } from './FeedbackSheet'
 import { PlayerControls } from './PlayerControls'
+import { canControlPlayback } from '../playerToggles'
 import { Progress } from './Progress'
 import { isNativeMobile, type MobilePairingConfig } from '../mobileConfig'
 import { useMobileUpdate } from '../hooks/useMobileUpdate'
@@ -571,7 +572,7 @@ export function MobileApp({ state, actions, connected, peerCount, room, pairingE
           </div>
           <section className="ytm-track-meta" aria-live="polite">
             <div><h1>{track.title}</h1><p>{track.artist}{track.collection && track.collection !== 'YouTube Music' ? ` • ${track.collection}` : ''}</p></div>
-            <button className={`ytm-icon-button ytm-like ${liked ? 'is-liked' : ''}`} onClick={actions.toggleLike} aria-label="Favori"><Heart fill={liked ? 'currentColor' : 'none'} /></button>
+            <button className={`ytm-icon-button ytm-like ${liked ? 'is-liked' : ''}`} onClick={actions.toggleLike} disabled={!canControlPlayback(state)} aria-pressed={liked} aria-label={liked ? 'Beğenmekten vazgeç' : 'Beğen'}><Heart fill={liked ? 'currentColor' : 'none'} /></button>
           </section>
           <button className="ytm-output-device" onClick={() => setConnectionOpen(true)}>
             <MonitorSpeaker /><span><small>ŞU CİHAZDA OYNATILIYOR</small><b>{pairing.computerName}</b></span><i className={connected && syncHealth.desktopOnline ? 'is-online' : ''} />

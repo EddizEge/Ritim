@@ -11,6 +11,7 @@ const { createDiscordPresence } = require('./discord-presence.cjs')
 const { createDevicePreferences } = require('./device-preferences.cjs')
 const { createPairingRevealStore, createPairingSecurity, createSafeSettingsData } = require('./pairing-security.cjs')
 const { updateClockEstimate } = require('./room-playback-sync.cjs')
+const { createSettingsSocialActionHandler } = require('./settings-ipc.cjs')
 const { createSocialAuthClient } = require('./social-auth-client.cjs')
 const {
   SETTINGS_SECTIONS,
@@ -84,6 +85,9 @@ let updateController
 let devicePreferences
 let appearanceStore
 let pairingSecurity
+// Proves the desktop role to the local Sync server (sync-server.cjs); random
+// per launch, kept only in memory.
+let syncDesktopKey = ''
 let isShuttingDown = false
 let activeShellView = 'music'
 const socialActionBridge = createSocialActionBridge({ getSocket: () => socialSocket })
@@ -678,6 +682,8 @@ function createMusicView() {
     `).catch(() => {})
   })
   void musicView.webContents.loadURL('https://music.youtube.com/')
+  const bridgeUrl = require('./sync-server.cjs').bridgeSyncUrl(syncServer, process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', syncDesktopKey)
+  if (!bridgeUrl) console.warn('[Ritim] Yerel Sync sunucusu çalışmıyor; PC köprüsü telefona bağlanmıyor.')
   musicBridge = createYouTubeMusicBridge({
     webContents: musicView.webContents,
     presence,
@@ -687,7 +693,7 @@ function createMusicView() {
       publishOwnedRoomPlayback()
     },
     room: ROOM,
-    syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
+    syncUrl: bridgeUrl,
   })
 }
 
@@ -796,9 +802,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     safeStorage,
     shell,
   })
-  const { startSyncServer } = require('./sync-server.cjs')
+  const { createDesktopKey, startSyncServer } = require('./sync-server.cjs')
+  syncDesktopKey = createDesktopKey()
   syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
     pairingToken: activePairingToken,
+    desktopKey: syncDesktopKey,
     getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
   })
   if (!syncServer.listening) {
@@ -911,14 +919,12 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
     return handleSocialAction(selected.type, selected.payload)
   })
-  // The Settings window keeps its own moderation and preference controls.
-  const settingsSocialActions = new Set(['privacy', 'notification-preferences', 'mute', 'block'])
-  ipcMain.on('settings:social-action', (event, request) => {
-    if (!isTrustedSettingsSender(event)) return
-    const selected = request && typeof request === 'object' && !Array.isArray(request) ? request : {}
-    if (!settingsSocialActions.has(selected.type)) return
-    void handleSocialAction(selected.type, selected.payload)
-  })
+  // The Settings window keeps its own moderation and preference controls and
+  // waits for the gateway's acknowledgement (settings-ipc.cjs).
+  ipcMain.handle('settings:social-action', createSettingsSocialActionHandler({
+    isTrustedSender: isTrustedSettingsSender,
+    handleSocialAction,
+  }))
   ipcMain.on('player:presence', (_event, payload) => presence?.update(payload))
   ipcMain.handle('settings:get-data', async () => {
     const socialAccount = await socialAuth?.account().catch((error) => ({

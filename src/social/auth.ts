@@ -1,7 +1,8 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { readSecureValue, type SecureStorageGet } from '../secureStorageRead'
 
 type SecureStoragePlugin = {
-  get(options: { key: string }): Promise<{ value: string | null }>
+  get: SecureStorageGet
   set(options: { key: string; value: string }): Promise<void>
   remove(options: { key: string }): Promise<void>
 }
@@ -68,6 +69,13 @@ function runSecureStorageOperation<T>(operation: () => Promise<T>) {
   return result
 }
 
+// A Keystore that cannot be read right now throws (after retries) instead of
+// looking like "no session": otherwise the phone would enroll a new device or
+// ignore an explicit sign-out (src/secureStorageRead.ts).
+function readSecure(key: string) {
+  return readSecureValue((options) => secureStorage.get(options), key)
+}
+
 function notifySessionChanged() {
   window.dispatchEvent(new CustomEvent('ritim:social-session-changed'))
 }
@@ -82,11 +90,11 @@ function sessionInitials(displayName: string) {
 
 async function loadSession() {
   if (!loadedSession) {
-    loadedSession = (async () => {
+    const loading = (async () => {
       if (!isNativeStorage()) return memorySession
+      const value = await runSecureStorageOperation(() => readSecure(SESSION_KEY))
+      if (!value) return null
       try {
-        const { value } = await runSecureStorageOperation(() => secureStorage.get({ key: SESSION_KEY }))
-        if (!value) return null
         const parsed = JSON.parse(value) as StoredSocialSession
         if (!parsed.refreshToken || !parsed.server) return null
         return parsed
@@ -94,14 +102,18 @@ async function loadSession() {
         return null
       }
     })()
+    loadedSession = loading
+    // Not readable right now: the next call reads the Keystore again.
+    loading.catch(() => {
+      if (loadedSession === loading) loadedSession = undefined
+    })
   }
   return loadedSession
 }
 
 async function readSignedOut() {
   if (isNativeStorage()) {
-    const { value } = await runSecureStorageOperation(() => secureStorage.get({ key: SIGNED_OUT_KEY }))
-      .catch(() => ({ value: null }))
+    const value = await runSecureStorageOperation(() => readSecure(SIGNED_OUT_KEY))
     return value === '1'
   }
   try { return localStorage.getItem(SIGNED_OUT_KEY) === '1' } catch { return false }
@@ -195,9 +207,9 @@ async function socialDeviceKey(generation: number) {
   if (isNativeStorage()) {
     return runSecureStorageOperation(async () => {
       assertSessionGeneration(generation)
-      const stored = await secureStorage.get({ key: DEVICE_KEY }).catch(() => ({ value: null }))
+      const stored = await readSecure(DEVICE_KEY)
       assertSessionGeneration(generation)
-      if (stored.value) return stored.value
+      if (stored) return stored
       const value = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
       await secureStorage.set({ key: DEVICE_KEY, value })
       if (generation !== sessionGeneration) {

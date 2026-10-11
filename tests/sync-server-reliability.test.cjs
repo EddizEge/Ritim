@@ -4,7 +4,9 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const { io } = require('socket.io-client')
-const { startSyncServer } = require('../electron/sync-server.cjs')
+const { desktopSyncUrl, startSyncServer } = require('../electron/sync-server.cjs')
+
+const DESKTOP_KEY = 'reliability-desktop-key-1234567890123456'
 
 function waitForEvent(socket, event, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
@@ -29,11 +31,11 @@ async function connectClient(baseUrl) {
 test('geciken PC komut yanıtı telefonun doğru oturumuna geri iletilir', async (context) => {
   const distPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ritim-sync-reliability-'))
   await fs.writeFile(path.join(distPath, 'index.html'), '<!doctype html><title>Ritim test</title>')
-  const server = startSyncServer(distPath, 0)
+  const server = startSyncServer(distPath, 0, { desktopKey: DESKTOP_KEY })
   await new Promise((resolve) => server.once('listening', resolve))
   const address = server.address()
   const baseUrl = `http://127.0.0.1:${address.port}`
-  const desktop = await connectClient(baseUrl)
+  const desktop = await connectClient(desktopSyncUrl(baseUrl, DESKTOP_KEY))
   const companion = await connectClient(baseUrl)
 
   context.after(async () => {
@@ -73,7 +75,7 @@ test('geciken PC komut yanıtı telefonun doğru oturumuna geri iletilir', async
 test('PC çevrimdışıyken komut bekletilmeden başarısız sayılır', async (context) => {
   const distPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ritim-sync-offline-'))
   await fs.writeFile(path.join(distPath, 'index.html'), '<!doctype html><title>Ritim test</title>')
-  const server = startSyncServer(distPath, 0)
+  const server = startSyncServer(distPath, 0, { desktopKey: DESKTOP_KEY })
   await new Promise((resolve) => server.once('listening', resolve))
   const address = server.address()
   const companion = await connectClient(`http://127.0.0.1:${address.port}`)
@@ -101,11 +103,11 @@ test('PC çevrimdışıyken komut bekletilmeden başarısız sayılır', async (
 test('komut beklerken PC kapanırsa telefon hemen bilgilendirilir', async (context) => {
   const distPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ritim-sync-disconnect-'))
   await fs.writeFile(path.join(distPath, 'index.html'), '<!doctype html><title>Ritim test</title>')
-  const server = startSyncServer(distPath, 0)
+  const server = startSyncServer(distPath, 0, { desktopKey: DESKTOP_KEY })
   await new Promise((resolve) => server.once('listening', resolve))
   const address = server.address()
   const baseUrl = `http://127.0.0.1:${address.port}`
-  const desktop = await connectClient(baseUrl)
+  const desktop = await connectClient(desktopSyncUrl(baseUrl, DESKTOP_KEY))
   const companion = await connectClient(baseUrl)
 
   context.after(async () => {

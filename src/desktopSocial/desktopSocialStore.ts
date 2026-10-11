@@ -1,4 +1,5 @@
 import { createSocialAckActions } from '../social/socialAckActions'
+import { forgetSocialOutbox } from '../social/socialOutbox'
 import {
   EXPECTED_ROOM_EXIT_MS,
   SOCIAL_MESSAGE_MAX_LENGTH,
@@ -231,6 +232,7 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     if (resetExpectedRoomExit) expectedRoomExit = { roomId: '', until: 0 }
     receivedState = true
     const previousUserId = state.currentUser.id
+    const wasAuthenticated = state.authentication?.authenticated === true
     state = {
       ...snapshot,
       feedback: previousStatus === 'online' && status === 'offline'
@@ -247,6 +249,9 @@ export function createDesktopSocialStore(bridge: RitimSocialBridge, options: Sto
     if (typeof incoming.viewVisible === 'boolean') viewVisible = incoming.viewVisible
     // Another account must not see these optimistic changes; acknowledged
     // ones are in a live snapshot already.
+    // Signed out (here or in Settings): that account's unsent messages leave
+    // this PC (src/social/socialOutbox.ts).
+    if (wasAuthenticated && incoming.authentication?.authenticated === false && previousUserId) forgetSocialOutbox(previousUserId)
     if (previousUserId && state.currentUser.id && previousUserId !== state.currentUser.id) ack.reset()
     else if (status === 'online') ack.noteSnapshot()
     emit()

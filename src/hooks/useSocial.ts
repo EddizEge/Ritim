@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { io } from 'socket.io-client'
 import type { MobilePairingConfig } from '../mobileConfig'
 import { ensureSocialAccessToken, invalidateSocialAccessToken } from '../social/auth'
+import { isSecureStorageUnavailable } from '../secureStorageRead'
 import { handleFromDisplayName, initialsFromDisplayName } from '../social/handle'
 import { deviceNotificationContent } from '../social/socialModel'
 import { createSocialProfilePublisher } from '../social/profilePublishPolicy'
@@ -161,6 +162,7 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
   const resolvedName = displayName?.trim() || (isCompanion ? 'Ritim Telefon' : 'Ritim Web')
   const [connectionStatus, setConnectionStatus] = useState<SocialState['connectionStatus']>(() => socket.connected ? 'online' : 'connecting')
   const [lastOnlineAt, setLastOnlineAt] = useState<number | undefined>(undefined)
+  const [connectionIssue, setConnectionIssue] = useState<SocialState['connectionIssue']>(undefined)
 
   const localProfile = useMemo<SocialUser>(() => ({
     id: accountId,
@@ -236,7 +238,8 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     ...snapshot,
     connectionStatus,
     lastOnlineAt,
-  }), [connectionStatus, lastOnlineAt, snapshot])
+    connectionIssue,
+  }), [connectionIssue, connectionStatus, lastOnlineAt, snapshot])
   const baseStateRef = useRef(baseState)
   baseStateRef.current = baseState
   const socketRef = useRef(socket)
@@ -267,19 +270,34 @@ export function useSocial({ displayName, avatarUrl, currentTrack, isCompanion, p
     let authRetryUsed = false
     const connectSocial = async () => {
       setConnectionStatus('connecting')
+      let storageUnavailable = false
       const accessToken = await ensureSocialAccessToken({
         socialUrl,
         syncUrl: pairing.syncUrl,
         pairingToken: pairing.token,
         isCompanion,
-      }).catch(() => '')
+      }).catch((error) => {
+        storageUnavailable = isSecureStorageUnavailable(error)
+        return ''
+      })
       if (disposed) return
+      // The saved session is kept but cannot be read right now. Connecting
+      // without it would only be refused; the Social screen offers
+      // "Tekrar dene" instead (no automatic retry loop).
+      if (storageUnavailable) {
+        if (socket.connected) return
+        setConnectionIssue('secure-storage')
+        setConnectionStatus('offline')
+        return
+      }
+      setConnectionIssue(undefined)
       socket.auth = accessToken ? { accessToken } : {}
       if (socket.connected) socket.disconnect()
       socket.connect()
     }
     connectSocialRef.current = () => void connectSocial()
     const onConnect = () => {
+      setConnectionIssue(undefined)
       setConnectionStatus('online')
       setLastOnlineAt(Date.now())
       joinSocialAccount()

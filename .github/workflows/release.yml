@@ -35,6 +35,9 @@ jobs:
         run: npx electron-builder --config electron-builder.config.cjs --win nsis --publish never
         env:
           RITIM_GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Check installed path lengths
+        # Long installed paths break the next update's old uninstaller (MAX_PATH).
+        run: node build/check-package-paths.cjs release/win-unpacked
       - name: Create draft GitHub release
         shell: pwsh
         # The release stays a draft until the Android job attaches the verified

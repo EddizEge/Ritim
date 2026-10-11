@@ -7,7 +7,7 @@ const test = require('node:test')
 const { Server } = require('socket.io')
 const { io: createClient } = require('socket.io-client')
 const { createSocialHub } = require('../electron/social-hub.cjs')
-const { startSyncServer } = require('../electron/sync-server.cjs')
+const { desktopSyncUrl, startSyncServer } = require('../electron/sync-server.cjs')
 
 // Socket.IO delivers whatever JSON value a client sends. Every one of these must
 // be ignored safely: a single uncaught exception would stop the social gateway
@@ -68,7 +68,7 @@ test('Sync V2 bozuk olay yüklerini yok sayar ve normal komut akışını sürd�
   const distPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ritim-sync-malformed-'))
   await fs.writeFile(path.join(distPath, 'index.html'), '<!doctype html><title>Ritim test</title>')
   const pairingToken = 'malformed_payload_pairing_token_1234567890'
-  const server = startSyncServer(distPath, 0, { pairingToken })
+  const server = startSyncServer(distPath, 0, { pairingToken, desktopKey: 'malformed-desktop-key-123456789012345678' })
   await new Promise((resolve) => server.once('listening', resolve))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
   const sockets = []
@@ -92,7 +92,7 @@ test('Sync V2 bozuk olay yüklerini yok sayar ve normal komut akışını sürd�
   attacker.emit('player:update', { room: 'ATTACK-ROOM', state: 42 })
   await delay(150)
 
-  const desktop = await connectClient(baseUrl)
+  const desktop = await connectClient(desktopSyncUrl(baseUrl, 'malformed-desktop-key-123456789012345678'))
   const companion = await connectClient(baseUrl)
   sockets.push(desktop, companion)
   const desktopJoined = waitForEvent(desktop, 'room:status')
