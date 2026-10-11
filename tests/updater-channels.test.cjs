@@ -104,6 +104,10 @@ function createRealUpdater(t, currentVersion, host) {
   })
   updater.httpExecutor = new LocalHttpExecutor()
   updater.logger = silentLogger
+  // Ritim ships only the Windows updater. electron-updater names channel files
+  // per platform (beta.yml on Windows, beta-linux.yml on Linux), so pin Windows
+  // for CI runners on other systems. This only selects the platform.
+  updater._testOnlyOptions = { platform: 'win32' }
   return updater
 }
 
