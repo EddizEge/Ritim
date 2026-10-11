@@ -7,6 +7,7 @@ import { useNativeMediaSession } from './hooks/useNativeMediaSession'
 import { useYouTubeLibrary } from './hooks/useYouTubeLibrary'
 import { App as CapacitorApp } from '@capacitor/app'
 import { NativePairing } from './components/NativePairing'
+import { PairingUnreadable } from './components/PairingUnreadable'
 import {
   clearMobilePairing,
   clearMobilePairingCaches,
@@ -21,6 +22,7 @@ import {
 } from './mobileConfig'
 import { getTrack } from './data'
 import { isSecureStorageUnavailable } from './secureStorageRead'
+import { repairUnreadablePairing } from './pairingRecovery'
 import { configuredSocialUrl, useSocial } from './hooks/useSocial'
 import { useSocialAccount } from './hooks/useSocialAccount'
 import { clearSocialIdentityForPairingReset, signOutExistingSocialSession } from './social/auth'
@@ -213,7 +215,20 @@ export default function App() {
   }
 
   if (pairingUnreadable) {
-    return <main className="native-pairing-shell"><section className="native-pairing-card"><p>Kayıtlı PC eşlemesi şu an okunamadı. Eşleme silinmedi; telefonun kilidini açıp tekrar dene.</p><button type="button" className="native-scan-button" onClick={() => { setPairingUnreadable(false); setPairing(undefined); setPairingReadAttempt((attempt) => attempt + 1) }}>Tekrar dene</button></section></main>
+    return (
+      <PairingUnreadable
+        onRetry={() => { setPairingUnreadable(false); setPairing(undefined); setPairingReadAttempt((attempt) => attempt + 1) }}
+        // Only after the user confirmed: forget the unreadable pairing and open
+        // the QR screen, even if removing the old records failed.
+        onRepair={() => repairUnreadablePairing({
+          clearPairing: () => enqueuePairingMutation(() => clearMobilePairing()),
+          clearSocialIdentity: () => clearSocialIdentityForPairingReset(),
+        }, () => {
+          setPairingUnreadable(false)
+          setPairing(null)
+        })}
+      />
+    )
   }
   if (pairing === undefined) {
     return <main className="native-pairing-shell"><section className="native-pairing-card"><p>Ritim bağlantısı hazırlanıyor…</p></section></main>
