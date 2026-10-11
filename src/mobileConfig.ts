@@ -1,7 +1,10 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { SECURE_STORAGE_RETRY_DELAYS_MS, readSecureValue } from './secureStorageRead'
 
+// A rejected `get` means "not readable right now", never "no record"
+// (src/secureStorageRead.ts).
 export type MobilePairingSecureStorage = {
-  get(options: { key: string }): Promise<{ value: string | null }>
+  get(options: { key: string }): Promise<{ value: string | null; discarded?: boolean }>
   set(options: { key: string; value: string }): Promise<void>
   remove(options: { key: string }): Promise<void>
 }
@@ -230,13 +233,18 @@ export function createMobilePairingPersistence({
   local = browserLocalStorage(),
   secure = secureStorage,
   nextTransactionId = createTransactionId,
+  secureRetryDelaysMs = SECURE_STORAGE_RETRY_DELAYS_MS,
 }: {
   native: boolean
   local?: MobilePairingLocalStorage
   secure?: MobilePairingSecureStorage
   nextTransactionId?: () => string
+  secureRetryDelaysMs?: readonly number[]
 }) {
   const mutationQueue = createPairingMutationQueue()
+  // Retries a Keystore that is briefly unavailable, then throws
+  // SecureStorageUnavailableError: the stored pairing is kept, never reset.
+  const readSecure = async (key: string) => (await readSecureValue((options) => secure.get(options), key, secureRetryDelaysMs)) || ''
 
   function removeLegacyPairing() {
     safeLocalRemove(local, LEGACY_SERVER_KEY)
@@ -276,7 +284,7 @@ export function createMobilePairingPersistence({
     const metadata = parseMetadata(storedValue)
 
     if (native) {
-      const secureValue = (await secure.get({ key: SECURE_PAIRING_KEY })).value || ''
+      const secureValue = await readSecure(SECURE_PAIRING_KEY)
       const secureRecord = parseSecurePairing(secureValue)
       if (secureRecord) {
         if (metadata?.transactionId !== secureRecord.transactionId) {
@@ -302,7 +310,7 @@ export function createMobilePairingPersistence({
     const syncUrl = safeLocalGet(local, LEGACY_SERVER_KEY)
     const room = safeLocalGet(local, LEGACY_ROOM_KEY)
     const legacyToken = safeLocalGet(local, LEGACY_TOKEN_KEY)
-    const secureToken = native ? (await secure.get({ key: SECURE_PAIRING_KEY })).value || '' : ''
+    const secureToken = native ? await readSecure(SECURE_PAIRING_KEY) : ''
     const token = legacyToken || secureToken
     if (!syncUrl || !room || !token) return null
 
