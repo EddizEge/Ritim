@@ -7,6 +7,7 @@ import {
   type SocialAuthOptions,
 } from '../social/auth'
 import type { MobilePairingConfig } from '../mobileConfig'
+import { forgetSocialOutbox } from '../social/socialOutbox'
 import type { SocialAccountSummary } from '../social/types'
 
 export type SocialAccountState = SocialAccountSummary & {
@@ -63,6 +64,8 @@ export function useSocialAccount({ pairing, socialUrl, isCompanion }: {
 
   const signOut = useCallback(async () => {
     await signOutSocialAccount(stableOptions)
+    // The signed-out account's unsent messages leave this phone.
+    forgetSocialOutbox()
     setState({ ...emptyAccount, status: 'ready' })
   }, [stableOptions])
 

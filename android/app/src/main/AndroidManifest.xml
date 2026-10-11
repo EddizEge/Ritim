@@ -21,6 +21,7 @@
         <service
             android:name=".RitimMediaService"
             android:exported="false"
+            android:stopWithTask="true"
             android:foregroundServiceType="mediaPlayback" />
 
         <activity
