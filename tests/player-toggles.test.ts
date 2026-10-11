@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PlayerControls } from '../src/components/PlayerControls'
@@ -51,6 +54,23 @@ test('iyimser beğeni PC doğrulayana dek eski PC durumuyla ezilmez', () => {
   const confirmed = reconcileToggles(pcState({ liked: [TRACK_ID], likeStatus: 'LIKE' }), { like: like(true) }, 1600)
   assert.equal(isTrackLiked(confirmed.state), true)
   assert.equal(confirmed.pending.like, undefined)
+})
+
+test('onay süresi 15 sn: yavaş PC doğrulamasında kalp titremez; komut ve sunucu sürelerinden kısa', () => {
+  assert.equal(TOGGLE_CONFIRM_TIMEOUT_MS, 15000)
+  // 9 s later (the old 8 s limit has passed) the PC still reports the old value: no flip back.
+  const slow = reconcileToggles(pcState({ liked: [] }), { like: like(true) }, 1000 + 9000)
+  assert.equal(isTrackLiked(slow.state), true)
+  assert.ok(slow.pending.like)
+  const slowRepeat = reconcileToggles(pcState({ repeat: 'off' }), { repeat: repeat('all') }, 1000 + 9000)
+  assert.equal(slowRepeat.state.repeat, 'all')
+
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const commandTimeout = Number(/const COMMAND_TIMEOUT_MS = (\d+)/.exec(fs.readFileSync(path.join(root, 'src/hooks/usePlayerSync.ts'), 'utf8'))?.[1])
+  const ownerTimeout = Number(/commandOwnerTimeoutMs = (\d+)/.exec(fs.readFileSync(path.join(root, 'electron/sync-server.cjs'), 'utf8'))?.[1])
+  assert.equal(commandTimeout, 20000)
+  assert.equal(ownerTimeout, 30000)
+  assert.ok(TOGGLE_CONFIRM_TIMEOUT_MS < commandTimeout && commandTimeout < ownerTimeout)
 })
 
 test('zaman aşımı geçince ya da parça değişince PC durumu geçerli olur', () => {
