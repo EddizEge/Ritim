@@ -8,15 +8,16 @@
 //   `likeStatus.videos[videoId]` ('LIKE' ...; beğeni tıklamasından sonra dolar)
 //   ve `entities.likeStatusEntity[key].likeStatus` (key: videoId'yi içeren
 //   base64url protobuf, ör. "EgtkUXc0dzlXZ1hjUSA-KAE%3D" → "\x12\x0bdQw4w9WgXcQ…").
-// - Bu sürümde `ytmusic-player-bar` yoktu; denetimler `ytmusic-miniplayer`
-//   içindeydi: `ytmusic-wiz-player-controls` →
-//   `.ytmusicPlayerControlsRepeatButton button` / `.ytmusicPlayerControlsShuffleButton button`
-//   (aria-pressed yalnız kapalı/açık ayırır; ALL ile ONE'ı depo ayırır) ve
+// - Girişsiz oturumda `ytmusic-player-bar` hiç yoktu (ana sayfada da, /watch'ta da);
+//   denetimler `ytmusic-miniplayer` içindeydi: `ytmusic-wiz-player-controls` →
+//   `.ytmusicPlayerControls{Shuffle,Previous,PlayPause,Next,Repeat}Button button`
+//   (tekrar aria-pressed'i yalnız kapalı/açık ayırır; ALL ile ONE'ı depo ayırır) ve
 //   `yt-video-action-bar-view-model` → `like-button-view-model button[aria-pressed]`,
 //   `dislike-button-view-model button[aria-pressed]`.
 // - Reklamda `#movie_player` sınıfında `ad-showing` vardır.
-// - Eski düzen (`ytmusic-player-bar ytmusic-like-button-renderer[like-status]`)
-//   bu ortamda görülemedi; yalnız depo ve yeni düzen okunamazsa yedek olarak okunur.
+// - Klasik düzen (`ytmusic-player-bar`; kullanıcının girişli oturumunda Beta 3 bununla
+//   çalışıyor) bu ortamda görülemedi. Her yerde önce klasik seçici denenir, yeni düzen
+//   yedektir; her basışın sonucu depodan / öznitelikten doğrulanır.
 // aria-label / title metinleri dile göre değiştiği için kullanılmaz.
 
 const LIKE_STATUSES = new Set(['LIKE', 'DISLIKE', 'INDIFFERENT'])
@@ -81,6 +82,10 @@ function readPlayerControlsInPage(doc, videoId) {
     }
   }
   if (!likeStatus) {
+    likeStatus = pick(doc.querySelector('ytmusic-player-bar ytmusic-like-button-renderer')?.getAttribute('like-status'), likeValues)
+    if (likeStatus) likeSource = 'player-bar'
+  }
+  if (!likeStatus) {
     const likeButton = doc.querySelector('ytmusic-miniplayer like-button-view-model button[aria-pressed]')
     const dislikeButton = doc.querySelector('ytmusic-miniplayer dislike-button-view-model button[aria-pressed]')
     if (likeButton || dislikeButton) {
@@ -90,18 +95,23 @@ function readPlayerControlsInPage(doc, videoId) {
       likeSource = 'miniplayer'
     }
   }
-  if (!likeStatus) {
-    likeStatus = pick(doc.querySelector('ytmusic-player-bar ytmusic-like-button-renderer')?.getAttribute('like-status'), likeValues)
-    if (likeStatus) likeSource = 'player-bar'
-  }
 
   let repeatMode = pick(store?.queue?.repeatMode, repeatValues)
   let repeatSource = repeatMode ? 'store' : ''
-  if (!repeatMode) {
-    const repeatButton = doc.querySelector('.ytmusicPlayerControlsRepeatButton button[aria-pressed]')
-    if (repeatButton?.getAttribute('aria-pressed') === 'false') {
+  const bar = doc.querySelector('ytmusic-player-bar')
+  if (!repeatMode && bar) {
+    repeatMode = pick(bar.repeatMode_ ?? bar.repeatMode ?? bar.getAttribute?.('repeat-mode_') ?? bar.getAttribute?.('repeat-mode'), repeatValues)
+    if (repeatMode) repeatSource = 'player-bar'
+  }
+  // Düğmenin aria-pressed değeri yalnız "kapalı"yı kesin söyler.
+  for (const [selector, source] of [
+    ['ytmusic-player-bar .repeat[aria-pressed]', 'player-bar-button'],
+    ['.ytmusicPlayerControlsRepeatButton button[aria-pressed]', 'miniplayer'],
+  ]) {
+    if (repeatMode) break
+    if (doc.querySelector(selector)?.getAttribute('aria-pressed') === 'false') {
       repeatMode = 'NONE'
-      repeatSource = 'miniplayer'
+      repeatSource = source
     }
   }
 
@@ -111,16 +121,31 @@ function readPlayerControlsInPage(doc, videoId) {
 }
 
 // Sayfada çalışır: `(${clickPlayerControlInPage})(document, 'like')`.
-// Yalnız doğrulanmış (ya da açıkça yedek olarak işaretli) düğmelere basar.
+// Önce klasik `ytmusic-player-bar`, sonra canlıda doğrulanan yeni düzen düğmesi.
+// next / previous / playPause yalnız yeni düzen yedeğidir; klasik yolları köprüdedir.
 function clickPlayerControlInPage(doc, kind) {
   const selectors = {
     like: [
-      'ytmusic-miniplayer like-button-view-model button',
-      // Eski düzen yedeği: bu ortamda görülemedi, sonuç depodan doğrulanır.
       'ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button',
+      'ytmusic-player-bar ytmusic-like-button-renderer .like button',
+      'ytmusic-player-bar ytmusic-like-button-renderer tp-yt-paper-icon-button.like',
+      'ytmusic-miniplayer like-button-view-model button',
     ],
-    repeat: ['.ytmusicPlayerControlsRepeatButton button'],
-    shuffle: ['.ytmusicPlayerControlsShuffleButton button'],
+    repeat: [
+      'ytmusic-player-bar tp-yt-paper-icon-button.repeat',
+      'ytmusic-player-bar .repeat button',
+      'ytmusic-player-bar .repeat',
+      '.ytmusicPlayerControlsRepeatButton button',
+    ],
+    shuffle: [
+      'ytmusic-player-bar tp-yt-paper-icon-button.shuffle',
+      'ytmusic-player-bar .shuffle button',
+      'ytmusic-player-bar .shuffle',
+      '.ytmusicPlayerControlsShuffleButton button',
+    ],
+    next: ['.ytmusicPlayerControlsNextButton button'],
+    previous: ['.ytmusicPlayerControlsPreviousButton button'],
+    playPause: ['.ytmusicPlayerControlsPlayPauseButton button'],
   }[kind] || []
   for (const selector of selectors) {
     const button = doc.querySelector(selector)

@@ -99,7 +99,14 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
 
   async function clickControl(kind) {
     if (destroyed || webContents.isDestroyed()) return false
-    return Boolean(await webContents.executeJavaScript(`(${clickPlayerControlInPage})(document, ${JSON.stringify(kind)})`, true))
+    const clicked = Boolean(await webContents.executeJavaScript(`(${clickPlayerControlInPage})(document, ${JSON.stringify(kind)})`, true))
+    // Düğme yoksa YouTube Music kısayolu (canlıda doğrulandı: R tekrar modunu döndürür).
+    // Basış başarı sayılmaz; sonucu çağıran depodan / öznitelikten doğrular.
+    if (!clicked && kind === 'repeat') {
+      sendKey('R')
+      return true
+    }
+    return clicked
   }
 
   function publishControls(videoId, controls) {

@@ -128,7 +128,7 @@ test('beğeni durumu önce depodaki video kaydından, sonra varlık anahtarında
   assert.equal(fromEntity.likeSource, 'entity')
 })
 
-test('depo yoksa yeni düzenin aria-pressed değeri, o da yoksa eski like-status okunur', () => {
+test('depo yoksa önce klasik like-status, o da yoksa yeni düzenin aria-pressed değeri okunur', () => {
   const liked = fakePage()
   liked.buttons.like.attrs['aria-pressed'] = 'true'
   assert.equal(liked.read().likeStatus, 'LIKE')
@@ -169,6 +169,103 @@ test('düğme tıklaması devre dışı ya da bilinmeyen düğmeye basmaz', () =
   assert.equal(page.click('shuffle'), true)
   assert.equal(page.buttons.shuffle.clicks, 1)
   assert.equal(page.click('unknown'), false)
+})
+
+// Klasik düzen: ytmusic-player-bar (kullanıcının girişli oturumunda beklenen yapı).
+function classicPage({ store = null, repeatMode = 'NONE', likeStatus = 'INDIFFERENT', likeSelector = '#button-shape-like button', repeatAttr = false } = {}) {
+  const repeatValues = ['NONE', 'ALL', 'ONE']
+  const bar = {
+    attrs: {},
+    getAttribute(name) { return Object.hasOwn(this.attrs, name) ? this.attrs[name] : null },
+  }
+  if (repeatAttr) bar.attrs['repeat-mode'] = repeatMode
+  else bar.repeatMode_ = repeatMode
+  const page = { store, bar }
+  const renderer = button({ 'like-status': likeStatus })
+  const likeButton = button({}, () => {
+    renderer.attrs['like-status'] = renderer.attrs['like-status'] === 'LIKE' ? 'INDIFFERENT' : 'LIKE'
+  })
+  const repeatButton = button({}, () => {
+    if (page.store?.queue) {
+      page.store.queue.repeatMode = repeatValues[(repeatValues.indexOf(page.store.queue.repeatMode) + 1) % 3]
+      return
+    }
+    const current = repeatAttr ? bar.attrs['repeat-mode'] : bar.repeatMode_
+    const next = repeatValues[(repeatValues.indexOf(current) + 1) % 3]
+    if (repeatAttr) bar.attrs['repeat-mode'] = next
+    else bar.repeatMode_ = next
+  })
+  const shuffleButton = button()
+  const selectors = {
+    'ytmusic-player-bar': bar,
+    'ytmusic-player-bar ytmusic-like-button-renderer': renderer,
+    [`ytmusic-player-bar ytmusic-like-button-renderer ${likeSelector}`]: likeButton,
+    'ytmusic-player-bar tp-yt-paper-icon-button.repeat': repeatButton,
+    'ytmusic-player-bar tp-yt-paper-icon-button.shuffle': shuffleButton,
+  }
+  page.document = {
+    querySelector(selector) {
+      if (selector === 'ytmusic-app') return page.store ? { getState: () => page.store } : null
+      return Object.hasOwn(selectors, selector) ? selectors[selector] : null
+    },
+    getElementById: () => null,
+  }
+  page.buttons = { like: likeButton, repeat: repeatButton, shuffle: shuffleButton, renderer }
+  page.read = () => inPage(readPlayerControlsInPage, VIDEO_ID)(page.document)
+  page.click = (kind) => inPage(clickPlayerControlInPage, kind)(page.document)
+  return page
+}
+
+test('klasik düzen: beğeni like-status özniteliğinden, tekrar player-bar özelliğinden okunur', () => {
+  const page = classicPage({ repeatMode: 'ALL', likeStatus: 'LIKE' })
+  assert.deepEqual(
+    (({ likeStatus, likeSource, repeatMode, repeatSource }) => ({ likeStatus, likeSource, repeatMode, repeatSource }))(page.read()),
+    { likeStatus: 'LIKE', likeSource: 'player-bar', repeatMode: 'ALL', repeatSource: 'player-bar' },
+  )
+  assert.equal(classicPage({ repeatMode: 'ONE', repeatAttr: true }).read().repeatMode, 'ONE')
+  // Depo varsa depo önceliklidir.
+  assert.equal(classicPage({ store: liveStore({ repeatMode: 'ONE' }), repeatMode: 'NONE' }).read().repeatMode, 'ONE')
+})
+
+test('klasik düzen: .repeat düğmesinin aria-pressed=false değeri tekrarı kapalı sayar', () => {
+  const page = classicPage()
+  delete page.bar.repeatMode_
+  const pressed = button({ 'aria-pressed': 'false' })
+  const original = page.document.querySelector
+  page.document.querySelector = (selector) => selector === 'ytmusic-player-bar .repeat[aria-pressed]' ? pressed : original(selector)
+  assert.equal(page.read().repeatMode, 'NONE')
+  assert.equal(page.read().repeatSource, 'player-bar-button')
+  pressed.attrs['aria-pressed'] = 'true'
+  assert.equal(page.read().repeatMode, '')
+})
+
+test('klasik düzen: beğen, tekrar ve karıştır player-bar düğmelerine basar, sonuç öznitelikten doğrulanır', async () => {
+  const page = classicPage()
+  const liked = await applyLikeCommand({ target: 'LIKE', videoId: VIDEO_ID, read: page.read, click: page.click, timeoutMs: 60, intervalMs: 5 })
+  assert.equal(liked.likeStatus, 'LIKE')
+  assert.equal(page.buttons.like.clicks, 1)
+
+  const one = await applyRepeatCommand({ target: 'one', read: page.read, click: page.click, timeoutMs: 60, intervalMs: 5 })
+  assert.equal(one.repeatMode, 'ONE')
+  assert.equal(page.buttons.repeat.clicks, 2)
+
+  assert.equal(page.click('shuffle'), true)
+  assert.equal(page.buttons.shuffle.clicks, 1)
+
+  const alternative = classicPage({ likeSelector: '.like button' })
+  await applyLikeCommand({ target: 'LIKE', videoId: VIDEO_ID, read: alternative.read, click: alternative.click, timeoutMs: 60, intervalMs: 5 })
+  assert.equal(alternative.buttons.like.clicks, 1)
+})
+
+test('iki düzen birden varsa önce klasik düğmeye basılır', () => {
+  const modern = fakePage({ store: liveStore() })
+  const classic = classicPage({ store: modern.store })
+  const both = {
+    querySelector: (selector) => classic.document.querySelector(selector) || modern.document.querySelector(selector),
+  }
+  for (const kind of ['like', 'repeat', 'shuffle']) assert.equal(inPage(clickPlayerControlInPage, kind)(both), true)
+  assert.deepEqual([classic.buttons.like.clicks, classic.buttons.repeat.clicks, classic.buttons.shuffle.clicks], [1, 1, 1])
+  assert.deepEqual([modern.buttons.like.clicks, modern.buttons.repeat.clicks, modern.buttons.shuffle.clicks], [0, 0, 0])
 })
 
 const fast = { timeoutMs: 60, intervalMs: 5 }
@@ -283,7 +380,7 @@ function fakeWebContents(page) {
     executeJavaScript: async (code) => new Function('document', `return (${code.trim()})`)(page.document),
     isCurrentlyAudible: () => false,
     focus() {},
-    sendInputEvent() {},
+    sendInputEvent(event) { page.onInput?.(event) },
     on() {},
     off() {},
   }
@@ -374,4 +471,27 @@ test('telefon komutu sync sunucusu ve köprü üzerinden gerçek düğmeye basar
   assert.equal(failed.status, 'failed')
   assert.match(failed.message, /Reklam/)
   assert.equal(page.buttons.like.clicks, 1)
+})
+
+function offlineBridge(page) {
+  // Komutlar doğrudan çağrılır; sync sunucusu gerekmez (bağlantı kurulamaz, sessizce yeniden dener).
+  return createYouTubeMusicBridge({ webContents: fakeWebContents(page), room: 'KALP-OFFLINE', syncUrl: 'http://127.0.0.1:9' })
+}
+
+test('tekrar düğmesi hiç yoksa R kısayolu basılır ve sonuç depodan doğrulanır', async (context) => {
+  const page = fakePage({ store: liveStore(), miniplayer: false })
+  const keys = []
+  page.onInput = (event) => {
+    keys.push(`${event.type}:${event.keyCode}`)
+    if (event.type === 'keyDown' && event.keyCode === 'R') page.store.queue.repeatMode = nextRepeatMode(page.store.queue.repeatMode)
+  }
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'repeat', value: 'all' })
+  assert.equal(page.store.queue.repeatMode, 'ALL')
+  assert.deepEqual(keys, ['keyDown:R', 'keyUp:R'])
+
+  // Kısayol etki etmezse basış başarı sayılmaz.
+  page.onInput = () => {}
+  await assert.rejects(bridge.command({ type: 'repeat', value: 'one' }), /değiştirmedi/)
 })
