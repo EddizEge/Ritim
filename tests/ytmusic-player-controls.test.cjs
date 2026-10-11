@@ -495,3 +495,122 @@ test('tekrar düğmesi hiç yoksa R kısayolu basılır ve sonuç depodan doğru
   page.onInput = () => {}
   await assert.rejects(bridge.command({ type: 'repeat', value: 'one' }), /değiştirmedi/)
 })
+
+// Yeni düzen: ytmusic-player.playerApi yok, yalnız #movie_player ve ytmusic-wiz-player-controls.
+function modernPlayerPage({ media = false, api = true, classicApi = null } = {}) {
+  const videos = ['vid-one____', 'vid-two____']
+  const page = { index: 0, calls: [], position: 10, volume: 100, playing: true }
+  const call = (name, ...args) => page.calls.push([name, ...args])
+  const movie = {
+    classList: { contains: () => false },
+    ...(api ? {
+      getVideoData: () => ({ video_id: videos[page.index], title: `Parça ${page.index + 1}` }),
+      getCurrentTime: () => page.position,
+      seekTo: (seconds, allowSeekAhead) => { call('seekTo', seconds, allowSeekAhead); page.position = seconds },
+      getVolume: () => page.volume,
+      setVolume: (level) => { call('setVolume', level); page.volume = level },
+      isMuted: () => false,
+      unMute: () => call('unMute'),
+      getPlayerState: () => (page.playing ? 1 : 2),
+      playVideo: () => { call('playVideo'); page.playing = true },
+      pauseVideo: () => { call('pauseVideo'); page.playing = false },
+    } : {}),
+  }
+  const mediaElement = { duration: 213, currentTime: 10, paused: false, pause() { this.paused = true }, play() { this.paused = false; return Promise.resolve() } }
+  const buttons = {
+    next: button({}, () => { page.index = Math.min(videos.length - 1, page.index + 1); page.position = 0 }),
+    previous: button({}, () => { page.index = Math.max(0, page.index - 1); page.position = 0 }),
+    playPause: button({}, () => { page.playing = !page.playing }),
+  }
+  const queueItems = videos.map((videoId) => ({ data: { videoId }, querySelector: () => null }))
+  const selectors = {
+    '.ytmusicPlayerControlsNextButton button': buttons.next,
+    '.ytmusicPlayerControlsPreviousButton button': buttons.previous,
+    '.ytmusicPlayerControlsPlayPauseButton button': buttons.playPause,
+    'ytmusic-player': classicApi ? { playerApi: classicApi } : null,
+  }
+  page.document = {
+    querySelector: (selector) => (Object.hasOwn(selectors, selector) ? selectors[selector] : null),
+    querySelectorAll: (selector) => {
+      if (selector === 'video, audio') return media ? [mediaElement] : []
+      if (selector === 'ytmusic-player-queue ytmusic-player-queue-item') return queueItems
+      return []
+    },
+    getElementById: (id) => (id === 'movie_player' ? movie : null),
+  }
+  page.buttons = buttons
+  page.media = mediaElement
+  return page
+}
+
+test('yeni düzen: sonraki / önceki wiz düğmelerine basar, videoId #movie_player’dan doğrulanır', async (context) => {
+  const page = modernPlayerPage()
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'next' })
+  assert.equal(page.buttons.next.clicks, 1)
+  assert.equal(page.index, 1)
+  await bridge.command({ type: 'previous' })
+  assert.equal(page.buttons.previous.clicks, 1)
+  assert.equal(page.index, 0)
+})
+
+test('yeni düzen: medya öğesi yokken oynat / duraklat #movie_player API’siyle, API yoksa wiz düğmesiyle', async (context) => {
+  const page = modernPlayerPage()
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'togglePlay' })
+  await bridge.command({ type: 'togglePlay' })
+  assert.deepEqual(page.calls, [['pauseVideo'], ['playVideo']])
+
+  const noApi = modernPlayerPage({ api: false })
+  const keys = []
+  const bridgeNoApi = createYouTubeMusicBridge({
+    webContents: { ...fakeWebContents(noApi), sendInputEvent: (event) => keys.push(event.keyCode) },
+    room: 'KALP-OFFLINE',
+    syncUrl: 'http://127.0.0.1:9',
+  })
+  context.after(() => bridgeNoApi.destroy())
+  await bridgeNoApi.command({ type: 'togglePlay' })
+  assert.equal(noApi.buttons.playPause.clicks, 1)
+  assert.deepEqual(keys, [])
+})
+
+test('medya öğesi varsa oynat / duraklat ve sarma eskisi gibi medya öğesiyle yapılır', async (context) => {
+  const page = modernPlayerPage({ media: true })
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'togglePlay' })
+  assert.equal(page.media.paused, true)
+  await bridge.command({ type: 'seek', value: 42 })
+  assert.equal(page.media.currentTime, 42)
+  assert.deepEqual(page.calls, [])
+})
+
+test('yeni düzen: medya öğesi yokken sarma seekTo, ses seviyesi setVolume ile uygulanır', async (context) => {
+  const page = modernPlayerPage()
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'seek', value: 42 })
+  assert.deepEqual(page.calls[0], ['seekTo', 42, true])
+  await bridge.command({ type: 'setVolume', value: 30 })
+  assert.ok(page.calls.some(([name, level]) => name === 'setVolume' && level === 30))
+  assert.equal(page.volume, 30)
+})
+
+test('klasik ytmusic-player.playerApi varsa #movie_player yerine o kullanılır', async (context) => {
+  const classicCalls = []
+  const classicApi = {
+    getVideoData: () => ({ video_id: 'classic____' }),
+    setVolume: (level) => classicCalls.push(['setVolume', level]),
+    getVolume: () => 55,
+    isMuted: () => false,
+    unMute: () => {},
+  }
+  const page = modernPlayerPage({ classicApi })
+  const bridge = offlineBridge(page)
+  context.after(() => bridge.destroy())
+  await bridge.command({ type: 'setVolume', value: 55 })
+  assert.deepEqual(classicCalls[0], ['setVolume', 55])
+  assert.ok(!page.calls.some(([name]) => name === 'setVolume'))
+})
