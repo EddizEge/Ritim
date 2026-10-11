@@ -84,6 +84,9 @@ let updateController
 let devicePreferences
 let appearanceStore
 let pairingSecurity
+// Proves the desktop role to the local Sync server (sync-server.cjs); random
+// per launch, kept only in memory.
+let syncDesktopKey = ''
 let isShuttingDown = false
 let activeShellView = 'music'
 const socialActionBridge = createSocialActionBridge({ getSocket: () => socialSocket })
@@ -687,7 +690,7 @@ function createMusicView() {
       publishOwnedRoomPlayback()
     },
     room: ROOM,
-    syncUrl: process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787',
+    syncUrl: require('./sync-server.cjs').desktopSyncUrl(process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', syncDesktopKey),
   })
 }
 
@@ -796,9 +799,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     safeStorage,
     shell,
   })
-  const { startSyncServer } = require('./sync-server.cjs')
+  const { createDesktopKey, startSyncServer } = require('./sync-server.cjs')
+  syncDesktopKey = createDesktopKey()
   syncServer = startSyncServer(path.join(__dirname, '..', 'dist'), 8787, {
     pairingToken: activePairingToken,
+    desktopKey: syncDesktopKey,
     getSocialCompanionTicket: () => socialAuth.createCompanionTicket(),
   })
   if (!syncServer.listening) {
