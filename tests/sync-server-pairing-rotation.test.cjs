@@ -4,7 +4,9 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const { io } = require('socket.io-client')
-const { startSyncServer } = require('../electron/sync-server.cjs')
+const { desktopSyncUrl, startSyncServer } = require('../electron/sync-server.cjs')
+
+const DESKTOP_KEY = 'rotation-desktop-key-12345678901234567890'
 
 function waitForEvent(socket, event, timeoutMs = 2_000) {
   return new Promise((resolve, reject) => {
@@ -33,6 +35,7 @@ test('eşleme anahtarı yenilenince eski telefon düşer, eski anahtar reddedili
   const newToken = 'new_pairing_token_12345678901234567890'
   const server = startSyncServer(distPath, 0, {
     pairingToken: oldToken,
+    desktopKey: DESKTOP_KEY,
     async getSocialCompanionTicket() {
       return { ticket: 'ritim_ct1_test-ticket', expiresIn: 120 }
     },
@@ -46,7 +49,7 @@ test('eşleme anahtarı yenilenince eski telefon düşer, eski anahtar reddedili
   assert.equal(retiredPairingEndpoint.status, 404)
   assert.equal((await retiredPairingEndpoint.text()).includes(oldToken), false)
 
-  const desktop = await connectClient(baseUrl)
+  const desktop = await connectClient(desktopSyncUrl(baseUrl, DESKTOP_KEY))
   const companion = await connectClient(baseUrl)
   const sockets = [desktop, companion]
 
