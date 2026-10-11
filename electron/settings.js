@@ -338,6 +338,7 @@ function renderModerationList(container, empty, users, actionType) {
         controls: [button],
         previous,
         next: previous.filter((item) => item.id !== user.id),
+        latest: () => socialState[listKey] || [],
         apply: (users) => renderSocialState({ ...socialState, [listKey]: users }),
         send: () => settingsApi.sendSocialAction(actionType, { targetUserId: user.id }),
         onSuccess: () => showToast(actionType === 'mute' ? 'Sessize alma kaldırıldı' : 'Engel kaldırıldı'),
@@ -538,6 +539,7 @@ function sendPrivacy() {
       profileVisibility: elements.profileVisibility.value,
       listeningVisibility: elements.listeningVisibility.value,
     },
+    latest: () => ({ ...socialState.privacy }),
     apply: (privacy) => {
       socialState.privacy = { ...socialState.privacy, ...privacy }
       elements.profileVisibility.value = socialState.privacy.profileVisibility
@@ -555,6 +557,10 @@ function sendNotificationPreferences() {
     controls: [elements.messagesEnabled, elements.reactionsEnabled],
     previous: { messagesEnabled: current.messagesEnabled !== false, reactionsEnabled: current.reactionsEnabled !== false },
     next: { messagesEnabled: elements.messagesEnabled.checked, reactionsEnabled: elements.reactionsEnabled.checked },
+    latest: () => ({
+      messagesEnabled: socialState.notificationPreferences.messagesEnabled !== false,
+      reactionsEnabled: socialState.notificationPreferences.reactionsEnabled !== false,
+    }),
     apply: (preferences) => {
       socialState.notificationPreferences = { ...socialState.notificationPreferences, ...preferences }
       elements.messagesEnabled.checked = preferences.messagesEnabled
