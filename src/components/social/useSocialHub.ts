@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { SOCIAL_TEXT } from '../../social/socialShared'
-import { createSocialOutbox, type SocialOutbox } from '../../social/socialOutbox'
+import { sharedSocialOutbox } from '../../social/socialOutbox'
 import type { SocialActionResult, SocialActions, SocialFeedback, SocialState } from '../../social/types'
 
 export type ToastItem = { id: string; tone: SocialFeedback['tone']; text: string }
@@ -12,37 +12,15 @@ function withoutId(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   return next
 }
 
-// One outbox per page: the phone's Social tab unmounts when you switch tabs
-// and a failed message must still be there (with its clientMessageId) when you
-// come back.
-let sharedOutbox: SocialOutbox | null = null
-let outboxSend: SocialActions['sendMessage'] | null = null
-
-function outboxFor(actions: SocialActions) {
-  outboxSend = actions.sendMessage
-  if (!sharedOutbox) {
-    sharedOutbox = createSocialOutbox({
-      send: (userId, text, clientMessageId) => outboxSend
-        ? outboxSend(userId, text, clientMessageId)
-        : Promise.resolve({ ok: false, code: 'offline' }),
-    })
-  }
-  return sharedOutbox
-}
-
 export function useSocialOutbox(state: SocialState, actions: SocialActions) {
-  const outbox = outboxFor(actions)
+  const outbox = sharedSocialOutbox(actions.sendMessage)
   const entries = useSyncExternalStore(outbox.subscribe, outbox.getSnapshot, outbox.getSnapshot)
+  // Each account sees only its own unsent messages (kept per account in local
+  // storage); then whatever the gateway already stored leaves the outbox.
   useEffect(() => {
+    if (state.currentUser.id) outbox.setAccount(state.currentUser.id)
     outbox.reconcile(state.conversations)
-  }, [outbox, state.conversations])
-  // Another account signed in on this device: its chats must not show the
-  // previous account's unsent messages.
-  const accountRef = useRef(state.currentUser.id)
-  useEffect(() => {
-    if (accountRef.current && state.currentUser.id && accountRef.current !== state.currentUser.id) outbox.clear()
-    if (state.currentUser.id) accountRef.current = state.currentUser.id
-  }, [outbox, state.currentUser.id])
+  }, [outbox, state.currentUser.id, state.conversations])
   return { entries, send: outbox.send, retry: outbox.retry }
 }
 
