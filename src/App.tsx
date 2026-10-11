@@ -16,6 +16,7 @@ import {
   isNativeMobile,
   parsePairingLink,
   readMobilePairing,
+  resetMobileSecureStorage,
   saveMobilePairing,
   webDevelopmentPairing,
   type MobilePairingConfig,
@@ -218,11 +219,13 @@ export default function App() {
     return (
       <PairingUnreadable
         onRetry={() => { setPairingUnreadable(false); setPairing(undefined); setPairingReadAttempt((attempt) => attempt + 1) }}
-        // Only after the user confirmed: forget the unreadable pairing and open
-        // the QR screen, even if removing the old records failed.
+        // Only after the user confirmed: forget the unreadable pairing, wipe
+        // the secure storage and its key, and open the QR screen, even if
+        // removing the old records failed.
         onRepair={() => repairUnreadablePairing({
           clearPairing: () => enqueuePairingMutation(() => clearMobilePairing()),
           clearSocialIdentity: () => clearSocialIdentityForPairingReset(),
+          resetSecureStorage: () => enqueuePairingMutation(() => resetMobileSecureStorage()),
         }, () => {
           setPairingUnreadable(false)
           setPairing(null)

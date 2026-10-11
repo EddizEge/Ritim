@@ -28,6 +28,7 @@ public class RitimSecureStoragePlugin extends Plugin {
     private static final String TAG = "RitimSecureStorage";
     // JavaScript retries or reports this; the record is kept.
     static final String UNAVAILABLE_CODE = "SECURE_STORAGE_UNAVAILABLE";
+    static final String RESET_FAILED_CODE = "SECURE_STORAGE_RESET_FAILED";
     private static final String KEY_ALIAS = "app.ritim.mobile.social.session.v1";
     private static final String PREFERENCES = "ritim_secure_storage_v1";
     private static final Pattern SAFE_KEY = Pattern.compile("^[A-Za-z0-9._-]{1,80}$");
@@ -62,12 +63,16 @@ public class RitimSecureStoragePlugin extends Plugin {
     // ones; the next secretKey() call creates a fresh one.
     private void deleteSecretKey() {
         try {
-            KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
-            keyStore.load(null);
-            keyStore.deleteEntry(KEY_ALIAS);
+            deleteSecretKeyOrThrow();
         } catch (Exception error) {
             Log.w(TAG, "Geçersiz Keystore anahtarı silinemedi (" + error.getClass().getSimpleName() + ").");
         }
+    }
+
+    private void deleteSecretKeyOrThrow() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (keyStore.containsAlias(KEY_ALIAS)) keyStore.deleteEntry(KEY_ALIAS);
     }
 
     private String encrypt(String value) throws Exception {
@@ -172,5 +177,27 @@ public class RitimSecureStoragePlugin extends Plugin {
         if (key == null) return;
         preferences().edit().remove(key).apply();
         call.resolve();
+    }
+
+    // Wipes every record and the Keystore key (SecureStorageReset). JavaScript
+    // calls this only after the user confirmed "Yeniden eşle"
+    // (src/pairingRecovery.ts); get() never resets on a temporary failure.
+    @PluginMethod
+    public void reset(PluginCall call) {
+        SecureStorageReset.Result result = SecureStorageReset.run(
+            () -> {
+                if (!preferences().edit().clear().commit()) {
+                    throw new IllegalStateException("Güvenli depolama kayıtları silinemedi.");
+                }
+            },
+            this::deleteSecretKeyOrThrow
+        );
+        if (result.complete()) {
+            Log.i(TAG, "Güvenli depolama kullanıcı onayıyla sıfırlandı.");
+            call.resolve();
+            return;
+        }
+        Log.w(TAG, "Güvenli depolama tam sıfırlanamadı (" + result.failure + ").");
+        call.reject("Android güvenli depolama sıfırlanamadı.", RESET_FAILED_CODE);
     }
 }
