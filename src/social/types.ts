@@ -193,6 +193,10 @@ export type SocialState = {
   activeRoomId?: string
   // Last moment this device was known to be connected to Ritim Social.
   lastOnlineAt?: number
+  // Phone only: the saved Ritim Social session could not be read from the
+  // Android Keystore right now (it is kept). The Social screen says so and
+  // offers "Tekrar dene"; nothing retries on its own.
+  connectionIssue?: 'secure-storage'
 }
 
 // Acknowledgement of a direct message; `code` explains a failure
