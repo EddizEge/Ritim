@@ -1,16 +1,16 @@
 # Ritim — Claude için ayrıntılı proje teslim notu
 
-Belge tarihi: **28 Eylül 2026**. Geliştirici: **Ediz Ege Mercan**.
-Depo: <https://github.com/EddizEge/Ritim>.
-Yayınlanan Beta 1: <https://github.com/EddizEge/Ritim/releases/tag/v0.9.1-beta.1>.
+Belge tarihi: **11 Ekim 2026** (ilk devir 28 Eylül 2026). Geliştirici:
+**Ediz Ege Mercan**. Depo: <https://github.com/EddizEge/Ritim>.
+Yayınlar: <https://github.com/EddizEge/Ritim/releases>.
 
-Bu belge projenin mevcut durumunu ve geçmiş kararları devreder. Son kullanıcı
-isteği Beta 1'i GitHub'da ön sürüm olarak yayınlamak ve projeyi Claude'a
-teslim etmektir. Son fiziksel kabul turu şimdilik ertelenmiştir; testleri
-tamamlanmış varsayma. Beta 1, 28 Eylül'de Windows kurucusu ve kalıcı imzalı
-Android APK'sıyla yayınlandı. Yayın kurtarma akışı başarılı; indirilen dört
-varlık, APK kimliği/sürümü/sertifikası ve Windows kanal metadata'sı doğrulandı.
-Yayın kanıtı ve ilk denemedeki doğrulayıcı sorunu Bölüm 15'te kayıtlıdır.
+Bu belge projenin mevcut durumunu ve geçmiş kararları devreder. Beta 1,
+28 Eylül'de Windows kurucusu ve kalıcı imzalı Android APK'sıyla yayınlandı;
+Beta 2 (9 Ekim), Beta 3 (10 Ekim) ve Beta 4 (11 Ekim) onu izledi. Kararlı
+`0.9.1`'in sürümü ve yayın notu bu belgeyle birlikte hazırlandı; yayının
+güncel durumunu GitHub Releases'tan oku. Beta 1'den ertelenen fiziksel kabul
+turu hâlâ tamamlanmadı; testleri tamamlanmış varsayma. Yayın kanıtları
+Bölüm 15'te kayıtlıdır.
 
 ## 1. İlk okunacaklar ve gerçek kaynaklar
 
@@ -18,7 +18,8 @@ Yayın kanıtı ve ilk denemedeki doğrulayıcı sorunu Bölüm 15'te kayıtlıd
 2. Bu belge: bağlam, geçmiş, dosya haritası ve sıradaki işler.
 3. `docs/v0.9-roadmap.md`: ürün kapsamı ve sürüm hedefleri.
 4. `docs/v0.9-beta1-implementation.md`: Beta 1 dilimleri ve kabul kayıtları.
-5. `docs/releases/v0.9.1-beta.1.md`: iki dilli yayın notu ve test sınırları.
+5. `docs/releases/`: iki dilli yayın notları. Kararlı sürümün notu ve
+   bilinen sınırları `v0.9.1.md`'dedir.
 6. `deploy/pi/README.md`: canlı altyapı düzeni ve migration yöntemi.
 
 Kanonik Windows deposu `C:\Users\Eddiz\Yt music App`'tir.
@@ -68,6 +69,10 @@ Kullanıcıyla Türkçe, samimi ve net iletişim kur. Geliştirici adı tam olar
 | Alpha 3, 28 Temmuz | Birebir mesajlar/istekler, bildirimler, engelleme/sessize alma/şikâyet, yeniden bağlanma | Sonraki Alpha 4 kapsamına dahil; ayrı tag varsayma |
 | Alpha 4, 14 Ağustos | 8 kişilik odalar, oynatma zamanı/revision senkronu, sohbet/tepkiler, hata durumları | GitHub ön sürümü `v0.9.0-alpha.4` |
 | Beta 1, Ağustos–Eylül | Hesap/cihaz, ayarlar, gizlilik/bildirim, görünüm, güvenli eşleme, updater ve Hakkında | `0.9.1-beta.1`, 28 Eylül'de yayınlandı; son fiziksel tur ertelendi |
+| Beta 2, 9 Ekim | Devir incelemesindeki hatalar: bozuk yük çökmeleri, PostgreSQL mesaj izni, yayın iş akışının sertleştirilmesi | `0.9.1-beta.2`; `docs/releases/v0.9.1-beta.2.md` |
+| Beta 3, 10 Ekim | Sosyal bölüm yenilendi: PC'de telefonla aynı React sosyal arayüzü, ack'li sosyal eylemler, ayrı bildirim ekranı | `0.9.1-beta.3`; sunucu migration `090` dahil |
+| Beta 4, 11 Ekim | Telefondan beğen/tekrar, Beta 1 güncelleme hatasının (MAX_PATH) düzeltmesi, Windows/Android ortak kanal kuralı, Sync V2 desktop anahtarı, kalıcı giden kutusu, Android güvenli depolama | `0.9.1-beta.4`; sosyal sunucu değişmedi |
+| 0.9.1 | İlk kararlı sürüm: Beta 4 kodu, kararlı sürüm numarası ve notu | `docs/releases/v0.9.1.md` |
 
 Eski Alpha 2/4 etiketleri `0.9.0-alpha.*` olsa da iç uygulama sürümü `0.9.0`
 olarak paketlenmişti. Bu tarihsel tutarsızlık Beta 1'de düzeltildi. Beta'nın
@@ -351,6 +356,23 @@ sertifikayı incele ve ayrı veri koruma planı oluştur; ihtiyaç yoksa ertele.
 
 İlk Alpha → Beta geçiş bir kez elle paket kurulumu ister. Sonraki Beta
 güncellemeleri `beta.yml`, kararlı `latest.yml`, RC `rc.yml` kullanır.
+
+Beta 4'ten beri kanal kuralı Windows ve Android'de aynıdır: alpha → alpha,
+beta, rc, kararlı; beta → beta, rc, kararlı; rc → rc, kararlı; kararlı →
+yalnız kararlı. Sürüm hiçbir zaman düşürülmez. Windows'ta bunu
+`electron/updater.cjs` içindeki `RitimGitHubProvider` yapar: kanalın kabul
+ettiği en yüksek sürümü seçer ve o yayının kendi `*.yml` dosyasını okur.
+electron-updater'ın iç sağlayıcı dosyalarına dayanır; paket güncellenirse
+`tests/updater-channels.test.cjs` mutlaka koşulmalı. Beta 1–3'ün eski
+güncelleyicisi kararlı yayında `beta.yml` bulamayınca `latest.yml`'a düşer.
+0.8.4 ve Alpha (`0.9.0`) kurulumları `/releases/latest` üzerinden yalnız
+kararlı yayını görür.
+
+Kurucu (`build/installer.nsh`), eski sürümün kaldırıcısı çalışmadan önce
+kurulu sürümdeki `@capacitor` ve `@capacitor-mlkit` klasörlerini siler. Beta 1
+yerel derlemesindeki bu klasörlerin uzun yolları eski kaldırıcıyı MAX_PATH
+hatasıyla durduruyordu. Masaüstü paketi telefon paketlerini içermez; yayın iş
+akışı kurulum yolu 200 karakteri aşarsa durur (`build/check-package-paths.cjs`).
 Windows updater denetleme/indirme/kurma adımlarını ayırır; kurucu başlatma
 başarısızsa Ritim'i erken kapatmaz. `prepareForUpdate()` / `stopRuntime()`
 Discord, köprü, sunucu, pencereler ve single-instance lock'u sırayla kapatır.
@@ -358,6 +380,15 @@ Android DownloadManager indirir; kurulum kullanıcı dokunuşuyla başlar ve
 paket kimliği/kodu/sertifika native katmanda doğrulanır.
 
 ## 14. Test kanıtı ve erteleme listesi
+
+11 Ekim 2026, Beta 4: Windows'ta `npm test` 347 test, 336 geçti, 11 atlandı,
+0 hata. Atlananlar PostgreSQL/gateway ortamı isteyen testlerdir; CI'daki
+`social-gateway` işi bunları PostgreSQL ve Redis ile koşar. CI'da web,
+social-gateway ve android işleri yeşildi. Bunlar fiziksel test değildir.
+CI Linux'ta koşar: platforma bağlı test (ör. electron-updater kanal dosya
+adları) yazarken Linux'u da düşün.
+
+Aşağıdaki 28 Eylül kaydı tarihseldir.
 
 28 Eylül 2026'da tüm `.test.cjs`/`.test.ts` dosyaları
 `node --import tsx --test <dosyalar>` ile çalıştırıldı:
@@ -455,6 +486,26 @@ sertifika olmalıdır. Source Stamp kimliği yayın signer'ı yerine kabul edilm
 | `beta.yml` | 360 | `ddb884b2ea17f92ad49ddd5d2fcb01529ec269916b0d9b6692e2ab69b7c11d34` |
 | `Ritim-Android-v0.9.1-beta.1.apk` | 30780416 | `c4da35650e1a92b84c0ad6b96939b19091e964e4c81205b0abf616b468c4731d` |
 
+### 11 Ekim Beta 4 yayın kanıtı
+
+- PR #22 CI'dan geçip main'e birleşti (`cb58619`). Annotated `v0.9.1-beta.4`
+  tag'i bu commit'tedir. [Release çalışması](https://github.com/EddizEge/Ritim/actions/runs/38110347149)
+  windows ve android işlerinde başarılı; yayın ön sürüm olarak açıldı.
+- İndirilen dört dosyanın SHA-256 değerleri GitHub digest'leriyle aynı.
+  `beta.yml`'daki sürüm, dosya adı, boyut ve SHA-512 kurucuyla eşleşti.
+- APK: `app.ritim.mobile`, `versionName=0.9.1-beta.4`, `versionCode=90144`,
+  min SDK 24, target SDK 36, debuggable değil, tek v2 imzacı, kalıcı sertifika.
+- Gerçek yayınlara karşı salt okuma denemesi: Beta 1 ve Beta 3'ün eski
+  güncelleyicisi ile yeni sağlayıcı Beta 4'ü buldu; 0.8.4 ve Alpha güncelleme
+  görmedi. Android politikası Beta 3'ten Beta 4'ü seçip APK adresini kabul etti.
+
+| Yayın dosyası | Bayt | SHA-256 |
+| --- | ---: | --- |
+| `Ritim-Setup-0.9.1-beta.4.exe` | 106518199 | `89d89717902adc3aaa618fb50a3fdd4433d2717b4fd15142b543068663a304ce` |
+| `Ritim-Setup-0.9.1-beta.4.exe.blockmap` | 112993 | `6bb20ab59e28e969ebd837390524a670b061cfd8689d0e6126667c516377bc57` |
+| `beta.yml` | 360 | `3f4c6f5d9a2e716e47b85a3261c89715ddeeb8c6db58b616f8405a4cc0735877` |
+| `Ritim-Android-v0.9.1-beta.4.apk` | 29196244 | `e99b6910a70382698da391f8caf0d6ffc377a88c21984e9f19bb030d68ea7d89` |
+
 Gelecekte yarım bir yayında tag'i taşımadan Android kurtarması gerekirse güncel
 `Release` workflow'unun manuel `tag` girdisini kullan. Önce kaynak tag/paket
 eşleşmesi ve mevcut Windows varlıkları doğrulanır. Eski `android-package.yml`
@@ -476,7 +527,8 @@ yalnız görünen semver, son düzeltmelerin kurulduğunu kanıtlamaz.
 
 ## 16. Claude ile önerilen devam sırası
 
-Önce mevcut Beta1 release/workflow sonucunu ve repo temizliğini doğrula.
+Önce son yayının (GitHub Releases) iş akışı sonucunu ve repo temizliğini
+doğrula.
 Kullanıcıya açık test borcunu kısa anlat; ardından kullanıcının yeni talebine
 göre ilerle. Son fiziksel tur ertelenmişken aynı testi yeniden yayın engeline
 dönüştürme. Yeni düzeltmeler gerekirse yayımlanmış Beta1 tag'ini taşımak veya

@@ -39,6 +39,7 @@ Ritim, resmi YouTube Music sitesini ayrı bir Windows masaüstü uygulamasında 
 - Play-next, remove and clear actions operate on the real YouTube Music queue.
 - Cached mobile content remains available while the PC connection is recovering.
 - Secure local pairing token; Google cookies and passwords never leave the PC.
+- Ritim Social: see what friends are listening to, message them and listen together in rooms of up to eight; everyone listens on their own PC.
 - Discord Rich Presence support.
 - GitHub Releases update checks on desktop and Android.
 
@@ -51,6 +52,6 @@ Ritim, resmi YouTube Music sitesini ayrı bir Windows masaüstü uygulamasında 
 
 Development and architecture details are available in [Türkçe](docs/README.tr.md) and [English](docs/README.en.md).
 
-Beta 4: [release notes](docs/releases/v0.9.1-beta.4.md) · [Beta 3](docs/releases/v0.9.1-beta.3.md) · [Beta 2](docs/releases/v0.9.1-beta.2.md) · [Beta 1](docs/releases/v0.9.1-beta.1.md) · [roadmap](docs/v0.9-roadmap.md) · [Claude project handoff / proje teslim notu](docs/CLAUDE_HANDOFF.md).
+0.9.1: [release notes](docs/releases/v0.9.1.md) · [Beta 4](docs/releases/v0.9.1-beta.4.md) · [Beta 3](docs/releases/v0.9.1-beta.3.md) · [Beta 2](docs/releases/v0.9.1-beta.2.md) · [Beta 1](docs/releases/v0.9.1-beta.1.md) · [roadmap](docs/v0.9-roadmap.md) · [Claude project handoff / proje teslim notu](docs/CLAUDE_HANDOFF.md).
 
 > Ritim is an independent project and is not affiliated with, endorsed by, or sponsored by Google or YouTube. YouTube and YouTube Music are trademarks of Google LLC.

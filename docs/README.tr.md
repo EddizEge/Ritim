@@ -32,7 +32,7 @@ Windows Güvenlik Duvarı ilk bağlantıda Ritim’e yerel ağ izni sorabilir. Y
 
 ## Güncellemeler
 
-Paketli Windows uygulaması GitHub Releases üzerinde yeni sürüm arar. **Ayarlar → Güncellemeler** ile denetleyebilir, indirmeyi başlatabilir ve hazır paketi **Yeniden başlat ve kur** ile kurabilirsin. Beta sürümleri Beta kanalını kullanır. Eski Alpha'dan Beta 1'e ilk geçiş bir kez elle kurulum gerektirir.
+Paketli Windows uygulaması GitHub Releases üzerinde yeni sürüm arar. **Ayarlar → Güncellemeler** ile denetleyebilir, indirmeyi başlatabilir ve hazır paketi **Yeniden başlat ve kur** ile kurabilirsin. Kararlı kurulumlar yalnız kararlı sürümleri alır; Beta kurulumları Beta, RC ve kararlı sürümleri alır. Sürüm hiçbir zaman düşürülmez. Eski Alpha'dan Beta 1'e ilk geçiş bir kez elle kurulum gerektirmişti.
 
 Android uygulaması uygun GitHub sürümünü denetler; indirmeyi sistem Download Manager üzerinden takip eder. APK kurulumu kullanıcı onayıyla başlar. Yayın APK'ları kalıcı Ritim sertifikası kullanır; farklı yerel debug sertifikasıyla kurulmuş geliştirme uygulaması bunun üzerine güncellenemez.
 
@@ -72,6 +72,6 @@ Android Ritim ── yerel ağ / Socket.IO ── Windows Ritim ── resmi You
 
 YouTube Music’in sayfa yapısı Google tarafından değiştirildiğinde köprünün seçicileri güncellenmek zorunda kalabilir. Yerel Android derlemesi varsayılan debug imzasını, GitHub yayınları kalıcı Ritim sertifikasını kullanır; build variant adı tek başına imzayı belirlemez. Yerel PC–telefon kumandası aynı erişilebilir ağda çalışır; internet sosyal bağlantısı bu yerel kumandayı bir uzak ağ geçidine dönüştürmez.
 
-Beta 1'in son fiziksel kabul turu kullanıcı kararıyla sonraki aşamaya ertelendi; Beta 2 devir incelemesindeki hataları düzeltti, Beta 3 sosyal bölümü yeniledi, Beta 4 kararlı 0.9.1 öncesindeki son düzeltme ön sürümüdür. [Beta 4 yayın notu](releases/v0.9.1-beta.4.md), [Beta 3 yayın notu](releases/v0.9.1-beta.3.md), [Beta 2 yayın notu](releases/v0.9.1-beta.2.md), [Beta 1 yayın notu](releases/v0.9.1-beta.1.md), [yol haritası](v0.9-roadmap.md) ve [Claude teslim notu](CLAUDE_HANDOFF.md) kapsamı ve bekleyen işleri açıklar.
+0.9.1, v0.9'un ilk kararlı sürümüdür. Kullanıcı kararıyla Beta 1'den beri ertelenen son fiziksel kabul turu bu sürümden önce tamamlanmadı; denenmeyenler yayın notunda yazılıdır. [0.9.1 yayın notu](releases/v0.9.1.md), [Beta 4 yayın notu](releases/v0.9.1-beta.4.md), [Beta 3 yayın notu](releases/v0.9.1-beta.3.md), [Beta 2 yayın notu](releases/v0.9.1-beta.2.md), [Beta 1 yayın notu](releases/v0.9.1-beta.1.md), [yol haritası](v0.9-roadmap.md) ve [Claude teslim notu](CLAUDE_HANDOFF.md) kapsamı ve bekleyen işleri açıklar.
 
 Ritim bağımsız bir projedir; Google veya YouTube ile bağlantılı, onaylı ya da sponsorlu değildir.
