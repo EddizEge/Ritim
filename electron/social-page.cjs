@@ -6,7 +6,10 @@ const path = require('node:path')
 const SOCIAL_SCHEME = 'ritim-app'
 const SOCIAL_HOST = 'social'
 const SOCIAL_PAGE_PATH = '/desktop-social.html'
-const SOCIAL_PARTITION = 'ritim-social'
+// Persistent so the view's local storage survives a restart: unsent direct
+// messages wait there (src/social/socialOutbox.ts). The page keeps nothing
+// else in it; Google's session lives in its own partition.
+const SOCIAL_PARTITION = 'persist:ritim-social'
 const DEFAULT_DEV_SERVER_URL = 'http://localhost:5173'
 
 const CONTENT_TYPES = Object.freeze({
