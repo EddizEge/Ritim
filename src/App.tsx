@@ -20,6 +20,7 @@ import {
   type MobilePairingConfig,
 } from './mobileConfig'
 import { getTrack } from './data'
+import { isSecureStorageUnavailable } from './secureStorageRead'
 import { configuredSocialUrl, useSocial } from './hooks/useSocial'
 import { useSocialAccount } from './hooks/useSocialAccount'
 import { clearSocialIdentityForPairingReset, signOutExistingSocialSession } from './social/auth'
@@ -84,6 +85,10 @@ export default function App() {
   const responsiveCompanion = useCompanionMode()
   const companion = isNativeMobile || responsiveCompanion
   const [pairing, setPairing] = useState<MobilePairingConfig | null | undefined>(undefined)
+  // The Keystore could not be read (locked, busy): the saved pairing is kept
+  // and the user can try again instead of being asked to pair anew.
+  const [pairingUnreadable, setPairingUnreadable] = useState(false)
+  const [pairingReadAttempt, setPairingReadAttempt] = useState(0)
   const [appearance, setAppearance] = useState(readAppearancePreferences)
   const pairingMutationRef = useRef(createPairingMutationQueue())
 
@@ -165,7 +170,9 @@ export default function App() {
       if (!disposed) setPairing(initial)
     })().catch((error) => {
       console.warn('[Ritim] Kayıtlı telefon eşlemesi okunamadı:', error)
-      if (!disposed) setPairing(null)
+      if (disposed) return
+      if (isNativeMobile && isSecureStorageUnavailable(error)) setPairingUnreadable(true)
+      else setPairing(null)
     })
     if (isNativeMobile) {
       void CapacitorApp.addListener('appUrlOpen', ({ url }) => { void processUrl(url) })
@@ -179,7 +186,7 @@ export default function App() {
       disposed = true
       void removeListener?.()
     }
-  }, [applyIncomingPairing, enqueuePairingMutation])
+  }, [applyIncomingPairing, enqueuePairingMutation, pairingReadAttempt])
 
   const acceptPairing = useCallback((next: MobilePairingConfig) => (
     enqueuePairingMutation(() => applyIncomingPairing(next))
@@ -205,6 +212,9 @@ export default function App() {
     })
   }
 
+  if (pairingUnreadable) {
+    return <main className="native-pairing-shell"><section className="native-pairing-card"><p>Kayıtlı PC eşlemesi şu an okunamadı. Eşleme silinmedi; telefonun kilidini açıp tekrar dene.</p><button type="button" className="native-scan-button" onClick={() => { setPairingUnreadable(false); setPairing(undefined); setPairingReadAttempt((attempt) => attempt + 1) }}>Tekrar dene</button></section></main>
+  }
   if (pairing === undefined) {
     return <main className="native-pairing-shell"><section className="native-pairing-card"><p>Ritim bağlantısı hazırlanıyor…</p></section></main>
   }
