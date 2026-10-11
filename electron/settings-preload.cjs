@@ -16,7 +16,8 @@ contextBridge.exposeInMainWorld('ritimSettings', {
   revokeSocialDevice: (deviceId) => ipcRenderer.invoke('settings:revoke-social-device', deviceId),
   signOutSocial: () => ipcRenderer.invoke('settings:social-sign-out'),
   signInSocial: () => ipcRenderer.invoke('settings:social-sign-in'),
-  sendSocialAction: (type, payload) => ipcRenderer.send('settings:social-action', { type, payload }),
+  // Resolves with the gateway acknowledgement: { ok: true } or { ok: false, code }.
+  sendSocialAction: (type, payload) => ipcRenderer.invoke('settings:social-action', { type, payload }),
   onSocialState: (listener) => {
     const handler = (_event, state) => listener(state)
     ipcRenderer.on('settings:social-state', handler)
