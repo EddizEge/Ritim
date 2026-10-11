@@ -1,6 +1,16 @@
 const crypto = require('node:crypto')
 const { io } = require('socket.io-client')
 const { planRoomPlaybackCorrection } = require('./room-playback-sync.cjs')
+const {
+  applyLikeCommand,
+  applyRepeatCommand,
+  clickPlayerControlInPage,
+  nextRepeatMode,
+  normalizeLikeStatus,
+  normalizeRepeatMode,
+  readPlayerControlsInPage,
+  toRitimRepeat,
+} = require('./ytmusic-player-controls.cjs')
 
 function trackId(title, artist) {
   return `ytmusic:${crypto.createHash('sha1').update(`${title}|${artist}`).digest('hex').slice(0, 14)}`
@@ -18,8 +28,10 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     duration: 0, cover: 0, source: 'ytmusic',
   }
   let state = {
+    // Karıştır YouTube Music'te kalıcı mod değil, tek seferlik eylemdir: shuffle hep false.
+    // liked yalnız çalan parçayı içerir; likeStatus/repeat/adPlaying sayfadan okunur.
     trackId: idleTrack.id, isPlaying: false, position: 0, volume: 68, shuffle: false, repeat: 'off',
-    liked: [], queue: [idleTrack.id], catalog: { [idleTrack.id]: idleTrack },
+    liked: [], adPlaying: false, queue: [idleTrack.id], catalog: { [idleTrack.id]: idleTrack },
     browse: { route: 'home', title: 'Ana Sayfa', url: 'https://music.youtube.com/', filters: [], sections: [], updatedAt: 0 },
     lyrics: { trackId: idleTrack.id, status: 'idle', lines: [] },
     related: { trackId: idleTrack.id, status: 'idle', items: [] },
@@ -66,6 +78,55 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
 
   function delay(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds))
+  }
+
+  async function readControlVideoId() {
+    if (destroyed || webContents.isDestroyed()) return ''
+    return String(await webContents.executeJavaScript(`(() => {
+      const playerApi = document.querySelector('ytmusic-player')?.playerApi || document.getElementById('movie_player');
+      let data = {};
+      try { data = playerApi?.getVideoData?.() || {}; } catch {}
+      let videoId = String(data.video_id || data.videoId || '');
+      try { videoId = videoId || new URL(location.href).searchParams.get('v') || ''; } catch {}
+      return videoId;
+    })()`, true) || '')
+  }
+
+  async function readControls(videoId) {
+    if (destroyed || webContents.isDestroyed()) throw new Error('YouTube Music görünümü kapalı')
+    return webContents.executeJavaScript(`(${readPlayerControlsInPage})(document, ${JSON.stringify(videoId)})`, true)
+  }
+
+  async function clickControl(kind) {
+    if (destroyed || webContents.isDestroyed()) return false
+    return Boolean(await webContents.executeJavaScript(`(${clickPlayerControlInPage})(document, ${JSON.stringify(kind)})`, true))
+  }
+
+  function publishControls(videoId, controls) {
+    const current = state.catalog?.[state.trackId]
+    const sameTrack = Boolean(videoId) && (current?.youtubeVideoId === videoId || state.trackId === `ytmusic:video:${videoId}`)
+    const likeStatus = normalizeLikeStatus(controls?.likeStatus)
+    const repeatMode = normalizeRepeatMode(controls?.repeatMode)
+    state = {
+      ...state,
+      ...(sameTrack && likeStatus ? { likeStatus, liked: likeStatus === 'LIKE' ? [state.trackId] : [] } : {}),
+      ...(repeatMode ? { repeat: toRitimRepeat(repeatMode) } : {}),
+      adPlaying: Boolean(controls?.adPlaying),
+      shuffle: false,
+    }
+    publishState()
+  }
+
+  async function setLike(target) {
+    const videoId = await readControlVideoId()
+    const controls = await applyLikeCommand({ target, videoId, read: () => readControls(videoId), click: clickControl })
+    publishControls(videoId, controls)
+  }
+
+  async function setRepeat(target) {
+    const videoId = await readControlVideoId()
+    const controls = await applyRepeatCommand({ target, read: () => readControls(videoId), click: clickControl })
+    publishControls(videoId, controls)
   }
 
   async function waitForPlayerTrack(videoId, title = '', timeout = 7500) {
@@ -993,8 +1054,19 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
     }
     if (command.type === 'next') await clickPlayerButton('next')
     if (command.type === 'previous') await clickPlayerButton('previous')
-    if (command.type === 'toggleShuffle') sendKey('S')
-    if (command.type === 'cycleRepeat') sendKey('R')
+    if (command.type === 'toggleShuffle') {
+      // Tek seferlik karıştırma: gerçek düğme, bulunamazsa YouTube Music kısayolu.
+      if (!(await clickControl('shuffle'))) sendKey('S')
+      setTimeout(() => void capture(), 150)
+    }
+    if (command.type === 'like') await setLike(command.value)
+    if (command.type === 'repeat') await setRepeat(command.value)
+    if (command.type === 'cycleRepeat') {
+      // Eski telefon sürümleri için: bir sonraki moda geç.
+      const videoId = await readControlVideoId()
+      const controls = await readControls(videoId)
+      await setRepeat(nextRepeatMode(controls?.repeatMode || 'NONE'))
+    }
     if (command.type === 'seek' && Number.isFinite(Number(command.value))) {
       const seconds = Math.max(0, Number(command.value))
       await webContents.executeJavaScript(`(() => {
@@ -1627,6 +1699,9 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
           volume: Number.isFinite(playerApiVolume) ? playerApiVolume : player ? (player.muted ? 0 : player.volume * 100) : 68,
           paused: player ? player.paused : null,
           currentVideoId,
+          controls: (() => {
+            try { return (${readPlayerControlsInPage})(document, currentVideoId); } catch { return null; }
+          })(),
           queueAligned: selectedByVideoIndex >= 0 || selectedReduxIndex >= 0,
           queue,
           lyricsLines,
@@ -1752,15 +1827,23 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
       const related = relatedItems.length
         ? { trackId: id, status: 'ready', items: relatedItems }
         : previousRelated
+      const controls = media.controls && typeof media.controls === 'object' ? media.controls : null
+      const capturedLikeStatus = normalizeLikeStatus(controls?.likeStatus)
+      const likeStatus = capturedLikeStatus || (id === state.trackId ? state.likeStatus || '' : '')
+      const repeatMode = normalizeRepeatMode(controls?.repeatMode)
+      const repeat = repeatMode ? toRitimRepeat(repeatMode) : state.repeat
+      const adPlaying = Boolean(controls?.adPlaying)
+      const liked = likeStatus === 'LIKE' ? [id] : []
       const lyricsSignature = JSON.stringify([lyrics.status, lyrics.lines])
       const relatedSignature = JSON.stringify([related.status, related.items])
       const accountSignature = JSON.stringify(accountProfile)
-      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature, accountSignature])
+      const signature = JSON.stringify([id, track.collection, track.thumbnailUrl, isPlaying, position, track.duration, volume, queueIds, browseSignature, lyricsSignature, relatedSignature, accountSignature, likeStatus, repeat, adPlaying])
       if (signature === lastSignature) return
       lastSignature = signature
       state = {
         ...state, trackId: id, isPlaying, position, volume, queue: queueIds,
-        catalog, browse, lyrics, related, accountProfile, updatedAt: Date.now(),
+        catalog, browse, lyrics, related, accountProfile,
+        liked, likeStatus: likeStatus || undefined, repeat, shuffle: false, adPlaying, updatedAt: Date.now(),
       }
       socket.emit('player:update', { room, state })
       onState?.(state)
