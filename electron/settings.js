@@ -50,6 +50,7 @@ const fallbackData = {
 }
 
 const settingsApi = window.ritimSettings
+const settingsAck = window.RitimSettingsAck
 let accountState
 let socialState = fallbackData.socialState
 let desktopNotifications = false
@@ -142,10 +143,31 @@ systemThemeQuery.addEventListener('change', () => {
   if (appearancePreferences.theme === 'system') applyAppearancePreferences(appearancePreferences)
 })
 
-function showToast(message) {
+let toastTimer
+function showToast(message, durationMs = 2000) {
   elements.toast.textContent = message
   elements.toast.classList.add('is-visible')
-  window.setTimeout(() => elements.toast.classList.remove('is-visible'), 2000)
+  window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => elements.toast.classList.remove('is-visible'), durationMs)
+}
+
+function showSocialActionError(message) {
+  showToast(message, 4500)
+}
+
+// Social changes stay on screen only after the gateway acknowledges them
+// (settings-ack.js); the controls are locked while the answer is pending.
+async function runSocialChange({ controls = [], ...change }) {
+  if (!settingsApi) {
+    change.apply(change.next)
+    return { ok: true }
+  }
+  for (const control of controls) control.disabled = true
+  try {
+    return await settingsAck.runAcknowledgedChange({ ...change, onError: showSocialActionError })
+  } finally {
+    for (const control of controls) control.disabled = false
+  }
 }
 
 function renderPairingState(next) {
@@ -309,7 +331,18 @@ function renderModerationList(container, empty, users, actionType) {
     copy.append(name, handle)
     const button = document.createElement('button')
     button.textContent = actionType === 'mute' ? 'Sesi aç' : 'Engeli kaldır'
-    button.addEventListener('click', () => settingsApi?.sendSocialAction(actionType, { targetUserId: user.id }))
+    button.addEventListener('click', () => {
+      const listKey = actionType === 'mute' ? 'mutedUsers' : 'blockedUsers'
+      const previous = socialState[listKey] || []
+      void runSocialChange({
+        controls: [button],
+        previous,
+        next: previous.filter((item) => item.id !== user.id),
+        apply: (users) => renderSocialState({ ...socialState, [listKey]: users }),
+        send: () => settingsApi.sendSocialAction(actionType, { targetUserId: user.id }),
+        onSuccess: () => showToast(actionType === 'mute' ? 'Sessize alma kaldırıldı' : 'Engel kaldırıldı'),
+      })
+    })
     row.append(copy, button)
     container.append(row)
   }
@@ -498,17 +531,37 @@ elements.downloadUpdateButton.addEventListener('click', async () => {
 })
 elements.installUpdateButton.addEventListener('click', () => settingsApi?.installUpdate())
 function sendPrivacy() {
-  settingsApi?.sendSocialAction('privacy', {
-    profileVisibility: elements.profileVisibility.value,
-    listeningVisibility: elements.listeningVisibility.value,
+  void runSocialChange({
+    controls: [elements.profileVisibility, elements.listeningVisibility],
+    previous: { ...socialState.privacy },
+    next: {
+      profileVisibility: elements.profileVisibility.value,
+      listeningVisibility: elements.listeningVisibility.value,
+    },
+    apply: (privacy) => {
+      socialState.privacy = { ...socialState.privacy, ...privacy }
+      elements.profileVisibility.value = socialState.privacy.profileVisibility
+      elements.listeningVisibility.value = socialState.privacy.listeningVisibility
+    },
+    send: (privacy) => settingsApi.sendSocialAction('privacy', privacy),
+    onSuccess: () => showToast('Gizlilik ayarı kaydedildi'),
   })
 }
 elements.profileVisibility.addEventListener('change', sendPrivacy)
 elements.listeningVisibility.addEventListener('change', sendPrivacy)
 function sendNotificationPreferences() {
-  settingsApi?.sendSocialAction('notification-preferences', {
-    messagesEnabled: elements.messagesEnabled.checked,
-    reactionsEnabled: elements.reactionsEnabled.checked,
+  const current = socialState.notificationPreferences
+  void runSocialChange({
+    controls: [elements.messagesEnabled, elements.reactionsEnabled],
+    previous: { messagesEnabled: current.messagesEnabled !== false, reactionsEnabled: current.reactionsEnabled !== false },
+    next: { messagesEnabled: elements.messagesEnabled.checked, reactionsEnabled: elements.reactionsEnabled.checked },
+    apply: (preferences) => {
+      socialState.notificationPreferences = { ...socialState.notificationPreferences, ...preferences }
+      elements.messagesEnabled.checked = preferences.messagesEnabled
+      elements.reactionsEnabled.checked = preferences.reactionsEnabled
+    },
+    send: (preferences) => settingsApi.sendSocialAction('notification-preferences', preferences),
+    onSuccess: () => showToast('Bildirim tercihi kaydedildi'),
   })
 }
 elements.messagesEnabled.addEventListener('change', sendNotificationPreferences)
