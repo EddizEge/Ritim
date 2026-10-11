@@ -23,6 +23,7 @@ class FlakySecureStorage implements MobilePairingSecureStorage {
   gets = 0
   sets: string[] = []
   removes: string[] = []
+  resets = 0
 
   async get({ key }: { key: string }) {
     this.gets += 1
@@ -41,6 +42,11 @@ class FlakySecureStorage implements MobilePairingSecureStorage {
   async remove({ key }: { key: string }) {
     this.removes.push(key)
     this.values.delete(key)
+  }
+
+  async reset() {
+    this.resets += 1
+    this.values.clear()
   }
 }
 
@@ -114,8 +120,29 @@ test('telefon eşlemesi: Keystore okunamıyorsa eşleme "yok" sayılmaz, silinme
   assert.equal(local.getItem('ritim-mobile-pairing-v2'), metadataBefore)
   assert.deepEqual(secure.sets, [])
   assert.deepEqual(secure.removes, [])
+  // A temporary failure never resets the storage on its own.
+  assert.equal(secure.resets, 0)
   secure.failingGets = 0
   assert.equal((await persistence.read())?.token, pairing.token)
+})
+
+test('telefon eşlemesi: güvenli depo sıfırlaması bütün kayıtları siler, yeni QR yazılabilir', async () => {
+  const { secure, persistence } = pairedPersistence()
+  await persistence.save({ version: 2, pairedAt: 1, ...pairing })
+  secure.values.set('social.session.v1', '{}')
+  await persistence.resetSecureStorage()
+  assert.equal(secure.resets, 1)
+  assert.equal(secure.values.size, 0)
+  const token = 'new_pairing_token_1234567890123456789012'
+  await persistence.save({ version: 2, pairedAt: 2, ...pairing, token })
+  assert.equal((await persistence.read())?.token, token)
+})
+
+test('web: güvenli depo yok, sıfırlama eklentiye gitmez', async () => {
+  const secure = new FlakySecureStorage()
+  const persistence = createMobilePairingPersistence({ native: false, local: new MemoryStorage(), secure, secureRetryDelaysMs: NO_WAIT })
+  await persistence.resetSecureStorage()
+  assert.equal(secure.resets, 0)
 })
 
 test('sosyal oturum: Keystore okunamıyorsa yeni cihaz anahtarı üretilmez, çıkış kararı yok sayılmaz', async (context) => {
