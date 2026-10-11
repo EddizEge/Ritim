@@ -90,23 +90,13 @@ test('RC istemcisi kendi kanalını korur ve Beta sağlayıcı kanalına düşme
   assert.equal(instance.getStatus().channel, 'rc')
 })
 
-test('RC politikası önce yeni RCyi, RC yoksa kararlı sürümü denetler', async () => {
-  class RcUpdater extends EventEmitter {
-    calls = []
-    set channel(value) { this._channel = value; this.allowDowngrade = true }
-    get channel() { return this._channel }
-    async checkForUpdates() {
-      this.calls.push({ channel: this.channel, allowPrerelease: this.allowPrerelease })
-      this.emit('checking-for-update')
-      if (this.channel === 'rc') {
-        this.emit('update-not-available', { version: '0.9.1-rc.1' })
-        return { isUpdateAvailable: false }
-      }
-      this.emit('update-available', { version: '0.9.1' })
-      return { isUpdateAvailable: true }
-    }
+test('kanal politikası app-update.yml sağlayıcısını yalnız bir kez değiştirir; her denetim tek istektir', async () => {
+  class ConfiguredUpdater extends FakeUpdater {
+    feeds = []
+    configOnDisk = { value: Promise.resolve({ provider: 'github', owner: 'EddizEge', repo: 'Ritim', channel: 'rc', updaterCacheDirName: 'ritim-updater' }) }
+    setFeedURL(options) { this.feeds.push(options) }
   }
-  const updater = new RcUpdater()
+  const updater = new ConfiguredUpdater()
   const instance = createUpdateController({
     app: { isPackaged: true, getVersion: () => '0.9.1-rc.1' },
     updater,
@@ -115,39 +105,34 @@ test('RC politikası önce yeni RCyi, RC yoksa kararlı sürümü denetler', asy
   })
 
   await instance.check()
-  assert.deepEqual(updater.calls, [
-    { channel: 'rc', allowPrerelease: true },
-    { channel: 'latest', allowPrerelease: false },
-  ])
-  assert.equal(instance.getStatus().availableVersion, '0.9.1')
-  assert.equal(instance.getStatus().channel, 'rc')
+  await instance.check()
+  assert.equal(updater.feeds.length, 1)
+  const [feed] = updater.feeds
+  assert.equal(feed.provider, 'custom')
+  assert.equal(feed.updateProvider.name, 'RitimGitHubProvider')
+  assert.equal(feed.owner, 'EddizEge')
+  assert.equal(feed.repo, 'Ritim')
+  assert.equal(updater.checkCalls, 2)
+  assert.equal(updater.channel, 'rc')
   assert.equal(updater.allowDowngrade, false)
 })
 
-test('yeni RC bulunduğunda kararlı fallback çalışmaz', async () => {
-  class RcUpdater extends EventEmitter {
-    calls = []
-    set channel(value) { this._channel = value; this.allowDowngrade = true }
-    get channel() { return this._channel }
-    async checkForUpdates() {
-      this.calls.push(this.channel)
-      this.emit('checking-for-update')
-      this.emit('update-available', { version: '0.9.1-rc.2' })
-      return { isUpdateAvailable: true }
-    }
+test('GitHub dışı güncelleme yapılandırması olduğu gibi kalır', async () => {
+  class GenericUpdater extends FakeUpdater {
+    feeds = []
+    configOnDisk = { value: Promise.resolve({ provider: 'generic', url: 'http://127.0.0.1/updates' }) }
+    setFeedURL(options) { this.feeds.push(options) }
   }
-  const updater = new RcUpdater()
+  const updater = new GenericUpdater()
   const instance = createUpdateController({
-    app: { isPackaged: true, getVersion: () => '0.9.1-rc.1' },
+    app: { isPackaged: true, getVersion: () => '0.9.1-beta.3' },
     updater,
     logger: { error() {} },
     NotificationClass: { isSupported: () => false },
   })
-
   await instance.check()
-  assert.deepEqual(updater.calls, ['rc'])
-  assert.equal(instance.getStatus().availableVersion, '0.9.1-rc.2')
-  assert.equal(updater.allowDowngrade, false)
+  assert.deepEqual(updater.feeds, [])
+  assert.equal(updater.checkCalls, 1)
 })
 
 test('kurucu hata olayı verirse indirilen paket yeniden denenebilir kalır', async () => {
