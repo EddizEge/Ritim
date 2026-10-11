@@ -43,6 +43,9 @@ public class RitimMediaService extends Service {
     private boolean playing;
     private long position;
     private long duration;
+    // Set once the notification is taken down, so a late artwork download
+    // cannot bring back a notification whose buttons no longer work.
+    private volatile boolean stopped;
 
     @Override
     public void onCreate() {
@@ -68,9 +71,12 @@ public class RitimMediaService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_UPDATE : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-            stopSelf();
+            stopPlaybackNotification();
             return START_NOT_STICKY;
+        }
+        if (stopped) {
+            stopped = false;
+            mediaSession.setActive(true);
         }
         if (ACTION_PREVIOUS.equals(action)) sendMediaAction("previous");
         else if (ACTION_PLAY_PAUSE.equals(action)) sendMediaAction("playPause");
@@ -154,7 +160,7 @@ public class RitimMediaService extends Service {
                 connection.setConnectTimeout(4000);
                 connection.setReadTimeout(4000);
                 Bitmap bitmap = BitmapFactory.decodeStream(connection.getInputStream());
-                if (requestedUrl.equals(artworkUrl) && bitmap != null) {
+                if (!stopped && requestedUrl.equals(artworkUrl) && bitmap != null) {
                     artwork = bitmap;
                     updateSession();
                     getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, buildNotification());
@@ -166,9 +172,35 @@ public class RitimMediaService extends Service {
         });
     }
 
+    // Ritim never plays audio on the phone: music plays on the PC and this
+    // notification is only a remote control. Once the app is swiped away from
+    // recents nothing would answer its buttons, so it goes with the app.
+    // (The manifest's stopWithTask does the same; this covers devices that
+    // keep the service running anyway.)
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        stopPlaybackNotification();
+        super.onTaskRemoved(rootIntent);
+    }
+
+    private void stopPlaybackNotification() {
+        stopped = true;
+        if (mediaSession != null) mediaSession.setActive(false);
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        cancelNotification();
+        stopSelf();
+    }
+
+    private void cancelNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) manager.cancel(NOTIFICATION_ID);
+    }
+
     @Override
     public void onDestroy() {
+        stopped = true;
         artworkExecutor.shutdownNow();
+        cancelNotification();
         mediaSession.release();
         super.onDestroy();
     }
