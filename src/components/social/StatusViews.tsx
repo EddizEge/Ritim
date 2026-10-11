@@ -17,17 +17,22 @@ export function useOfflineBand(state: Pick<SocialState, 'connectionStatus'>) {
 
 export function OfflineBand({ state, onReconnect, compact = false }: { state: SocialState; onReconnect: () => void; compact?: boolean }) {
   const connecting = connectionTone(state.connectionStatus) === 'connecting'
+  // The phone's saved session could not be read (Keystore locked or failing):
+  // it was not deleted and only a tap tries again.
+  const storageIssue = state.connectionIssue === 'secure-storage'
   return (
     <section className={`rs-offline ${compact ? 'is-compact' : ''}`} role="status">
       <div className="rs-offline-copy">
         <span className="rs-offline-icon"><WifiOff aria-hidden="true" /></span>
         <div>
-          <b>Ritim Sosyal’e ulaşılamıyor</b>
-          <p>Müzik ve telefon kumandası çalışmaya devam ediyor.{compact ? '' : ' Aşağıda son bilinen durum var; bağlantı gelince kendiliğinden yenilenir.'}</p>
+          <b>{storageIssue ? 'Sosyal oturum bu telefonda şu an okunamadı' : 'Ritim Sosyal’e ulaşılamıyor'}</b>
+          <p>{storageIssue
+            ? 'Oturum silinmedi. Telefonun kilidini açıp tekrar dene. Müzik ve telefon kumandası çalışmaya devam ediyor.'
+            : <>Müzik ve telefon kumandası çalışmaya devam ediyor.{compact ? '' : ' Aşağıda son bilinen durum var; bağlantı gelince kendiliğinden yenilenir.'}</>}</p>
         </div>
       </div>
       <button type="button" className={`rs-button is-wide ${connecting ? 'is-busy' : 'is-primary'}`} disabled={connecting} onClick={onReconnect}>
-        <RefreshCw aria-hidden="true" className={connecting ? 'rs-spin' : ''} />{connecting ? 'Bağlanıyor…' : 'Yeniden bağlan'}
+        <RefreshCw aria-hidden="true" className={connecting ? 'rs-spin' : ''} />{connecting ? 'Bağlanıyor…' : storageIssue ? 'Tekrar dene' : 'Yeniden bağlan'}
       </button>
       {state.lastOnlineAt ? <p className="rs-offline-last">Son başarılı bağlantı {clockLabel(state.lastOnlineAt)}</p> : null}
     </section>
