@@ -30,6 +30,14 @@ function desktopSyncUrl(baseUrl, desktopKey) {
   return url.toString()
 }
 
+// The PC bridge's address, only while this process's own server is
+// listening. Otherwise '' (the bridge opens no socket): whatever else holds
+// the port must not receive the desktop key.
+function bridgeSyncUrl(server, baseUrl, desktopKey) {
+  if (!server?.listening || !desktopKey) return ''
+  return desktopSyncUrl(baseUrl, desktopKey)
+}
+
 function handshakeDesktopKey(socket) {
   return socket.handshake.auth?.desktopKey || socket.handshake.query?.desktopKey || ''
 }
@@ -280,4 +288,4 @@ function startSyncServer(distPath, port = 8787, {
   return server
 }
 
-module.exports = { createDesktopKey, desktopSyncUrl, startSyncServer }
+module.exports = { bridgeSyncUrl, createDesktopKey, desktopSyncUrl, startSyncServer }

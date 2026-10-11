@@ -30,6 +30,19 @@ function parseDuration(value) {
   return parts.reduce((total, part) => total * 60 + part, 0)
 }
 
+function offlineSyncSocket() {
+  return { on() {}, emit() {}, close() {} }
+}
+
+// Short and never the desktop key, whatever the server sent.
+function safeSyncMessage(message, syncUrl) {
+  let text = typeof message === 'string' ? message.slice(0, 160) : ''
+  let desktopKey = ''
+  try { desktopKey = new URL(syncUrl).searchParams.get('desktopKey') || '' } catch {}
+  if (desktopKey && text.includes(desktopKey)) text = ''
+  return text.replace(/desktopKey=[^\s&]*/gi, 'desktopKey=…')
+}
+
 function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ-4821', syncUrl = 'http://127.0.0.1:8787' }) {
   const idleTrack = {
     id: 'ytmusic:idle', title: 'YouTube Music', artist: 'Bir parça çal', collection: 'music.youtube.com',
@@ -67,10 +80,18 @@ function createYouTubeMusicBridge({ webContents, presence, onState, room = 'EDIZ
   const appliedCommandIds = new Set()
   const inFlightCommandIds = new Set()
   const coalescedCommandTasks = new Map()
-  const socket = io(syncUrl, { timeout: 3000, reconnectionDelay: 900 })
+  // No local Sync server (its port is held by another process, or it did not
+  // start): no socket at all, so the desktop key in syncUrl never reaches a
+  // foreign process. YouTube Music, Discord and rooms keep working.
+  const socket = syncUrl ? io(syncUrl, { timeout: 3000, reconnectionDelay: 900 }) : offlineSyncSocket()
 
   const join = () => socket.emit('room:join', { room, role: 'desktop', state })
   socket.on('connect', join)
+  // The server refused the desktop role and dropped the socket; it does not
+  // reconnect on its own. Say so once, without the URL (it holds the key).
+  socket.on('pairing:error', (message) => {
+    console.warn('[Ritim] Yerel Sync sunucusu PC köprüsünü kabul etmedi; telefon kumandası bu oturumda çalışmayacak:', safeSyncMessage(message, syncUrl))
+  })
   socket.on('player:state', (incoming) => {
     if (!incoming || typeof incoming !== 'object') return
     state = { ...state, ...incoming }

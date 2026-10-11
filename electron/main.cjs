@@ -682,6 +682,8 @@ function createMusicView() {
     `).catch(() => {})
   })
   void musicView.webContents.loadURL('https://music.youtube.com/')
+  const bridgeUrl = require('./sync-server.cjs').bridgeSyncUrl(syncServer, process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', syncDesktopKey)
+  if (!bridgeUrl) console.warn('[Ritim] Yerel Sync sunucusu çalışmıyor; PC köprüsü telefona bağlanmıyor.')
   musicBridge = createYouTubeMusicBridge({
     webContents: musicView.webContents,
     presence,
@@ -691,7 +693,7 @@ function createMusicView() {
       publishOwnedRoomPlayback()
     },
     room: ROOM,
-    syncUrl: require('./sync-server.cjs').desktopSyncUrl(process.env.RITIM_SYNC_URL || 'http://127.0.0.1:8787', syncDesktopKey),
+    syncUrl: bridgeUrl,
   })
 }
 
