@@ -191,6 +191,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .player-controls .play-button { width: 38px; height: 38px; border-radius: 50%; color: #090909; background: white; }
 .player-controls .play-button svg { width: 19px; height: 19px; }
 .repeat-one { position: absolute; inset: 9px auto auto 10px; color: inherit; font-size: 7px; font-weight: 800; }
+.player-controls button:disabled, .ytm-like:disabled { opacity: .38; cursor: default; }
 .progress-wrap { display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px; align-items: center; gap: 8px; color: #b8b9ba; font-size: 9px; }
 .progress-wrap span:last-child { text-align: right; }
 .range { --range-value: 0%; width: 100%; height: 14px; margin: 0; appearance: none; background: transparent; cursor: pointer; }

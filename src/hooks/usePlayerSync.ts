@@ -3,40 +3,28 @@ import { App as CapacitorApp } from '@capacitor/app'
 import { io } from 'socket.io-client'
 import { getTrack, initialPlayerState } from '../data'
 import { isNativeMobile, type MobilePairingConfig } from '../mobileConfig'
-import type { PlayerActions, PlayerState, RepeatMode, SyncCommand, SyncCommandAck, SyncHealth, Track } from '../types'
+import { boundedCatalog, readCachedPlayerState, writeCachedPlayerState } from '../playerCache'
+import {
+  NEXT_REPEAT,
+  TOGGLE_CONFIRM_TIMEOUT_MS,
+  canControlPlayback,
+  findToggleByCommand,
+  isTrackLiked,
+  reconcileToggles,
+  rollbackToggle,
+  withLike,
+  type PendingToggle,
+  type PendingToggles,
+} from '../playerToggles'
+import type { PlayerActions, PlayerState, SyncCommand, SyncCommandAck, SyncHealth, Track } from '../types'
 
 const VOLUME_ACK_TIMEOUT_MS = 6000
-const PLAYER_CACHE_KEY = 'ritim-player-cache-v2'
 const COMMAND_TIMEOUT_MS = 20000
 const TRACK_ACK_TIMEOUT_MS = 15000
 const REPLACEABLE_COMMAND_DELAY_MS = 120
 const REPLACEABLE_COMMANDS = new Set(['seek', 'setVolume'])
 const COALESCIBLE_COMMANDS = new Set(['loadMoreBrowse', 'requestLyrics', 'requestRelated'])
 let commandSequence = 0
-
-function readCachedPlayerState() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(PLAYER_CACHE_KEY) || '') as { version?: number; state?: PlayerState }
-    if (cached.version !== 2 || !cached.state?.catalog || !Array.isArray(cached.state.queue)) return null
-    return cached.state
-  } catch {
-    return null
-  }
-}
-
-function writeCachedPlayerState(state: PlayerState) {
-  try {
-    const browse = state.browse ? {
-      ...state.browse,
-      sections: state.browse.sections.slice(0, 18).map((section) => ({ ...section, items: section.items.slice(0, 80) })),
-    } : undefined
-    localStorage.setItem(PLAYER_CACHE_KEY, JSON.stringify({
-      version: 2,
-      savedAt: Date.now(),
-      state: { ...state, browse, position: 0, isPlaying: false },
-    }))
-  } catch {}
-}
 
 function createCommand(type: string, value?: number | string): SyncCommand {
   return { id: `${Date.now().toString(36)}-${(++commandSequence).toString(36)}`, type, value, issuedAt: Date.now() }
@@ -72,10 +60,48 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     timer: number
   }>())
   const deferredCommandsRef = useRef(new Map<string, number>())
+  const pendingTogglesRef = useRef<PendingToggles>({})
+  const toggleTimersRef = useRef(new Map<string, number>())
+  const authoritativeStateRef = useRef<PlayerState | null>(null)
   const latestRevisionRef = useRef(0)
   const lastCacheWriteRef = useRef(0)
   const stateRef = useRef(state)
   stateRef.current = state
+
+  const clearToggle = useCallback((toggle: PendingToggle) => {
+    const timer = toggleTimersRef.current.get(toggle.commandId)
+    if (timer) window.clearTimeout(timer)
+    toggleTimersRef.current.delete(toggle.commandId)
+    if (pendingTogglesRef.current[toggle.kind] === toggle) {
+      pendingTogglesRef.current = { ...pendingTogglesRef.current, [toggle.kind]: undefined }
+    }
+  }, [])
+
+  // Kalp / tekrar komutu başarısız olur ya da PC durumu zamanında doğrulamazsa iyimser değeri geri al.
+  const rollbackToggleCommand = useCallback((commandId: string) => {
+    const toggle = findToggleByCommand(pendingTogglesRef.current, commandId)
+    if (!toggle) return
+    clearToggle(toggle)
+    setState((current) => rollbackToggle(current, authoritativeStateRef.current, toggle))
+  }, [clearToggle])
+
+  const trackToggle = useCallback((toggle: PendingToggle) => {
+    const previous = pendingTogglesRef.current[toggle.kind]
+    if (previous) clearToggle(previous)
+    pendingTogglesRef.current = { ...pendingTogglesRef.current, [toggle.kind]: toggle }
+    toggleTimersRef.current.set(toggle.commandId, window.setTimeout(() => {
+      toggleTimersRef.current.delete(toggle.commandId)
+      rollbackToggleCommand(toggle.commandId)
+    }, TOGGLE_CONFIRM_TIMEOUT_MS))
+  }, [clearToggle, rollbackToggleCommand])
+
+  const dropAllToggles = useCallback(() => {
+    for (const timer of toggleTimersRef.current.values()) window.clearTimeout(timer)
+    toggleTimersRef.current.clear()
+    const hadPending = Boolean(pendingTogglesRef.current.like || pendingTogglesRef.current.repeat)
+    pendingTogglesRef.current = {}
+    return hadPending
+  }, [])
 
   useEffect(() => {
     const onConnect = () => {
@@ -97,6 +123,10 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
       deferredCommandsRef.current.clear()
       pendingTrackRef.current = null
       pendingVolumeRef.current = null
+      const authoritative = authoritativeStateRef.current
+      if (dropAllToggles() && authoritative) {
+        setState((current) => ({ ...current, liked: authoritative.liked, likeStatus: authoritative.likeStatus, repeat: authoritative.repeat }))
+      }
       setConnected(false)
       latestRevisionRef.current = 0
       setSyncHealth((current) => ({ ...current, desktopOnline: false, pendingCommands: 0 }))
@@ -120,7 +150,16 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
       const revision = Number(incoming.syncRevision) || 0
       if (revision > 0 && latestRevisionRef.current > 0 && revision < latestRevisionRef.current) return
       if (revision > 0) latestRevisionRef.current = revision
+      authoritativeStateRef.current = incoming
       let nextState = incoming
+      if (isCompanion && (pendingTogglesRef.current.like || pendingTogglesRef.current.repeat)) {
+        const reconciled = reconcileToggles(incoming, pendingTogglesRef.current)
+        for (const kind of ['like', 'repeat'] as const) {
+          const toggle = pendingTogglesRef.current[kind]
+          if (toggle && !reconciled.pending[kind]) clearToggle(toggle)
+        }
+        nextState = reconciled.state
+      }
       const pendingVolume = pendingVolumeRef.current
       if (isCompanion && pendingVolume && Date.now() - pendingVolume.changedAt < VOLUME_ACK_TIMEOUT_MS) {
         if (Math.abs(incoming.volume - pendingVolume.value) <= 1) pendingVolumeRef.current = null
@@ -140,7 +179,12 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
             isPlaying: true,
             position: current.position,
             queue: current.queue,
-            catalog: { ...nextState.catalog, ...current.catalog },
+            catalog: boundedCatalog({
+              trackId: current.trackId,
+              queue: current.queue,
+              liked: nextState.liked,
+              catalog: { ...nextState.catalog, ...current.catalog },
+            }),
           }))
           return
         }
@@ -178,6 +222,7 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
       if (ack.status === 'failed') {
         pendingTrackRef.current = null
         pendingVolumeRef.current = null
+        rollbackToggleCommand(ack.id)
         socket.emit('room:request-state', { room })
       }
       setState((current) => ({
@@ -225,9 +270,10 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
       pendingCommandsRef.current.clear()
       for (const timer of deferredCommandsRef.current.values()) window.clearTimeout(timer)
       deferredCommandsRef.current.clear()
+      dropAllToggles()
       socket.disconnect()
     }
-  }, [isCompanion, room, socket, token])
+  }, [clearToggle, dropAllToggles, isCompanion, rollbackToggleCommand, room, socket, token])
 
   useEffect(() => {
     if (!isCompanion || !isNativeMobile) return
@@ -259,10 +305,11 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     })
   }, [isCompanion, room, socket])
 
-  const emitMusicCommand = useCallback((type: string, value?: number | string) => {
+  // Gönderilen komutun kimliğini döndürür; gönderilemezse false.
+  const emitMusicCommand = useCallback((type: string, value?: number | string): string | false => {
     if (!isCompanion) {
       window.ritimDesktop?.music.command({ type, value })
-      return true
+      return 'desktop'
     }
     if (!socket.connected) {
       setSyncHealth((current) => ({ ...current, desktopOnline: false }))
@@ -279,7 +326,10 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     }
     const signature = `${type}\u0000${String(value ?? '')}`
     const canCoalesce = COALESCIBLE_COMMANDS.has(type) || type.startsWith('navigate:')
-    if (canCoalesce && [...pendingCommandsRef.current.values()].some((pending) => pending.signature === signature)) return true
+    if (canCoalesce) {
+      const existing = [...pendingCommandsRef.current.entries()].find(([, pending]) => pending.signature === signature)
+      if (existing) return existing[0]
+    }
     const command = createCommand(type, value)
     const timer = window.setTimeout(() => {
       const pending = pendingCommandsRef.current.get(command.id)
@@ -294,6 +344,7 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
       }
       pendingTrackRef.current = null
       pendingVolumeRef.current = null
+      rollbackToggleCommand(command.id)
       setState((current) => ({
         ...current,
         lastCommandAck: ack,
@@ -305,10 +356,10 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     pendingCommandsRef.current.set(command.id, { type, value, signature, sentAt: Date.now(), timer })
     setSyncHealth((current) => ({ ...current, pendingCommands: pendingCommandsRef.current.size }))
     socket.emit('player:command', { room, command })
-    return true
-  }, [isCompanion, room, socket])
+    return command.id
+  }, [isCompanion, rollbackToggleCommand, room, socket])
 
-  const sendMusicCommand = useCallback((type: string, value?: number | string) => {
+  const sendMusicCommand = useCallback((type: string, value?: number | string): string | boolean => {
     if (!isCompanion || !REPLACEABLE_COMMANDS.has(type)) return emitMusicCommand(type, value)
     if (!socket.connected) return emitMusicCommand(type, value)
     const existingTimer = deferredCommandsRef.current.get(type)
@@ -490,36 +541,55 @@ export function usePlayerSync(isCompanion: boolean, pairing: MobilePairingConfig
     },
     goBackMusic: () => sendMusicCommand('goBack'),
     toggleShuffle: () => {
-      if (isYouTubeMusic && !sendMusicCommand('toggleShuffle')) return
+      // YouTube Music'te karıştır tek seferlik eylemdir; kalıcı bir mod gibi tutulmaz.
+      if (isYouTubeMusic) {
+        if (canControlPlayback(stateRef.current)) sendMusicCommand('toggleShuffle')
+        return
+      }
       commit((previous) => ({ ...previous, shuffle: !previous.shuffle }))
     },
     cycleRepeat: () => {
-      if (isYouTubeMusic && !sendMusicCommand('cycleRepeat')) return
-      commit((previous) => {
-        const next: Record<RepeatMode, RepeatMode> = { off: 'all', all: 'one', one: 'off' }
-        return { ...previous, repeat: next[previous.repeat] }
-      })
+      if (!isYouTubeMusic) {
+        commit((previous) => ({ ...previous, repeat: NEXT_REPEAT[previous.repeat] }))
+        return
+      }
+      const current = stateRef.current
+      if (!canControlPlayback(current)) return
+      const repeat = NEXT_REPEAT[current.repeat]
+      const commandId = sendMusicCommand('repeat', repeat)
+      if (typeof commandId !== 'string' || !isCompanion) return
+      trackToggle({ kind: 'repeat', repeat, commandId, changedAt: Date.now() })
+      setState((previous) => ({ ...previous, repeat }))
     },
-    toggleLike: () => commit((previous) => ({
-      ...previous,
-      liked: previous.liked.includes(previous.trackId)
-        ? previous.liked.filter((id) => id !== previous.trackId)
-        : [...previous.liked, previous.trackId],
-    })),
+    toggleLike: () => {
+      if (!isYouTubeMusic) {
+        commit((previous) => withLike(previous, previous.trackId, !isTrackLiked(previous)))
+        return
+      }
+      const current = stateRef.current
+      if (!canControlPlayback(current)) return
+      const liked = !isTrackLiked(current)
+      const commandId = sendMusicCommand('like', liked ? 'LIKE' : 'INDIFFERENT')
+      if (typeof commandId !== 'string' || !isCompanion) return
+      trackToggle({ kind: 'like', trackId: current.trackId, liked, commandId, changedAt: Date.now() })
+      setState((previous) => withLike(previous, current.trackId, liked))
+    },
     replaceQueue: (newTracks: Track[], startTrackId?: string) => commit((previous) => {
       if (newTracks.length === 0) return previous
       const newCatalog = { ...previous.catalog, ...Object.fromEntries(newTracks.map((track) => [track.id, track])) }
+      const queue = newTracks.map((track) => track.id)
+      const trackId = startTrackId && newCatalog[startTrackId] ? startTrackId : newTracks[0].id
       return {
         ...previous,
-        catalog: newCatalog,
-        queue: newTracks.map((track) => track.id),
-        trackId: startTrackId && newCatalog[startTrackId] ? startTrackId : newTracks[0].id,
+        catalog: boundedCatalog({ trackId, queue, liked: previous.liked, catalog: newCatalog }),
+        queue,
+        trackId,
         position: 0,
         isPlaying: true,
       }
     }),
     syncFromMedia: (patch) => commit((previous) => ({ ...previous, ...patch })),
-  }), [commit, isYouTubeMusic, sendMusicCommand, socket])
+  }), [commit, isCompanion, isYouTubeMusic, sendMusicCommand, socket, trackToggle])
 
   useEffect(() => {
     const track = getTrack(state)
