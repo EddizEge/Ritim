@@ -178,6 +178,14 @@ ile şifreleyip atomik olarak hedefe taşır; düz veritabanı dökümü diske y
   geri yükler, temel tablo sayılarını doğrular ve geçici veritabanını siler.
 - Şifreleme parolası `/DATA/AppData/ritim-alpha2/secrets/backup-passphrase`
   dosyasında, yalnızca root erişimiyle tutulur.
+- Hedef dizinler Pi'ye özeldir ve depoda tutulmaz. systemd birimleri bunları
+  yalnızca root erişimli `/DATA/AppData/ritim-alpha2/secrets/backup-targets.env`
+  dosyasından okur; dosya yoksa yedek servisi başlamaz:
+
+  ```bash
+  RITIM_BACKUP_DAILY_DIR=/media/<kullanıcı>/<4tb-disk>/RitimBackups/daily
+  RITIM_BACKUP_WEEKLY_DIR=/media/<kullanıcı>/<2tb-disk>/RitimBackups/weekly
+  ```
 
 `systemd/` altındaki service/timer dosyaları Pi'ye kurulduğunda Cloudflare'dan
 bağımsız olarak bu takvimi uygular. Gateway internete yalnızca Cloudflare
