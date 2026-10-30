@@ -16,3 +16,8 @@ android/local.properties
 android/**/build/
 *.jks
 *.keystore
+
+# Yerelde tutulan ajan notları
+/AGENTS.md
+/CLAUDE.md
+/docs/CLAUDE_HANDOFF.md

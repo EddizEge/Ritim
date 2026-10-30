@@ -5,7 +5,9 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/DATA/AppData/ritim-alpha2/source/deploy/pi/backup/ritim-backup.sh /media/mercan/5bfe2076-5876-4116-91de-75b41535f0ab/RitimBackups/daily 14
+# Yedek hedefleri bu Pi'ye özeldir ve depoda tutulmaz (bkz. deploy/pi/README.md).
+EnvironmentFile=/DATA/AppData/ritim-alpha2/secrets/backup-targets.env
+ExecStart=/DATA/AppData/ritim-alpha2/source/deploy/pi/backup/ritim-backup.sh ${RITIM_BACKUP_DAILY_DIR} 14
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
