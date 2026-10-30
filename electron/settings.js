@@ -1,6 +1,6 @@
 const fallbackData = {
   appVersion: '0.9.1',
-  computerName: 'EDİZ-PC',
+  computerName: 'RITIM-PC',
   electronVersion: '43',
   room: 'EDIZ-4821',
   serverReady: true,
@@ -16,10 +16,10 @@ const fallbackData = {
   },
   socialAccount: {
     authenticated: true,
-    user: { id: 'preview-account', displayName: 'Ediz Ege Mercan', handle: '@ritim_onizleme', initials: 'EE' },
+    user: { id: 'preview-account', displayName: 'Ritim Kullanıcısı', handle: '@ritim_onizleme', initials: 'RK' },
     currentDeviceId: 'desktop-preview',
     devices: [
-      { id: 'desktop-preview', role: 'desktop', name: 'Ritim PC • EDİZ-PC', lastSeenAt: new Date().toISOString(), createdAt: new Date().toISOString() },
+      { id: 'desktop-preview', role: 'desktop', name: 'Ritim PC • RITIM-PC', lastSeenAt: new Date().toISOString(), createdAt: new Date().toISOString() },
       { id: 'phone-preview', role: 'companion', name: 'Ritim Telefon', lastSeenAt: new Date(Date.now() - 240000).toISOString(), createdAt: new Date().toISOString() },
     ],
   },
